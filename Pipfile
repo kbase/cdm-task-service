@@ -1,0 +1,16 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+
+[dev-packages]
+pytest = "==8.3.2"
+coverage = "==7.6.1"
+ipython = "==8.26.0"
+pytest-asyncio = "==0.23.8"
+pytest-cov = "==5.0.0"
+
+[requires]
+python_version = "3.11"

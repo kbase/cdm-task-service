@@ -1,0 +1,49 @@
+name: KBase CDM Task Service tests
+
+on:
+  pull_request:
+    types:
+    - opened
+    - reopened
+    - synchronize
+    - ready_for_review
+  push:
+    # run workflow when merging to main or develop
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+
+  task_service_tests:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+    
+    - name: Repo checkout
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependecies
+      shell: bash
+      run: |
+        pip install pipenv
+        pipenv sync --system --dev
+
+    - name: Run tests
+      shell: bash
+      run: PYTHONPATH=. pytest --cov=src --cov-report=xml test
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: true
