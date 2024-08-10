@@ -35,7 +35,7 @@ jobs:
     - name: Install dependencies and set up test config
       shell: bash
       run: |
-        export CRANE_VER=0.20.2
+        export CRANE_VER=v0.20.2
         export HOMEDIR=`pwd`
         
         # set up python dependencies
