@@ -4,6 +4,11 @@
 
 Enables running jobs on remote compute from the KBase CDM cluster.
 
+## Service Requirements
+
+* Python 3.11+
+* [crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md)
+
 ## Development
 
 ### Adding code
@@ -28,7 +33,7 @@ Enables running jobs on remote compute from the KBase CDM cluster.
 
 ### Running tests
 
-Python 3.11 must be installed on the system.
+Copy `test.cfg.example` to `test.cfg` and fill it in appropriately.
 
 ```
 pipenv sync --dev  # only the first time or when Pipfile.lock changes

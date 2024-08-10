@@ -1,0 +1,7 @@
+# To run tests, copy this file to test.cfg and set the values below appropriately.
+
+[cdmtaskservicetest]
+
+# Absolute path to a crane executable
+# See https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md
+test.crane.exe=/path/to/crane

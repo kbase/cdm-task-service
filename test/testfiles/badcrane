@@ -1,0 +1,4 @@
+#!/bin/bash
+
+echo oopsie > /dev/stderr
+exit 123
