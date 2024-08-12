@@ -49,6 +49,9 @@ class DockerImageInfo:
     async def get_digest_from_name(self, image_name: str) -> str:
         """
         Get an image digest given the image name.
+        
+        Assumes that a namespace is always present (so names like `image:tag` will be rejected)
+        and the path always has 2 components, the namespace and the image name.
         """
         image_name = _validate_image_name(image_name)
         retcode, stdo, stde = await self._run_crane("digest", image_name)

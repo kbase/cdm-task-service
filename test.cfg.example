@@ -4,4 +4,7 @@
 
 # Absolute path to a crane executable
 # See https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md
+# If you install with the tarball, you can omit the -C option to extract the tarball to the current
+# directory and move the crane executable to wherever you wish.
+# If you install via a package manager you can use `which crane` to get the path.
 test.crane.exe=/path/to/crane
