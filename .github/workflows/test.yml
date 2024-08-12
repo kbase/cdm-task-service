@@ -32,11 +32,30 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Install dependecies
+    - name: Install dependencies and set up test config
       shell: bash
       run: |
+        export CRANE_VER=v0.20.2
+        export HOMEDIR=`pwd`
+        
+        # set up python dependencies
         pip install pipenv
         pipenv sync --system --dev
+
+        # move to parent dir of homedir to install binaries etc
+        cd ..
+
+        # set up crane
+        # don't bother to verify provenance here
+        curl -sL "https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz" > go-containerregistry.tar.gz
+        tar -zxvf go-containerregistry.tar.gz
+        export CRANE_EXE_PATH=`pwd`/crane
+        
+        # set up test config
+        cd $HOMEDIR
+        cp -n test.cfg.example test.cfg
+        sed -i "s#^test.crane.exe=.*#test.crane.exe=$CRANE_EXE_PATH#" test.cfg
+        cat test.cfg
 
     - name: Run tests
       shell: bash
