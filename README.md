@@ -8,6 +8,9 @@ Enables running jobs on remote compute from the KBase CDM cluster.
 
 * Python 3.11+
 * [crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md)
+* An s3 instance for use as a file store
+  * If using Minio, the minimum version is `2021-04-22T15-44-28Z` and the server must be run
+    in `--compat` mode.
 
 ## Development
 
