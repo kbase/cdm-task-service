@@ -15,4 +15,7 @@ if TEST_CFG_SEC not in _cfg.sections():
 TEST_CFG = dict(_cfg[TEST_CFG_SEC])
 del _cfg
 
-CRANE_EXE_PATH = TEST_CFG.get("test.crane.exe")
+CRANE_EXE_PATH = Path(TEST_CFG.get("test.crane.exe"))
+MINIO_EXE_PATH = Path(TEST_CFG.get("test.minio.exe"))
+TEMP_DIR       = Path(TEST_CFG.get("test.temp.dir"))
+TEMP_DIR_KEEP  = TEST_CFG.get("test.temp.dir.keep") == "true"

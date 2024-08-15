@@ -1,10 +1,11 @@
 '''
 Configure pytest fixtures and helper functions for this directory.
 '''
-
-from contextlib import closing
-import socket
+import pytest
 import traceback
+
+from controllers.minio import MinioController
+import config
 
 
 def assert_exception_correct(got: Exception, expected: Exception):
@@ -13,7 +14,16 @@ def assert_exception_correct(got: Exception, expected: Exception):
     assert type(got) == type(expected)
 
 
-def find_free_port() -> int:
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
+@pytest.fixture(scope="module")
+def minio():
+    mc = MinioController(
+        config.MINIO_EXE_PATH,
+        "access_key",
+        "secret_key",
+        config.TEMP_DIR,
+    )
+    host = f"http://localhost:{mc.port}"
+    
+    yield mc
+    
+    mc.destroy(config.TEMP_DIR_KEEP)

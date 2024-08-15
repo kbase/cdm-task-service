@@ -8,3 +8,12 @@
 # directory and move the crane executable to wherever you wish.
 # If you install via a package manager you can use `which crane` to get the path.
 test.crane.exe=/path/to/crane
+
+# Absolute path to a Minio server (`minio`) executable.
+test.minio.exe=/path/to/minio
+
+# A directory in which to store temporary test files.
+test.temp.dir=cdm_task_service_temp
+
+# Whether to keep temporary test files. `true` means keep, anything else means delete.
+test.temp.dir.keep=false
