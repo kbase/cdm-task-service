@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 fqdn = "==1.5.1"
+aiobotocore = "==2.13.2"
 
 [dev-packages]
 pytest = "==8.3.2"
