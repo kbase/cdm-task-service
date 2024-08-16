@@ -52,7 +52,7 @@ jobs:
         # set up crane
         # don't bother to verify provenance here
         curl -sL "https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz" > go-containerregistry.tar.gz
-        tar -zxvf go-containerregistry.tar.gz
+        tar -zxf go-containerregistry.tar.gz
         export CRANE_EXE_PATH=`pwd`/crane
         
         # set up Minio
@@ -60,11 +60,16 @@ jobs:
         chmod a+x minio
         export MINIOD=`pwd`/minio
         
+        wget -q https://dl.minio.io/client/mc/release/linux-amd64/archive/minio.RELEASE.${{matrix.minio}} -O mc
+        chmod a+x mc
+        export MINIO_MC=`pwd`/mc
+        
         # set up test config
         cd $HOMEDIR
-        cp -n test.cfg.example test.cfg
+        cp test.cfg.example test.cfg
         sed -i "s#^test.crane.exe=.*#test.crane.exe=$CRANE_EXE_PATH#" test.cfg
         sed -i "s#^test.minio.exe=.*#test.minio.exe=$MINIOD#" test.cfg
+        sed -i "s#^test.minio.mc.exe=.*#test.minio.mc.exe=$MINIO_MC#" test.cfg
         cat test.cfg
 
     - name: Run tests

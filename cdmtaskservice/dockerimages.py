@@ -121,7 +121,6 @@ _TRANS_TABLE = str.maketrans({
     '_': None,
     ':': None,
     '@': None,  # for digests
-    
 })
 
 

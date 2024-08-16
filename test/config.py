@@ -17,5 +17,6 @@ del _cfg
 
 CRANE_EXE_PATH = Path(TEST_CFG.get("test.crane.exe"))
 MINIO_EXE_PATH = Path(TEST_CFG.get("test.minio.exe"))
+MINIO_MC_EXE_PATH = Path(TEST_CFG.get("test.minio.mc.exe"))
 TEMP_DIR       = Path(TEST_CFG.get("test.temp.dir"))
 TEMP_DIR_KEEP  = TEST_CFG.get("test.temp.dir.keep") == "true"

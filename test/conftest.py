@@ -8,9 +8,10 @@ from controllers.minio import MinioController
 import config
 
 
-def assert_exception_correct(got: Exception, expected: Exception):
-    err = "".join(traceback.TracebackException.from_exception(got).format())
-    assert got.args == expected.args  # add , err to see the traceback
+def assert_exception_correct(got: Exception, expected: Exception, print_traceback=False):
+    if print_traceback:
+        print("".join(traceback.TracebackException.from_exception(got).format()))
+    assert got.args == expected.args
     assert type(got) == type(expected)
 
 
@@ -18,6 +19,7 @@ def assert_exception_correct(got: Exception, expected: Exception):
 def minio():
     mc = MinioController(
         config.MINIO_EXE_PATH,
+        config.MINIO_MC_EXE_PATH,
         "access_key",
         "secret_key",
         config.TEMP_DIR,
@@ -26,4 +28,11 @@ def minio():
     
     yield mc
     
-    mc.destroy(config.TEMP_DIR_KEEP)
+    mc.destroy(not config.TEMP_DIR_KEEP)
+
+
+@pytest.fixture(scope="module")
+def minio_unauthed_user(minio):
+    minio.run_mc("admin", "user", "add", minio.mc_alias, "baduser", "badpsswd")
+    
+    yield ("baduser", "badpsswd")
