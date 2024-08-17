@@ -12,6 +12,9 @@ test.crane.exe=/path/to/crane
 # Absolute path to a Minio server (`minio`) executable.
 test.minio.exe=/path/to/minio
 
+# Absolute path to a Minio client (`mc`) executable.
+test.minio.mc.exe=/path/to/mc
+
 # A directory in which to store temporary test files.
 test.temp.dir=cdm_task_service_temp
 

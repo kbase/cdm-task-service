@@ -1,4 +1,5 @@
 from aiobotocore.session import get_session
+import io
 import os
 from pathlib import Path
 import shutil
@@ -9,11 +10,21 @@ import time
 from utils import find_free_port
 
 class MinioController:
-    # ported from https://github.com/kbase/java_test_utilities/blob/develop/src/main/java/us/kbase/testutils/controllers/minio/MinioController.java
+    # adapted from https://github.com/kbase/java_test_utilities/blob/develop/src/main/java/us/kbase/testutils/controllers/minio/MinioController.java
     
-    def __init__(self, minioexe: Path, access_key: str, secret_key: str, root_temp_dir: Path):
+    def __init__(
+        self,
+        minioexe: Path,
+        mcexe: Path,
+        access_key: str,
+        secret_key: str,
+        root_temp_dir: Path,
+        mc_alias: str = "minio_controller"
+    ):
         self.access_key = access_key
         self.secret_key = secret_key
+        self._mc = mcexe
+        self.mc_alias = mc_alias
         root_temp_dir = root_temp_dir.absolute()
         root_temp_dir.mkdir(parents=True, exist_ok=True)
         tdir = tempfile.mkdtemp(dir=root_temp_dir, prefix="MinioController-")
@@ -47,13 +58,15 @@ class MinioController:
             stdout=self._logfiledescriptor,
         )
         time.sleep(0.5)  # wait for server to start up
+        self.run_mc("alias", "set", self.mc_alias, self.host, self.access_key, self.secret_key)
     
     def destroy(self, delete_temp_files):
         # I suppose I could turn this into a context manager... meh
         self._proc.terminate()
+        time.sleep(0.5)
         self._logfiledescriptor.close()
         if delete_temp_files:
-            shutil.rmtree(self.tempdir, ignore_errors=True)
+            shutil.rmtree(self.tempdir)
     
     def get_client(self):
         return get_session().create_client(
@@ -74,6 +87,48 @@ class MinioController:
                     "Objects": [{"Key": o["Key"]} for o in objs["Contents"]]
                 })
                 await client.delete_bucket(Bucket=bucket)
+
+    async def create_bucket(self, bucket):
+        async with self.get_client() as client:
+            await client.create_bucket(Bucket=bucket)
+
+    async def upload_file(self, path, main_part, num_main_parts=1, last_part=None):
+        async with self.get_client() as client:
+            buk, key = path.split("/", 1)
+            if num_main_parts == 1 and not last_part:
+                await client.put_object(
+                    Body=io.BytesIO(main_part),
+                    Bucket=buk,
+                    Key=key,
+                    ContentLength=len(main_part)
+                )
+            else:
+                res = await client.create_multipart_upload(Bucket=buk, Key=key)
+                uid = res["UploadId"]
+                parts = []
+                for part_num in range(1, num_main_parts + 1):
+                    res = await upload_part(client, main_part, buk, key, uid, part_num)
+                    parts.append({"ETag": res["ETag"], "PartNumber": part_num})
+                if last_part:
+                    res = await upload_part(client, last_part, buk, key, uid, num_main_parts + 1)
+                    parts.append({"ETag": res["ETag"], "PartNumber": num_main_parts + 1})
+                await client.complete_multipart_upload(
+                    Bucket=buk, Key=key, UploadId=uid, MultipartUpload={"Parts": parts}
+                )
+
+    def run_mc(self, *args):
+        subprocess.run([self._mc] + list(args)).check_returncode()
+
+
+async def upload_part(client, part, bucket, key, upload_id, part_num):
+    return await client.upload_part(
+        Body=io.BytesIO(part),
+        Bucket=bucket,
+        Key=key,
+        ContentLength=len(part),
+        UploadId=upload_id,
+        PartNumber=part_num
+    )
 
 
 if __name__ == "__main__":
