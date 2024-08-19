@@ -38,6 +38,7 @@ class S3ObjectMeta:
     @property
     def has_parts(self) -> bool:
         """ Returns true if the object was uploaded as multipart. """
+        # MD5s have 32 characters. An e-tag with parts looks like `<MD5>-#parts`
         return len(self.e_tag) > 32
 
     @property
@@ -46,7 +47,7 @@ class S3ObjectMeta:
         Returns the number of parts used in a multipart upload or 1 if the upload was not
         multipart.
         """
-        if len(self.e_tag) > 32:
+        if self.has_parts:
             return int(self.e_tag.split("-")[1])
         return 1
 
