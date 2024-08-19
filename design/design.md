@@ -80,7 +80,6 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
    3. Transfer the Minio data to the job directory  
       1. Use presigned URLs to avoid passing credentials  
       2. Check file integrity  
-         1. This might be complicated if files were multipart, needs research  
    4. In parallel, pull the container from the registry  
    5. None of these steps count against NERSC allocation  
    6. When complete, `touch` a completion signifier file  
@@ -135,7 +134,6 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
       1. Maybe different buckets for logs & results  
       2. Use presigned URLs to avoid passing credentials  
    3. Check file integrity for all uploaded files  
-      1. This might be complicated if files were multipart, needs research  
    4. Deletes all output  
    5. When complete, `touch` a completion signifier file  
 6. Service stores the task ID and submit time for the command in Mongo and updates state to
@@ -282,6 +280,8 @@ Either a string or a dictionary. If a string, treated as a literal parameter.
 {
   "type": "input_files" | "manifest_file",
   "format": "comma_separated_list" | "space_separated_list" | "repeat_parameter"
+  "manifest_file_header": <arbitrary string>,
+  "manifest_file_format: "files" | "data_ids",
 }
 ```
 
@@ -301,6 +301,16 @@ The `type` field determines the behavior of the parameter.
   * Inserts the location of the input manifest file in the container. In this case the filenames
     for the worker container will be placed in a newline separated text file,
     one filename per line.
+* `manifest_file_header`
+  * A header line to add to the manifest file. Ignored if no manifest file is specified.
+    Defaults to no header.
+* `manifest_file_format`
+  * Specifies the format of the manifest file. Ignored if no manifest file is specified.
+    * `files`
+      * List the input files, one per line. This is the default.
+    * `data_ids`
+      * List the data IDs (See [JobInput](#jobinput)), one per line.
+  * String vs boolean value allows for future expansion.
 
 #### Parameters
 
@@ -318,10 +328,6 @@ Represents a set of parameters provided to job containers.
     ...
     <flagN>: Parameter,
   },
-  "input_files": [file1, ..., fileN],
-  "input_dirs": [dir1, ..., dirN],
-  "worker_file_mapping": "ordered_split" | "split_points",
-  "split_points": [aplit_point1, ..., split_pointN],
 }
 ```
 
@@ -330,35 +336,16 @@ Represents a set of parameters provided to job containers.
     relative to the root. Input files will be available here. Defaults to `/job_input_dir`  
 * `output_mount_point`  
   * Absolute path that determines where the job output directory is mounted inside the container
-    relative to the root.. Output files must be written here. Any files in the directory when
+    relative to the root. Output files must be written here. Any files in the directory when
     the job is complete will be transferred to the appropriate data storage system.
+    Note that all containers share the same output directory on the host; it is up to container
+    authors to ensure that containers don't overwrite each other.
     Defaults to `/job_output_dir`  
 * `positional_args`  
   * Positional arguments provided to the container at startup.  
 * `flag_args`  
   * Flag arguments, such as `-i`, `--input-file`, or `--input-file=`. If the argument ends
     with an equals sign, no space is placed between the flag and parameter.  
-* `input_files`  
-  * The locations of input files in Mnio, starting with the bucket, e.g. `/bucket/myfile.fa`  
-* `input_dirs`  
-  * The location of input “directories” in Minio. The service will list the directory and add
-    all the files to the `input_files` list.  
-* `worker_file_mapping`  
-  * Determines how to split the input files between workers / containers. Ignored if only one
-    worker is requested (see below).  
-  * `ordered_split`  
-    * Divides the files by the number of workers, rounding up, and assigns the files to each
-      worker based on the order in the list. The last worker may thus process fewer files.
-      This is the default.  
-  * `split_points`  
-    * Split at specific points, specified in `split_points`, in the list of input files.
-      Not allowed if `input_dirs` is specified.   
-* `split_points`  
-  * If `split_points` is specified as the `worker_file_mapping`, specifies left inclusive
-    indexes into the 0-indexed list of files where the files should be split between workers.
-    E.g. if the splits are [2, 5, 7] and there are 10 files in the list, worker 1 will get
-    files 1-3, worker 2 files 4-6, worker 3 7-8 and worker 4 9-10. The length of the split
-    array must be # of workers - 1.
 
 #### JobInput
 
@@ -369,8 +356,14 @@ Represents a set of parameters provided to job containers.
   "container": <ID of the containter to run>,
   "params": Parameters,
   "workers": <number of workers to reserve>,
+  "containers_per_worker": <containers to run per worker>
   "reserved_time': <hours per worker to reserve>,
   "input_loc": "cdm_minio",
+  "input_files": [file1, ..., fileN] | {data_id1: file1, ... data_id2: file2},
+  "input_dirs": [dir1, ..., dirN],
+  "input_roots": [path1, ..., pathN]',
+  "worker_file_mapping": "ordered_split" | "split_points",
+  "split_points": [aplit_point1, ..., split_pointN],
   "output_loc": "cdm_minio",
   "output_dir": <directory in Minio to store the files>,
 }
@@ -387,10 +380,45 @@ Represents a set of parameters provided to job containers.
   * The job parameters.  
 * `workers`  
   * The number of workers to reserve for the job.  
+* `containers_per_worker`
+  * The number of containers to run per worker. Defaults to 1.
 * `reserved_time`  
   * The hours per worker to reserve for the job.  
 * `input_loc`  
   * The location of the input files. Currently the only allowable value is `cdm_minio`.  
+* `input_files`  
+  * The locations of input files in Minio, starting with the bucket, e.g. `/bucket/myfile.fa`.
+    Either a list of files or a mapping of an arbitrary data ID string to a file. The data IDs
+    can be used in manifest files (see [Parameter](#parameter)).
+* `input_dirs`  
+  * The location of input "directories" in Minio. The service will list the directory and add
+    all the files to the `input_files` list. Incompatible with the data ID input format.
+* `input_roots`
+  * If specified, preserves file hierarchies for Minio files below the given root paths,
+    starting from the bucket. Any files that are not prefixed by a root path are placed in the
+    root directory of the job input dir. If any input files have the same path in the input dir,
+    the job fails. For example, given a `input_roots` entry of `["mybucket/foo/bar"]` and the
+    input files `["otherbucket/foo", "mybucket/bar", "mybucket/foo/bar/baz/bat]` the
+    job input directory would include the files `foo`, `bar`, and `baz/bat`. To preserve
+    hierarchies for all files, set `input_roots` to `["/"]`
+* `worker_file_mapping`  
+  * Determines how to split the input files between workers / containers. Ignored if only one
+    worker is requested (see below).
+  * `ordered_split`  
+    * Divides the files by the number of workers, rounding up, and assigns the files to each
+      worker based on the order in the list. The last worker may thus process fewer files.
+      Files are split evenly between the containers per worker.
+      This is the default.  
+  * `split_points`  
+    * Split at specific points, specified in `split_points`, in the list of input files.
+      Files are split evenly between the containers per worker.
+      Not allowed if `input_dirs` is specified.   
+* `split_points`  
+  * If `split_points` is specified as the `worker_file_mapping`, specifies left inclusive
+    indexes into the 0-indexed list of files where the files should be split between workers.
+    E.g. if the splits are [2, 5, 7] and there are 10 files in the list, worker 1 will get
+    files 1-3, worker 2 files 4-6, worker 3 7-8 and worker 4 9-10. The length of the split
+    array must be # of workers - 1.
 * `output_loc`  
   * The location to store the output files. Currently the only allowable value is `cdm_minio`.  
 * `output_dir`  
@@ -871,7 +899,6 @@ typed languages, it doesn’t seem to be worth the trouble.
       * Download data from Minio  
         * Presigned URLs  
         * Check file integrity  
-          * This might be complicated if files were multipart, needs research  
       * Pull container image  
       * Logging & transport of logs to Minio  
       * Touch completion indicator file  
@@ -883,7 +910,6 @@ typed languages, it doesn’t seem to be worth the trouble.
       * Zip output directory & upload to Minio w/ unzip header  
         * Presigned URL  
         * Check file integrity  
-          * This might be complicated if files were multipart, needs research  
       * Log files in output directory to stdout for server to read  
       * Logging & transport of logs to Minio  
       * Clean input and output directories  
@@ -914,9 +940,20 @@ typed languages, it doesn’t seem to be worth the trouble.
   * Logs access  
   * Transforms exceptions to an [APIError](#apierror) response
 
-## Approvals
+## Versions and approvals
 
-Approved by the CDM team on 24/08/18.
+### 1.0.0
+
+Initial version approved by the CDM team on 24/08/18.
+
+Further approvals are via Github PR reviews.
+
+### 1.1.0
+
+* Removed "research required" notes for verifying file downloads
+* Added containers per worker parameter to job input.
+* Added ability to retain file hierarchies
+* Added data IDs as a replacement for file paths in manifest files
 
 ## Appendices
 
