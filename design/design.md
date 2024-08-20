@@ -32,6 +32,7 @@ added with minimal database retrofits and ideally not too much code refactoring.
 
 ## Nomenclature
 
+* CDM - the KBase Central Data Model
 * SFAPI - NERSC Superfaciltiy API
 
 ## Architecture
@@ -169,7 +170,7 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
 We need a better project name than the CDM task service, especially if we’re thinking
 this may be more generally useful than for CDM usage only.
 
-Decision (24/08/06, CDM tech meeting): We’ll name the service the CDM Task Service.
+**Decision** (24/08/06, CDM tech meeting): We’ll name the service the CDM Task Service.
 
 #### User allowlist
 
@@ -178,13 +179,18 @@ account from using the server. There are at least 2 options for storing the allo
 
 1. Store it via KBase Auth service roles  
    1. There’s a small amount of risk here that a KBase admin without a full understanding of
-      the requirements of the role might carelessly assign it  
+      the requirements of the role might carelessly assign it
+      1. Fix this by requiring both `KBASE_STAFF` and `HAS_NERSC_ACCOUNT` roles,
+         which makes it clear what the requirements are.
    2. If we expand to other authentication sources
       ([Alternative authentication sources](#alternative-authentication-sources)), they will need
       to specify their own allow lists or we’ll need option 2 below.  
 2. Store it in the integration server.  
    1. This will require endpoints to view and modify the allowlist  
       1. Or optionally store the list in a config file, but that doesn’t allow for dynamic updates.
+
+**Decision** (24/08/20, CDM tech meeting): We'll use KBase auth service roles. If we ever support
+alternative authentication services we can revisit managing allowlists in the service itself.
 
 #### Credential refresh
 
@@ -194,14 +200,6 @@ those credentials. Credentials are manually created by going through a web UI at
 * Add an admin API allowing for passing new credentials to the server  
 * Shell into the container and manually update the credential file  
   * The server could automatically reload the file or have an admin API to trigger the reload
-
-#### Job log handling
-
-The current design simply stores any job logs in Minio and expects the user to retrieve the
-file themselves for viewing (meaning the user will need read rights to the bucket
-containing the logs).  
-The service could be provided with an API to retrieve job logs by byte range that is a
-simple wrapper around the Minio API.
 
 ## API
 
@@ -737,11 +735,13 @@ There are many options, including [Cromwell](https://cromwell.readthedocs.io/en/
 and [Airflow](https://airflow.apache.org/). More research would be needed to determine
 requirements and use cases.
 
-### Realtime job logs
+### Logging improvements
 
-The current design only uploads logs to the server when the job is complete. This could be
-improved by streaming the logs into Minio so they can be viewed while the job is running.
-Not sure if this is possible - can you read a file in Minio while it’s being written?
+* The current design uploads logs to Minio; the user is required to interface with Minio in
+  order to read them. Add endpoints to the service to fetch logs or parts of logs for a job.
+* The current design only uploads logs to Minio when the job is complete. This could be
+  improved by streaming the logs into Minio so they can be viewed while the job is running.
+  Not sure if this is possible - can you read a file in Minio while it’s being written?
 
 ### Alternative authentication sources
 
@@ -954,6 +954,11 @@ Further approvals are via Github PR reviews.
 * Added containers per worker parameter to job input.
 * Added ability to retain file hierarchies
 * Added data IDs as a replacement for file paths in manifest files
+
+### 1.2.0
+
+* Added decision for allowlist management.
+* Move question regarding log viewing to future work.
 
 ## Appendices
 
