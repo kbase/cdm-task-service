@@ -406,6 +406,8 @@ Represents a set of parameters provided to job containers.
                         root>,
   "output_mount_point": <path in the container to mount the output directory, relative to
                          root>,
+  "refdata_mount_point": <path in the container to mount the reference data directory, relative to
+                          root>,
   "positional_args": [Parameter, ... Parameter],
   "flag_args": {
     <flag1>: Parameter,
@@ -424,7 +426,11 @@ Represents a set of parameters provided to job containers.
     the job is complete will be transferred to the appropriate data storage system.
     Note that all containers share the same output directory on the host; it is up to container
     authors to ensure that containers don't overwrite each other.
-    Defaults to `/job_output_dir`  
+    Defaults to `/job_output_dir`
+* `refdata_mount_point`
+  * Absolute path that determines where the reference data directory, if any, is mounted inside
+    the container relative to the root. Reference data will be available here.
+    Defaults to `/refdata`
 * `positional_args`  
   * Positional arguments provided to the container at startup.  
 * `flag_args`  
@@ -1150,6 +1156,10 @@ Further approvals are via Github PR reviews.
 ### 1.3.0
 
 * Added refdata design.
+
+### 1.3.1
+
+* Added Parameters.refdata_mount_point
 
 ## Appendices
 
