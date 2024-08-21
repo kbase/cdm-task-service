@@ -72,7 +72,8 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
       1. Will need admin server APIs to view and modify the container allow list  
    3. Do the input files exist in Minio?  
       1. Server has to be able to read all relevant buckets  
-   4. Does the output bucket exist in Minio?  
+   4. Does the output bucket exist in Minio?
+   5. If reference data is required, is it ready?
 3. Service stores job specification to MongoDB. See [Job](#job)  
 4. Service sends job created message to Kafka  
 5. Service uses the `/utilities/command` SFAPI endpoint to run a data setup script  
@@ -162,6 +163,34 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
 * Store the error in the job record and set the state to `error`.  
 * See [Retries](#retries) for potential improvements.  
 * Add an admin endpoint to restart a job from where it left off.
+
+#### Reference data
+
+Some containers will need large reference data that are not built into the containers
+themselves to avoid massive container sizes. The service will manage staging refdata at NERSC
+from archive files in Minio.
+
+1. Service administrator makes request to service to stage a data file in Minio as reference
+   data at NERSC.
+   1. If the file is already registered in the service as reference data the call fails.
+      1. A force option may be needed if the file has been since overwritten.
+2. The service returns the reference data ID (a UUID) and starts a task via the SFAPI to download
+   and optionally unpack / uncompress the files.
+   1. Works the same way as data upload, described above in [Job Request](#job-request),
+      including state checking to ensure that multiple uploads don't conflict with each other.
+   2. Service creates a callback that will be triggered when the reference data is unpacked.
+3. When the reference data is staged, the reference data is marked as ready to use for that
+   environment (NERSC, Lawrencium, etc.)
+4. In the meantime, a system administrator can approve a container and associate the reference
+   data ID with the container.
+   1. Future work - allow updating reference data for an existing container.
+   2. While the reference data is being staged, jobs run for that container will refuse to start.
+   3. A reference data ID can be associated with multiple containers - typically different
+      version tags of the same tool.
+5. When a job is run, the reference data is mounted, read only,  into the container at a
+   point specified by the user.
+
+Future work - automatically delete reference data that is no longer associated with any containers.
 
 ### Decisions necessary
 
@@ -257,6 +286,55 @@ An error directly returned to a user from the API when an error occurs.
   * The server time when the error occurred in ISO8601 millisecond datetime format with the
     `Z` timezone.
 
+#### ReferenceData
+
+```
+{
+  "id": <reference data ID, a UUID>,
+  "file_loc": "cdm_minio",
+  "file": <the path to the file in Minio>,
+  "unpack": <boolean>,
+  "nersc":
+    {
+      "state": <the state of the reference data.>
+      "task_id": <the NERSC task id for uploading data>,
+      "task_logs": <logs for the upload task>,
+      "task_error: JobError,
+    }
+{
+```
+
+* `id`
+  * The ID of the reference data, determined by the service.
+* `file_loc`
+  * The location of the reference data file. Currently the only allowable value is `cdm_minio`.
+* `file`
+  * The path in Minio for the reference data file, starting with the bucket, e.g.
+    `/bucket/checkm2_refdata.tgz`.
+* `e_tag`
+  * The e-tag of the file. If provided when registering the reference data, if the e-tag doesn't
+    match the target file an error is raised.
+* `unpack`
+  * Whether to unpack the file based on its extension. Supported extensions are
+    `.zip`, `.tar.gz`, `.tgz`, and `.gz`.
+* `nersc`  
+  * A section of the reference data structure for NERSC based job information. If other clusters
+    (like Lawerencium) are added to the service, they would get their own blocks.  
+  * As well as the fields below, we could store task statistics like total run time.
+    TBD, will add in development
+* `nersc.state`  
+  * The reference data state. One of  
+    * `submitted`  
+    * `upload_submitted`  
+    * `complete`  
+    * `error`  
+* `nersc.task_id`  
+  * The task ID returned from NERSC for the data upload task.  
+* `nersc.task_logs`  
+  * Relevant logs from the upload task.  
+* `nersc.task_error`  
+  * Any error from the upload task.  
+
 #### Container
 
 ID and hash of a container.
@@ -265,8 +343,16 @@ ID and hash of a container.
 {
   "id": <container ID>
   "hash": <container hash>
+  "reference_data": <reference data ID>
 }
 ```
+
+* `id`
+  * The ID of the container, e.g. `ghcr.io/kbase/eggnog:4.51.0`
+* `hash`
+  * The sha256 hash of the container.
+* `reference_data`
+  * The ID of any reference data associated with the container. The ID must exist in the system.
 
 #### Parameter
 
@@ -343,7 +429,7 @@ Represents a set of parameters provided to job containers.
   * Positional arguments provided to the container at startup.  
 * `flag_args`  
   * Flag arguments, such as `-i`, `--input-file`, or `--input-file=`. If the argument ends
-    with an equals sign, no space is placed between the flag and parameter.  
+    with an equals sign, no space is placed between the flag and parameter.
 
 #### JobInput
 
@@ -383,7 +469,7 @@ Represents a set of parameters provided to job containers.
 * `reserved_time`  
   * The hours per worker to reserve for the job.  
 * `input_loc`  
-  * The location of the input files. Currently the only allowable value is `cdm_minio`.  
+  * The location of the input files. Currently the only allowable value is `cdm_minio`.
 * `input_files`  
   * The locations of input files in Minio, starting with the bucket, e.g. `/bucket/myfile.fa`.
     Either a list of files or a mapping of an arbitrary data ID string to a file. The data IDs
@@ -468,7 +554,7 @@ Represents a set of parameters provided to job containers.
 * `state`  
   * The job state. One of  
     * `submitted`  
-    * `upload_sumitted`  
+    * `upload_submitted`  
     * `job_submitting`  
     * `job_submitted`  
     * `download_submitting`  
@@ -584,6 +670,60 @@ RETURNS
   * Look up a particular user’s jobs. Only available to service admins.  
 * Job filtering / paging could be improved later.
 
+#### Get reference data by ID
+
+Get a reference data specification by ID.
+
+```
+GET /refdata/id/<reference data ID>
+RETURNS:
+ReferenceData
+```
+
+#### Get reference data by filename
+
+Get reference data specifications by file name. Normally this should only return one specification,
+unless the `force` parameter has been used to make a new reference data entry from the same
+filepath.
+
+```
+GET /refdata/file/<location>/<file path>
+RETURNS:
+{
+  "refdata": [ReferenceData, ...]
+}
+```
+
+* `location`
+  * The location of the data. Currently the only allowable value is `cdm_minio`.
+* `file path`
+  * The locations of the reference data file in Minio, starting with the bucket, e.g.
+    `/bucket/myfile.fa`.
+
+#### List reference data
+
+List reference data specifications, sorted by the file location and path.
+
+```
+GET /refdata
+RETURNS:
+{
+  "refdata": [ReferenceData, ...]
+}
+```
+
+Paging options could be added as an improvement.
+
+#### Get a container
+
+Get a container by the container ID.
+
+```
+GET /containers/<container ID>
+RETURNS:
+Container
+```
+
 #### List containers
 
 List the containers allowed to be run, sorted by ID.
@@ -598,16 +738,59 @@ RETURNS
 
 Paging options could be added as an improvement.
 
-#### Admin: Allow container
+#### Admin: Create reference data
 
-Marks a container as allowed to run as part of a job. Pulls and stores the hash for the
-container. The container must be accessible without credentials.
+Adds a reference data specification to the service and start staging it at remote compute
+locations.
+
+Reference data records are immutable and undeleteable once created as they are associated with
+job records.
 
 ```
 HEADERS
 Authorization: Bearer <token>
 
-PUT /admin/containers/<container_id>
+POST /admin/refdata[?force]
+ReferenceData
+```
+
+The `id` and `nersc` fields of [ReferenceData](#referencedata) are ignored.
+
+* `force`
+  * Create a new reference data entry even if one already exists for the given file.
+  * This is necessary if the file is ever overwritten.
+  
+Future work - add the user and date at creation time.
+
+#### Admin: Restart reference data staging
+
+If reference data staging isn't marked as complete for a location, restart staging.
+
+Admins will need to carefully inspect the reference data state & errors before restarting an
+upload to avoid restarting doomed uploads or restarting an upload that is actually still running.
+See [Retries](#retries) for future improvements. Needs some thought.
+
+```
+HEADERS
+Authorization: Bearer <token>
+
+POST /admin/refdata/<reference_data_id>/restart
+
+RETURNS
+ReferenceData
+```
+
+#### Admin: Allow container
+
+Marks a container as allowed to run as part of a job. Pulls and stores the hash for the
+container. The container must be accessible without credentials. The container may not already
+exist.
+
+```
+HEADERS
+Authorization: Bearer <token>
+
+POST /admin/containers/<container_id>[?refdata=<reference_data_id>]
 
 RETURNS
 Container
@@ -615,6 +798,10 @@ Container
 
 * `container_id`  
   * The ID of the container, e.g. `ghcr.io/kbase/microtrait:6.7.2`
+* `reference_data_id`
+  * The ID of any reference data to associate with the container.
+  
+Future work - add the user and date at creation time.
 
 #### Admin: Remove container
 
@@ -641,7 +828,7 @@ See [Retries](#retries) for future improvements. Needs some thought.
 HEADERS
 Authorization: Bearer <token>
 
-POST /admin/jobs/restart/<job ID>
+POST /admin/jobs/<job ID>/restart
 
 RETURNS
 Job
@@ -959,6 +1146,10 @@ Further approvals are via Github PR reviews.
 
 * Added decision for allowlist management.
 * Move question regarding log viewing to future work.
+
+### 1.3.0
+
+* Added refdata design.
 
 ## Appendices
 
