@@ -4,6 +4,7 @@ An s3 client tailored for the needs of the CDM Task Service.
 Note the client is *not threadsafe* as the underlying aiobotocore session is not threadsafe.
 """
 
+import asyncio
 from aiobotocore.session import get_session
 from botocore.config import Config
 from botocore.exceptions import EndpointConnectionError, ClientError
@@ -86,7 +87,7 @@ class S3Client:
         if not skip_connection_check:
             async def list_buckets(client):
                 return await client.list_buckets()
-            await s3c._run_command(list_buckets)
+            await s3c._run_commands([list_buckets], 1)
         return s3c
     
     def __init__(
@@ -113,11 +114,10 @@ class S3Client:
             config=self._config,
         )
         
-    async def _run_command(self, async_client_callable, path=None):
-        try: 
-            async with self._client() as client:
-                return await async_client_callable(client)
-        except (ValueError, EndpointConnectionError) as e:
+    async def _fnc_wrapper(self, client, func):
+        try:
+            return await func(client)
+        except EndpointConnectionError as e:
             raise S3ClientConnectError(f"s3 connect failed: {e}") from e
         except ResponseParserError as e:
             # TODO TEST logging
@@ -129,6 +129,7 @@ class S3Client:
                 + "See logs for details"
             ) from e
         except ClientError as e:
+            path = getattr(func, "path", None)
             code = e.response["Error"]["Code"]
             if code == "SignatureDoesNotMatch":
                 raise S3ClientConnectError("s3 access credentials are invalid")
@@ -144,22 +145,52 @@ class S3Client:
             logging.getLogger(__name__).error(
                 f"Unexpected response from S3. Response data:\n{e.response}\nTraceback:\n{e}\n")
             raise S3UnexpectedError(str(e)) from e
+        
+    async def _run_commands(self, async_client_callables, concurrency):
+        # Look in test_manual for performance tests
+        semaphore = asyncio.Semaphore(concurrency)
+        async def sem_coro(coro):
+            async with semaphore:
+                return await coro
+        results = []
+        coros = []
+        try: 
+            async with self._client() as client:
+                async with asyncio.TaskGroup() as tg:
+                    for acall in async_client_callables:
+                        coros.append(self._fnc_wrapper(client, acall))
+                        results.append(tg.create_task(sem_coro(coros[-1])))
+        except ValueError as e:
+            raise S3ClientConnectError(f"s3 connect failed: {e}") from e
+        except ExceptionGroup as eg:
+            e = eg.exceptions[0]  # just pick one, essentially at random
+            raise e from eg
+        finally:
+            # otherwise you can get coroutine never awaited warnings if a failure occurs
+            for c in coros:
+                c.close()
+        return [r.result() for r in results]
 
-    async def get_object_meta(self, paths: S3Paths) -> list[S3ObjectMeta]:
+    async def get_object_meta(self, paths: S3Paths, concurrency=10) -> list[S3ObjectMeta]:
         """
         Get metadata about a set of objects.
         
         paths - the paths to query
+        concurrency - the number of simultaneous connections to S3
         """
+        if concurrency < 1:
+            raise ValueError("concurrency must be > 0")
         if not paths:
             raise ValueError("paths is required")
-        ret = []
+        funcs = []
         for buk, key, path in paths.split_paths(include_full_path=True):
-            # TODO parallelize w/ max connection #
-            # https://github.com/kbase/collections/blob/4c4a7f9b71e4d058799e8679b7c9710ab02bd5de/src/service/matchers/minhash_homology_matcher.py#L111-L120
-            async def head(client):
+            async def head(client, buk=buk, key=key):  # bind the current value of the variables
                 return await client.head_object(Bucket=buk, Key=key, PartNumber=1)
-            res = await self._run_command(head, path=path)
+            head.path = path
+            funcs.append(head)
+        results = await self._run_commands(funcs, concurrency)
+        ret = []
+        for res, path in zip(results, paths.paths):
             size = res["ContentLength"]
             part_size = None
             if "PartsCount" in res:
@@ -173,4 +204,3 @@ class S3Client:
                 part_size=part_size
             ))
         return ret
-

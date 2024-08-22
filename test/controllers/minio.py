@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from typing import Any
 
 from utils import find_free_port
 
@@ -92,11 +93,12 @@ class MinioController:
         async with self.get_client() as client:
             await client.create_bucket(Bucket=bucket)
 
-    async def upload_file(self, path, main_part, num_main_parts=1, last_part=None):
+    async def upload_file(self, path, main_part, num_main_parts=1, last_part=None
+    ) -> dict[str, Any]:
         async with self.get_client() as client:
             buk, key = path.split("/", 1)
             if num_main_parts == 1 and not last_part:
-                await client.put_object(
+                return await client.put_object(
                     Body=io.BytesIO(main_part),
                     Bucket=buk,
                     Key=key,
@@ -112,7 +114,7 @@ class MinioController:
                 if last_part:
                     res = await upload_part(client, last_part, buk, key, uid, num_main_parts + 1)
                     parts.append({"ETag": res["ETag"], "PartNumber": num_main_parts + 1})
-                await client.complete_multipart_upload(
+                return await client.complete_multipart_upload(
                     Bucket=buk, Key=key, UploadId=uid, MultipartUpload={"Parts": parts}
                 )
 
