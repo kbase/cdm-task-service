@@ -1,3 +1,8 @@
+"""
+Also look in test_manual for more tests.
+"""
+
+import random
 import pytest
 
 from cdmtaskservice.s3.client import S3Client
@@ -57,10 +62,10 @@ async def test_get_object_meta_single_part(minio):
     await minio.create_bucket("test-bucket")
     await minio.upload_file("test-bucket/test_file", b"abcdefghij")
 
-    s3c = await client(minio)
+    s3c = await _client(minio)
     objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))
     assert len(objm) == 1
-    check_obj_meta(
+    _check_obj_meta(
         objm[0], "test-bucket/test_file", "a925576942e94b2ef57a066101b48876", 10, None, False, 1)
 
 
@@ -71,10 +76,10 @@ async def test_get_object_meta_multipart(minio):
     await minio.upload_file(
         "test-bucket/big_test_file", b"abcdefghij" * 6000000, 3, b"bigolfile")
 
-    s3c = await client(minio)
+    s3c = await _client(minio)
     objm = await s3c.get_object_meta(S3Paths(["test-bucket/big_test_file"]))
     assert len(objm) == 1
-    check_obj_meta(
+    _check_obj_meta(
         objm[0],
         "test-bucket/big_test_file",
         "e0fcd4584a5157e2d465bf0217ab8268-4",
@@ -92,11 +97,11 @@ async def test_get_object_meta_mix(minio):
         "nice-bucket/big_test_file", b"abcdefghij" * 6000000, 4, b"bigolfile")
     await minio.upload_file("nice-bucket/test_file", b"abcdefghij")
     
-    s3c = await client(minio)
+    s3c = await _client(minio)
     objm = await s3c.get_object_meta(S3Paths(
         ["nice-bucket/big_test_file", "nice-bucket/test_file"]))
     assert len(objm) == 2
-    check_obj_meta(
+    _check_obj_meta(
         objm[0],
         "nice-bucket/big_test_file",
         "2c0fa9e12a28c40de69cab92da528adf-5",
@@ -105,14 +110,23 @@ async def test_get_object_meta_mix(minio):
         True,
         5,
     )
-    check_obj_meta(
+    _check_obj_meta(
         objm[1], "nice-bucket/test_file", "a925576942e94b2ef57a066101b48876", 10, None, False, 1)
 
 
 @pytest.mark.asyncio
 async def test_get_object_meta_fail_no_paths(minio):
-    await _get_object_meta_fail(await client(minio), None, ValueError("paths is required"))
+    await _get_object_meta_fail(await _client(minio), None, ValueError("paths is required"))
 
+
+@pytest.mark.asyncio
+async def test_get_object_meta_fail_concurrency(minio):
+    p = S3Paths(["foo/bar"])
+    cli = await _client(minio)
+    for c in [0, -1, -1000000]:
+        await _get_object_meta_fail(
+            cli, p, ValueError("concurrency must be > 0"), concurrency=c)
+    
 
 @pytest.mark.asyncio
 async def test_get_object_meta_fail_no_object(minio):
@@ -125,7 +139,7 @@ async def test_get_object_meta_fail_no_object(minio):
         "fail-bucket/foo/baz": "The path 'fail-bucket/foo/baz' was not found on the s3 system",
     }
     for k, v in testset.items():
-        await _get_object_meta_fail(await client(minio), S3Paths([k]), S3PathError(v))
+        await _get_object_meta_fail(await _client(minio), S3Paths([k]), S3PathError(v))
 
 
 @pytest.mark.asyncio
@@ -144,17 +158,41 @@ async def test_get_object_meta_fail_unauthed(minio, minio_unauthed_user):
     )
 
 
-async def _get_object_meta_fail(s3c, path, expected, print_stacktrace=False):
+@pytest.mark.asyncio
+async def test_get_object_meta_fail_concurrent_paths(minio):
+    # Since a taskgroup cancels all tasks after the first failure, check that we're throwing
+    # the right error and not a CancelledError or something
+    await minio.clean()
+    await minio.create_bucket("fail-bucket")
+    paths = []
+    filecount = 10
+    fails_on = random.randrange(filecount)
+    for i in range(filecount):
+        contents = str(10000 + i)  # keep the file size the same
+        await minio.upload_file(f"fail-bucket/f{contents}", contents.encode())
+        paths.append(f"fail-bucket/f{contents}" + ("fail" if i == fails_on else ""))
+    
+    for con in [1, 2, 5, 10]:
+        await _get_object_meta_fail(
+            await _client(minio),
+            S3Paths(paths),
+            S3PathError(
+                f"The path 'fail-bucket/f1000{fails_on}fail' was not found on the s3 system"),
+            concurrency=con
+        )
+
+
+async def _get_object_meta_fail(s3c, paths, expected, concurrency=1, print_stacktrace=False):
     with pytest.raises(Exception) as got:
-        await s3c.get_object_meta(path)
+        await s3c.get_object_meta(paths, concurrency)
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
-async def client(minio):
+async def _client(minio):
     return await S3Client.create(minio.host,  minio.access_key, minio.secret_key)
 
 
-def check_obj_meta(objm, path, e_tag, size, part_size, has_parts, num_parts):
+def _check_obj_meta(objm, path, e_tag, size, part_size, has_parts, num_parts):
     assert objm.path == path
     assert objm.e_tag == e_tag
     assert objm.size == size
