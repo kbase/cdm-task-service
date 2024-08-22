@@ -1,8 +1,9 @@
 import pytest
-import io
 
-from cdmtaskservice.s3.client import S3Client, S3ClientConnectError, S3PathError
-from conftest import minio, minio_unauthed_user, assert_exception_correct
+from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.s3.paths import S3Paths
+from cdmtaskservice.s3.exceptions import S3ClientConnectError, S3PathError
+from conftest import minio, minio_unauthed_user, assert_exception_correct  # @UnusedImport
 
 
 @pytest.mark.asyncio
@@ -57,9 +58,10 @@ async def test_get_object_meta_single_part(minio):
     await minio.upload_file("test-bucket/test_file", b"abcdefghij")
 
     s3c = await client(minio)
-    objm = await s3c.get_object_meta("test-bucket/test_file")
+    objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))
+    assert len(objm) == 1
     check_obj_meta(
-        objm, "test-bucket/test_file", "a925576942e94b2ef57a066101b48876", 10, None, False, 1)
+        objm[0], "test-bucket/test_file", "a925576942e94b2ef57a066101b48876", 10, None, False, 1)
 
 
 @pytest.mark.asyncio
@@ -70,9 +72,10 @@ async def test_get_object_meta_multipart(minio):
         "test-bucket/big_test_file", b"abcdefghij" * 6000000, 3, b"bigolfile")
 
     s3c = await client(minio)
-    objm = await s3c.get_object_meta("test-bucket/big_test_file")
+    objm = await s3c.get_object_meta(S3Paths(["test-bucket/big_test_file"]))
+    assert len(objm) == 1
     check_obj_meta(
-        objm,
+        objm[0],
         "test-bucket/big_test_file",
         "e0fcd4584a5157e2d465bf0217ab8268-4",
         180000009,
@@ -81,38 +84,48 @@ async def test_get_object_meta_multipart(minio):
         4,
     )
 
+@pytest.mark.asyncio
+async def test_get_object_meta_mix(minio):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("nice-bucket")
+    await minio.upload_file(
+        "nice-bucket/big_test_file", b"abcdefghij" * 6000000, 4, b"bigolfile")
+    await minio.upload_file("nice-bucket/test_file", b"abcdefghij")
+    
+    s3c = await client(minio)
+    objm = await s3c.get_object_meta(S3Paths(
+        ["nice-bucket/big_test_file", "nice-bucket/test_file"]))
+    assert len(objm) == 2
+    check_obj_meta(
+        objm[0],
+        "nice-bucket/big_test_file",
+        "2c0fa9e12a28c40de69cab92da528adf-5",
+        240000009,
+        60000000,
+        True,
+        5,
+    )
+    check_obj_meta(
+        objm[1], "nice-bucket/test_file", "a925576942e94b2ef57a066101b48876", 10, None, False, 1)
+
 
 @pytest.mark.asyncio
-async def test_get_object_meta_fail_bad_path(minio):
-    # Will probably want to refactor these tests so they can be generically be applied to
-    # any endpoints that take a path
+async def test_get_object_meta_fail_no_paths(minio):
+    await _get_object_meta_fail(await client(minio), None, ValueError("paths is required"))
+
+
+@pytest.mark.asyncio
+async def test_get_object_meta_fail_no_object(minio):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
     await minio.upload_file("fail-bucket/foo/bar", b"foo")
     
-    charerr = "Bucket names may only contain '-' and lowercase ascii alphanumerics: "
-    
     testset = {
-        None: "An s3 path cannot be null or a whitespace string",
-        "   \t   ": "An s3 path cannot be null or a whitespace string",
-         "  /  ": "path '/' must start with the s3 bucket and include a key",
-         "foo /  ": "path 'foo /' must start with the s3 bucket and include a key",
-        " / bar   ": "path '/ bar' must start with the s3 bucket and include a key",
-        "il/foo": "Bucket names must be > 2 and < 64 characters: il",
-        ("illegal-bu" * 6) + "cket/foo":
-            f"Bucket names must be > 2 and < 64 characters: {'illegal-bu' * 6}cket",
-        "illegal.bucket/foo": "Buckets with `.` in the name are unsupported: illegal.bucket",
-        "-illegal-bucket/foo": "Bucket names cannot start or end with '-': -illegal-bucket",
-        "illegal-bucket-/foo": "Bucket names cannot start or end with '-': illegal-bucket-",
-        "illegal*bucket/foo": charerr + "illegal*bucket",
-        "illegal_bucket/foo": charerr + "illegal_bucket",
-        "illegal-Bucket/foo": charerr + "illegal-Bucket",
-        "illegal-βucket/foo": charerr + "illegal-βucket",
         "fake-bucket/foo/bar": "The path 'fake-bucket/foo/bar' was not found on the s3 system",
         "fail-bucket/foo/baz": "The path 'fail-bucket/foo/baz' was not found on the s3 system",
     }
     for k, v in testset.items():
-        await _get_object_meta_fail(await client(minio), k, S3PathError(v))
+        await _get_object_meta_fail(await client(minio), S3Paths([k]), S3PathError(v))
 
 
 @pytest.mark.asyncio
@@ -126,7 +139,7 @@ async def test_get_object_meta_fail_unauthed(minio, minio_unauthed_user):
     user, pwd = minio_unauthed_user
     s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
     await _get_object_meta_fail(
-        s3c, "fail-bucket/foo/bar",
+        s3c, S3Paths(["fail-bucket/foo/bar"]),
         S3PathError("Access denied to path 'fail-bucket/foo/bar' on the s3 system")
     )
 
