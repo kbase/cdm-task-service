@@ -11,6 +11,9 @@ from botocore.parsers import ResponseParserError
 import logging
 from typing import Any, Self
 
+from .exceptions import S3ClientConnectError, S3PathError, S3UnexpectedError
+from .paths import S3Paths
+
 
 class S3ObjectMeta:
     """ Metadata about an object in S3 storage. """
@@ -142,67 +145,32 @@ class S3Client:
                 f"Unexpected response from S3. Response data:\n{e.response}\nTraceback:\n{e}\n")
             raise S3UnexpectedError(str(e)) from e
 
-
-    async def get_object_meta(self, path: str) -> S3ObjectMeta:
+    async def get_object_meta(self, paths: S3Paths) -> list[S3ObjectMeta]:
         """
-        Get metadata about an object.
+        Get metadata about a set of objects.
         
-        path - the path of the object in s3, starting with the bucket.
+        paths - the paths to query
         """
-        buk, key = _validate_and_split_path(path)
-        async def head(client):
-            return await client.head_object(Bucket=buk, Key=key, PartNumber=1)
-        res = await self._run_command(head, path=path.strip())
-        size = res["ContentLength"]
-        part_size = None
-        if "PartsCount" in res:
-            part_size = size
-            content_range = res["ResponseMetadata"]["HTTPHeaders"]["content-range"]
-            size = int(content_range.split("/")[1])
-        return S3ObjectMeta(
-            path=path,
-            e_tag = res["ETag"].strip('"'),
-            size=size,
-            part_size=part_size
-        )
+        if not paths:
+            raise ValueError("paths is required")
+        ret = []
+        for buk, key, path in paths.split_paths(include_full_path=True):
+            # TODO parallelize w/ max connection #
+            # https://github.com/kbase/collections/blob/4c4a7f9b71e4d058799e8679b7c9710ab02bd5de/src/service/matchers/minhash_homology_matcher.py#L111-L120
+            async def head(client):
+                return await client.head_object(Bucket=buk, Key=key, PartNumber=1)
+            res = await self._run_command(head, path=path)
+            size = res["ContentLength"]
+            part_size = None
+            if "PartsCount" in res:
+                part_size = size
+                content_range = res["ResponseMetadata"]["HTTPHeaders"]["content-range"]
+                size = int(content_range.split("/")[1])
+            ret.append(S3ObjectMeta(
+                path=path,
+                e_tag = res["ETag"].strip('"'),
+                size=size,
+                part_size=part_size
+            ))
+        return ret
 
-
-def _validate_and_split_path(path: str) -> (str, str):
-    if not path or not path.strip():
-        raise S3PathError("An s3 path cannot be null or a whitespace string")
-    parts = [s.strip() for s in path.split("/", 1) if s.strip()]
-    if len(parts) != 2:
-        raise S3PathError(
-            f"path '{path.strip()}' must start with the s3 bucket and include a key")
-    _validate_bucket_name(parts[0])
-    return parts[0], parts[1]
-
-
-def _validate_bucket_name(bucket_name: str):
-    # https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
-    bn = bucket_name.strip()
-    if len(bn) < 3 or len(bn) > 63:
-        raise S3PathError(f"Bucket names must be > 2 and < 64 characters: {bn}")
-    if "." in bn:
-        raise S3PathError(f"Buckets with `.` in the name are unsupported: {bn}")
-    if bn.startswith("-") or bn.endswith("-"):
-        raise S3PathError(f"Bucket names cannot start or end with '-': {bn}")
-    if not bn.replace("-", "").isalnum() or not bn.isascii() or not bn.islower():
-        raise S3PathError(
-            f"Bucket names may only contain '-' and lowercase ascii alphanumerics: {bn}")
-
-
-class S3ClientError(Exception):
-    """ The base class for S3 client errors. """ 
-
-
-class S3ClientConnectError(Exception):
-    """ The base class for S3 client errors. """ 
-
-
-class S3PathError(S3ClientError):
-    """ Error thrown when an S3 path is incorrectly specified. """
-
-
-class S3UnexpectedError(S3ClientError):
-    """ Error thrown when an S3 path is incorrectly specified. """
