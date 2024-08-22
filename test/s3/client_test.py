@@ -28,7 +28,9 @@ async def test_create_fail_bad_args(minio, minio_unauthed_user):
     await _create_fail(
         bad_ep1, "foo", "bar",
         S3ClientConnectError("s3 connect failed: Invalid endpoint: " + bad_ep1))
-    bad_ep2 = f"http://localhost:{minio.port + 1}"
+    # +1 can fail on some versions / environments if the UI part is automatically set to
+    # the api port + 1
+    bad_ep2 = f"http://localhost:{minio.port + 3}"
     await _create_fail(
         bad_ep2, "foo", "bar",
         S3ClientConnectError(
