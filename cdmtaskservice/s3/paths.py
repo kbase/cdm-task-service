@@ -32,6 +32,8 @@ class S3Paths:
             newpaths.append(_validate_path(i, p))
         self.paths = tuple(newpaths)
 
+    def __len__(self):
+        return len(self.paths)
 
     def split_paths(self, include_full_path=False) -> Generator[list[str, ...], None, None]:
         """

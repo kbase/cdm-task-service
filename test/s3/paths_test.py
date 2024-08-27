@@ -56,9 +56,11 @@ def _init_fail(path: str, expected: str):
 def test_init():
     s3p = S3Paths(["foo/bar"])
     assert s3p.paths == ("foo/bar",)
+    assert (len(s3p)) == 1
     
     s3p = S3Paths(["foo/bar", "baz/bat  \t ", "   thingy-stuff9/𝛙hatever"])
     assert s3p.paths == ("foo/bar", "baz/bat", "thingy-stuff9/𝛙hatever")
+    assert (len(s3p)) == 3
 
 
 def test_split_paths():
