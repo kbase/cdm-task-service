@@ -89,7 +89,7 @@ async def test_get_object_meta_multipart(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     await minio.upload_file(
-        "test-bucket/big_test_file", b"abcdefghij" * 6000000, 3, b"bigolfile")
+        "test-bucket/big_test_file", b"abcdefghij" * 600000, 3, b"bigolfile")
 
     s3c = await _client(minio)
     objm = await s3c.get_object_meta(S3Paths(["test-bucket/big_test_file"]))
@@ -97,12 +97,12 @@ async def test_get_object_meta_multipart(minio):
     _check_obj_meta(
         objm[0],
         "test-bucket/big_test_file",
-        "e0fcd4584a5157e2d465bf0217ab8268-4",
-        180000009,
-        60000000,
+        "b8185adaf462a5ac2ca9db335b290d23-4",
+        18000009,
+        6000000,
         True,
         4,
-        60000000,
+        6000000,
     )
 
 @pytest.mark.asyncio
@@ -110,7 +110,7 @@ async def test_get_object_meta_mix(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("nice-bucket")
     await minio.upload_file(
-        "nice-bucket/big_test_file", b"abcdefghij" * 6000000, 4, b"bigolfile")
+        "nice-bucket/big_test_file", b"abcdefghij" * 600000, 4, b"bigolfile")
     await minio.upload_file("nice-bucket/test_file", b"abcdefghij")
     
     s3c = await _client(minio)
@@ -120,12 +120,12 @@ async def test_get_object_meta_mix(minio):
     _check_obj_meta(
         objm[0],
         "nice-bucket/big_test_file",
-        "2c0fa9e12a28c40de69cab92da528adf-5",
-        240000009,
-        60000000,
+        "9728af2f2c566b2b944b96203769175d-5",
+        24000009,
+        6000000,
         True,
         5,
-        60000000,
+        6000000,
     )
     _check_obj_meta(
         objm[1],
