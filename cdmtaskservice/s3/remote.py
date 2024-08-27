@@ -8,6 +8,7 @@ python versions.
 
 from hashlib import md5
 from pathlib import Path
+import zlib
 
 
 def calculate_etag(infile: Path, partsize: int) -> str:
@@ -40,16 +41,31 @@ def calculate_etag(infile: Path, partsize: int) -> str:
     # and the 2nd none.
 
     # Not really a good way to test the expanduser calls
-    if not infile or not infile.expanduser().is_file():
-        raise ValueError("infile must be exist and be a file")
+    _check_file(infile)
     if partsize < 1:
         raise ValueError("partsize must be > 0")
     md5_digests = []
     with open(infile.expanduser(), 'rb') as f:
-        for chunk in iter(lambda: f.read(partsize), b''):
+        while chunk := f.read(partsize):
             md5_digests.append(md5(chunk).digest())
     if len(md5_digests) == 0:
         raise ValueError("file is empty")
     if len(md5_digests) == 1:
         return md5_digests[0].hex()
     return md5(b''.join(md5_digests)).hexdigest() +  '-' + str(len(md5_digests))
+
+
+def crc32(infile: Path) -> bytes:
+    """Compute the CRC-32 checksum of the contents of the given file"""
+    # adapted from https://stackoverflow.com/a/59974585/643675
+    # Not really a good way to test the expanduser calls
+    _check_file(infile)
+    with open(infile.expanduser(), "rb") as f:
+        checksum = 0
+        while chunk := f.read(65536):
+            checksum = zlib.crc32(chunk, checksum)
+    return checksum.to_bytes(4)
+
+def _check_file(infile: Path):
+    if not infile or not infile.expanduser().is_file():
+        raise ValueError("infile must be exist and be a file")

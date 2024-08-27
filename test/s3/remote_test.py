@@ -4,7 +4,7 @@ from pathlib import Path
 from pytest import raises
 
 from conftest import assert_exception_correct
-from cdmtaskservice.s3.remote import calculate_etag
+from cdmtaskservice.s3.remote import calculate_etag, crc32
 
 TESTDATA = Path(os.path.normpath((Path(__file__) / ".." / ".." / "testdata")))
 
@@ -35,3 +35,25 @@ def test_calculate_etag_fail():
             calculate_etag(infile, size)
         assert_exception_correct(got.value, expected)
 
+
+def test_crc32():
+    # checked these with the linux crc32 program
+    testset = [
+        (TESTDATA / "empty_file", "00000000"),
+        (TESTDATA / "random_bytes_1kB", "ed9a6eb3"),
+        (TESTDATA / "random_bytes_10kB", "4ffc5208"),
+    ]
+    for infile, crc in testset:
+        gotcrc = crc32(infile)
+        assert gotcrc.hex() == crc
+
+
+def test_crc32_fail():
+    testset = [
+        (None, ValueError("infile must be exist and be a file")),
+        (TESTDATA, ValueError("infile must be exist and be a file")),
+    ]
+    for infile, expected in testset:
+        with raises(Exception) as got:
+            crc32(infile)
+        assert_exception_correct(got.value, expected)
