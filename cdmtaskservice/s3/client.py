@@ -261,17 +261,17 @@ class S3Client:
         return results
 
 
-def _not_falsy(obj, name):
+def _not_falsy(obj: Any, name: str):
     if not obj:
         raise ValueError(f"{name} is required")
 
 
-def _require_string(string, name):
+def _require_string(string: str, name: str):
     if not string or not string.strip():
         raise ValueError(f"{name} is required")
     return string.strip()
 
 
-def _check_int(inte, name, minimum=1):
+def _check_int(inte: int, name: str, minimum: int = 1):
     if inte < minimum:
         raise ValueError(f"{name} must be >= {minimum}")
