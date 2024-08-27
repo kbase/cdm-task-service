@@ -10,6 +10,8 @@ from hashlib import md5
 from pathlib import Path
 import zlib
 
+_CHUNK_SIZE_64KB = 2 ** 16
+
 
 def calculate_etag(infile: Path, partsize: int) -> str:
     """
@@ -62,7 +64,7 @@ def crc32(infile: Path) -> bytes:
     _check_file(infile)
     with open(infile.expanduser(), "rb") as f:
         checksum = 0
-        while chunk := f.read(65536):
+        while chunk := f.read(_CHUNK_SIZE_64KB):
             checksum = zlib.crc32(chunk, checksum)
     return checksum.to_bytes(4)
 
