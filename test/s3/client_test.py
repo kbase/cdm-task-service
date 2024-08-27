@@ -73,7 +73,15 @@ async def test_get_object_meta_single_part(minio):
     objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))
     assert len(objm) == 1
     _check_obj_meta(
-        objm[0], "test-bucket/test_file", "a925576942e94b2ef57a066101b48876", 10, None, False, 1)
+        objm[0],
+        "test-bucket/test_file",
+        "a925576942e94b2ef57a066101b48876",
+        10,
+        None,
+        False,
+        1,
+        10
+    )
 
 
 @pytest.mark.asyncio
@@ -94,6 +102,7 @@ async def test_get_object_meta_multipart(minio):
         60000000,
         True,
         4,
+        60000000,
     )
 
 @pytest.mark.asyncio
@@ -116,9 +125,17 @@ async def test_get_object_meta_mix(minio):
         60000000,
         True,
         5,
+        60000000,
     )
     _check_obj_meta(
-        objm[1], "nice-bucket/test_file", "a925576942e94b2ef57a066101b48876", 10, None, False, 1)
+        objm[1],
+        "nice-bucket/test_file",
+        "a925576942e94b2ef57a066101b48876",
+        10,
+        None,
+        False,
+        1,
+        10)
 
 
 @pytest.mark.asyncio
@@ -276,10 +293,11 @@ async def _client(minio):
     return await S3Client.create(minio.host,  minio.access_key, minio.secret_key)
 
 
-def _check_obj_meta(objm, path, e_tag, size, part_size, has_parts, num_parts):
+def _check_obj_meta(objm, path, e_tag, size, part_size, has_parts, num_parts, effsize):
     assert objm.path == path
     assert objm.e_tag == e_tag
     assert objm.size == size
     assert objm.part_size == part_size
     assert objm.has_parts is has_parts
     assert objm.num_parts == num_parts
+    assert objm.effective_part_size == effsize
