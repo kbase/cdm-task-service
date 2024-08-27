@@ -56,6 +56,12 @@ class S3ObjectMeta:
         return 1
 
 
+    @property
+    def effective_part_size(self):
+        """ Returns the part size, if present, or the overall object size. """
+        return self.part_size or self.size
+
+
 class S3PresignedPost:
     """
     A presigned url and fields for posting data to an S3 instance.
