@@ -8,7 +8,12 @@ import pytest
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.s3.exceptions import S3ClientConnectError, S3PathError
-from conftest import minio, minio_unauthed_user, assert_exception_correct  # @UnusedImport
+from conftest import (
+    minio,  # @UnusedImport
+    minio_unauthed_user,  # @UnusedImport
+    assert_exception_correct,
+    assert_close_to_now_sec,
+)
 
 
 @pytest.mark.asyncio
@@ -28,7 +33,7 @@ async def test_create_fail_bad_args(minio, minio_unauthed_user):
     await _create_fail(
         bad_ep1, "foo", "bar",
         S3ClientConnectError("s3 connect failed: Invalid endpoint: " + bad_ep1))
-    # +1 can fail on some versions / environments if the UI part is automatically set to
+    # +1 can fail on some versions / environments if the UI port is automatically set to
     # the api port + 1
     bad_ep2 = f"http://localhost:{minio.port + 3}"
     await _create_fail(
@@ -127,7 +132,7 @@ async def test_get_object_meta_fail_concurrency(minio):
     cli = await _client(minio)
     for c in [0, -1, -1000000]:
         await _get_object_meta_fail(
-            cli, p, ValueError("concurrency must be > 0"), concurrency=c)
+            cli, p, ValueError("concurrency must be >= 1"), concurrency=c)
     
 
 @pytest.mark.asyncio
@@ -188,6 +193,83 @@ async def _get_object_meta_fail(s3c, paths, expected, concurrency=1, print_stack
     with pytest.raises(Exception) as got:
         await s3c.get_object_meta(paths, concurrency)
     assert_exception_correct(got.value, expected, print_stacktrace)
+
+
+@pytest.mark.asyncio
+async def test_presign_get_urls():
+    s3c = await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
+    s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
+    urls = await s3c.presign_get_urls(s3p, expiration_sec=10 * 60)
+    assert len(urls) == 2
+
+    assert urls[0].startswith("https://pubminio.kbase.us/bukkit/myfile?"
+                              + "AWSAccessKeyId=task-service&Signature=")
+    assert "&Expires=" in urls[0]
+    exp = int(urls[0].split("=")[-1])
+    assert_close_to_now_sec(exp - 600)
+
+    assert urls[1].startswith("https://pubminio.kbase.us/otherbukkit/otherdir/somefile?"
+                              + "AWSAccessKeyId=task-service&Signature=")
+    assert "&Expires=" in urls[1]
+    exp = int(urls[1].split("=")[-1])
+    assert_close_to_now_sec(exp - 600)
+
+
+@pytest.mark.asyncio
+async def test_presign_get_urls_fail():
+    s3c = await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
+    await _presign_get_urls_fail(s3c, None, 1, "paths is required")
+    for t in [0, -1, -100, -1000000]:
+        await _presign_get_urls_fail(s3c, S3Paths(["foo/bar"]), t, "expiration_sec must be >= 1")
+    
+    
+async def _presign_get_urls_fail(s3c, paths, expiration, expected):
+    with pytest.raises(Exception) as got:
+        await s3c.presign_get_urls(paths, expiration)
+    assert_exception_correct(got.value, ValueError(expected))
+
+
+@pytest.mark.asyncio
+async def test_presign_post_urls():
+    s3c = await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
+    s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
+    # not really a good way to test that expiration works without reverse engineering the
+    # policy field I guess?
+    urls = await s3c.presign_post_urls(s3p, expiration_sec=10 * 60)
+    assert len(urls) == 2
+    
+    assert urls[0].url == "https://pubminio.kbase.us/bukkit"
+    _presign_post_urls_check_fields(urls[0], "myfile")
+    
+    assert urls[1].url == "https://pubminio.kbase.us/otherbukkit"
+    _presign_post_urls_check_fields(urls[1], "otherdir/somefile")
+
+
+def _presign_post_urls_check_fields(presign_post, key):
+    fields = dict(presign_post.fields)
+    assert "signature" in fields
+    del fields["signature"]  # changes per invocation
+    assert "policy" in fields
+    del fields["policy"]  # changes per invocation
+    assert fields == {"key": key, "AWSAccessKeyId": "task-service"}
+
+
+@pytest.mark.asyncio
+async def test_presign_post_urls_fail():
+    s3c = await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
+    await _presign_get_post_fail(s3c, None, 1, "paths is required")
+    for t in [0, -1, -100, -1000000]:
+        await _presign_get_post_fail(s3c, S3Paths(["foo/bar"]), t, "expiration_sec must be >= 1")
+    
+    
+async def _presign_get_post_fail(s3c, paths, expiration, expected):
+    with pytest.raises(Exception) as got:
+        await s3c.presign_post_urls(paths, expiration)
+    assert_exception_correct(got.value, ValueError(expected))
 
 
 async def _client(minio):

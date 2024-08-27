@@ -56,6 +56,27 @@ class S3ObjectMeta:
         return 1
 
 
+class S3PresignedPost:
+    """
+    A presigned url and fields for posting data to an S3 instance.
+    
+    See https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3-presigned-urls.html#generating-a-presigned-url-to-upload-a-file
+    """
+    
+    __slots__ = ["url", "fields"]
+    
+    def __init__(self, url: str, fields: dict[str, str]):
+        """
+        Create the post details.
+        
+        url - the url for the post request.
+        fields - the form fields to include with the post request.
+        """
+        # again input checking is a little pointless here
+        self.url = url
+        self.fields = fields
+    
+
 class S3Client:
     """
     The S3 client.
@@ -93,16 +114,11 @@ class S3Client:
     def __init__(
         self, endpoint_url: str, access_key: str, secret_key: str, config: dict[str, Any]
     ):
-        self._url = self._require_string(endpoint_url, "endpoint_url")
-        self._ak = self._require_string(access_key, "access_key")
-        self._sk = self._require_string(secret_key, "secret_key")
+        self._url = _require_string(endpoint_url, "endpoint_url")
+        self._ak = _require_string(access_key, "access_key")
+        self._sk = _require_string(secret_key, "secret_key")
         self._config = Config(**config) if config else None
         self._sess = get_session()
-    
-    def _require_string(self, string, name):
-        if not string or not string.strip():
-            raise ValueError(f"{name} is required")
-        return string.strip()
     
     def _client(self):
         # Creating a client seems to be pretty cheap, usually < 20ms.
@@ -171,17 +187,15 @@ class S3Client:
                 c.close()
         return [r.result() for r in results]
 
-    async def get_object_meta(self, paths: S3Paths, concurrency=10) -> list[S3ObjectMeta]:
+    async def get_object_meta(self, paths: S3Paths, concurrency: int = 10) -> list[S3ObjectMeta]:
         """
         Get metadata about a set of objects.
         
         paths - the paths to query
         concurrency - the number of simultaneous connections to S3
         """
-        if concurrency < 1:
-            raise ValueError("concurrency must be > 0")
-        if not paths:
-            raise ValueError("paths is required")
+        _not_falsy(paths, "paths")
+        _check_int(concurrency, "concurrency")
         funcs = []
         for buk, key, path in paths.split_paths(include_full_path=True):
             async def head(client, buk=buk, key=key):  # bind the current value of the variables
@@ -204,3 +218,60 @@ class S3Client:
                 part_size=part_size
             ))
         return ret
+
+    async def presign_get_urls(self, paths: S3Paths, expiration_sec: int = 3600) -> list[str]:
+        """
+        Presign urls to allow getting s3 paths. Does not confirm the path exists.
+        
+        paths - the paths in question.
+        expiration_sec - the expiration time of the urls.
+        """
+        _not_falsy(paths, "paths")
+        _check_int(expiration_sec, "expiration_sec")
+        results = []
+        async with self._client() as client:
+            for buk, key in paths.split_paths():
+                results.append(await client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": buk, "Key": key},
+                    ExpiresIn=expiration_sec
+                ))
+        return results
+    
+    
+    async def presign_post_urls(
+        self,
+        paths: S3Paths,
+        expiration_sec: int = 3600
+    ) -> list[S3PresignedPost]:
+        """
+        Presign urls to allow posting to s3 paths. Does not check for overwrites.
+        
+        paths - the paths in question.
+        expiration_sec - the expiration time of the urls.
+        """
+        _not_falsy(paths, "paths")
+        _check_int(expiration_sec, "expiration_sec")
+        results = []
+        async with self._client() as client:
+            for buk, key in paths.split_paths():
+                ret = await client.generate_presigned_post(
+                    Bucket=buk, Key=key, ExpiresIn=expiration_sec)
+                results.append(S3PresignedPost(ret["url"], ret["fields"]))
+        return results
+
+
+def _not_falsy(obj, name):
+    if not obj:
+        raise ValueError(f"{name} is required")
+
+
+def _require_string(string, name):
+    if not string or not string.strip():
+        raise ValueError(f"{name} is required")
+    return string.strip()
+
+
+def _check_int(inte, name, minimum=1):
+    if inte < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")

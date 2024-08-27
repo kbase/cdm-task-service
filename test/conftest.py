@@ -2,6 +2,7 @@
 Configure pytest fixtures and helper functions for this directory.
 '''
 import pytest
+import time
 import traceback
 
 from controllers.minio import MinioController
@@ -15,6 +16,12 @@ def assert_exception_correct(got: Exception, expected: Exception, print_tracebac
     assert type(got) == type(expected)
 
 
+def assert_close_to_now_sec(seconds: int):
+    t = time.time()
+    assert seconds < t + 1
+    assert seconds > t - 1
+
+
 @pytest.fixture(scope="module")
 def minio():
     mc = MinioController(
@@ -24,7 +31,6 @@ def minio():
         "secret_key",
         config.TEMP_DIR,
     )
-    host = f"http://localhost:{mc.port}"
     
     yield mc
     

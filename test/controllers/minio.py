@@ -58,7 +58,7 @@ class MinioController:
             stderr=subprocess.STDOUT,
             stdout=self._logfiledescriptor,
         )
-        time.sleep(0.5)  # wait for server to start up
+        time.sleep(1)  # wait for server to start up, 0.5 results in rare failures
         self.run_mc("alias", "set", self.mc_alias, self.host, self.access_key, self.secret_key)
     
     def destroy(self, delete_temp_files):
