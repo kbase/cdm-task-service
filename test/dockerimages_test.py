@@ -24,7 +24,7 @@ async def test_create_fail_invalid_crane_path():
     }
     for k, v in testset.items():
         with pytest.raises(Exception) as got:
-            dii = await DockerImageInfo.create(k)
+            await DockerImageInfo.create(k)
         assert_exception_correct(got.value, v)
 
 

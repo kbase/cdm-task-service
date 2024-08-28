@@ -84,14 +84,19 @@ class MinioController:
             for buk in buckets["Buckets"]:
                 bucket = buk["Name"]
                 objs = await client.list_objects(Bucket=bucket)
-                await client.delete_objects(Bucket=bucket, Delete={
-                    "Objects": [{"Key": o["Key"]} for o in objs["Contents"]]
-                })
+                if "Contents" in objs:
+                    await client.delete_objects(Bucket=bucket, Delete={
+                        "Objects": [{"Key": o["Key"]} for o in objs["Contents"]]
+                    })
                 await client.delete_bucket(Bucket=bucket)
 
     async def create_bucket(self, bucket):
         async with self.get_client() as client:
             await client.create_bucket(Bucket=bucket)
+
+    async def get_object(self, bucket, key) -> dict[str, Any]:
+        async with self.get_client() as client:
+            return await client.get_object(Bucket=bucket, Key=key)
 
     async def upload_file(self, path, main_part, num_main_parts=1, last_part=None
     ) -> dict[str, Any]:

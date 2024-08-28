@@ -7,6 +7,7 @@ python versions.
 """
 
 import aiohttp
+import base64
 from hashlib import md5
 from pathlib import Path
 from typing import Any
@@ -74,9 +75,10 @@ def crc32(infile: Path) -> bytes:
             checksum = zlib.crc32(chunk, checksum)
     return checksum.to_bytes(4)
 
+
 def _check_file(infile: Path):
     if not infile or not infile.expanduser().is_file():
-        raise ValueError("infile must be exist and be a file")
+        raise ValueError("infile must exist and be a file")
 
 
 async def download_presigned_url(
@@ -84,7 +86,8 @@ async def download_presigned_url(
     url: str,
     etag: str,
     partsize: int,
-    outputpath: Path):
+    outputpath: Path
+):
     """
     Download a presigned url from S3 and verify the E-tag.
     
@@ -100,6 +103,7 @@ async def download_presigned_url(
     _not_falsy(outputpath, "outputpath")
     async with session.get(url) as resp:
         if resp.status > 199 and resp.status < 300:  # redirects are handled automatically
+            outputpath.parent.mkdir(mode=0o700, exist_ok=True, parents=True)
             with open(outputpath, "wb") as f:
                 async for chunk in resp.content.iter_chunked(_CHUNK_SIZE_64KB):
                     f.write(chunk)
@@ -116,6 +120,59 @@ async def download_presigned_url(
         outputpath.unlink(missing_ok=True)
         raise FileCorruptionError(
             f"Etag check failed for url {url.split('?')[0]}. Expected {etag}, got {got_etag}")
+
+
+_UPLOAD_REQUIRED_FIELDS = ["key", "AWSAccessKeyId", "signature", "policy"]
+
+
+async def upload_presigned_url(
+    session: aiohttp.ClientSession,
+    url: str,
+    fields: dict[str, str],
+    infile: Path,
+):
+    """
+    Upload a file to S3 via a presigned url. If the object already exists in S3, it will be
+    overwritten.
+    
+    session - the http session.
+    url - the presigned url.
+    fields - the fields associated with the presigned url returned by the S3 client.
+    infile - the file to upload.
+    """
+    _not_falsy(session, "session")
+    _require_string(url, "url")
+    _not_falsy(fields, "fields")
+    for f in _UPLOAD_REQUIRED_FIELDS:
+        if fields.get(f) is None or not fields.get(f).strip():
+            raise ValueError(f"fields missing required '{f}' field")
+    _check_file(infile)
+    data = aiohttp.FormData(fields)
+    with open(infile, "rb") as f:
+        data.add_field("file", f)
+        async with session.post(url, data=data) as resp:
+            # Returns 204 no content on success
+            if resp.status < 200 or resp.status > 299:  # redirects are handled automatically
+                # assume the error output isn't too huge
+                err = await resp.read()
+                raise TransferError(
+                    f"POST URL: {url} Key: {fields['key']} {resp.status}\nError:\n{err}")
+
+
+async def upload_presigned_url_with_crc32(
+    session: aiohttp.ClientSession,
+    url: str,
+    fields: dict[str, str],
+    infile: Path,
+):
+    """
+    As upload_presigned_url but calculates the crc32 of the input file and sends it to S3 as
+    an integrity check.
+    """
+    _not_falsy(fields, "fields")
+    fields = dict(fields)  # don't mutate the input
+    fields["x-amz-checksum-crc32"] = base64.b64encode(crc32(infile)).decode()
+    await upload_presigned_url(session, url, fields, infile)
 
 
 # These arg checkers are duplicated in other places, but we want to minimize the number of files
