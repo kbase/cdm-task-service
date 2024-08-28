@@ -111,6 +111,8 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
       2. At the end of the run, pipe the container logs to a file  
    2. Store all runner script output in a file  
    3. Submit a callback along with job  
+   4. When job is complete, create an upload manifest by recursiveley listing the files in the
+      output directory.
 6. Service stores the NERSC job ID and job submitted state in mongo  
 7. Service updates job state in Kafka
 
@@ -122,27 +124,25 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
 3. Service checks NERSC job ID at the SFAPI `/compute/jobs` endpoint and checks output is
    as expected  
 4. Service updates MongoDB with relevant job output and retrieving data submission state  
-   1. Ensure state hasn’t changed in the meantime  
-5. Service uses the `/utilities/command` SFAPI endpoint to run a data retrieval script  
-   1. Pushes the data in the job output directory to a job directory in Minio  
-      1. Use presigned URLs to avoid passing credentials  
-      2. `tgz` the output directory and have Minio
-         [autoextract](https://blog.min.io/minio-optimizes-small-objects/) it; this
-         means we don’t need to know the number of output files and make a
-         presigned URL for each one  
-         1. May need a Minio update for the new features  
-      3. May want to namespace allowed directories for writing by auth source and user name.  
+   1. Ensure state hasn’t changed in the meantime
+5. Service downloads the upload manifest created by the job
+6. Service presigns upload urls for the files to be uploaded to Minio
+7. Service creates an upload manifest with the file names and presigned urls and uploads the
+   file to NERSC
+8. Service uses the `/utilities/command` SFAPI endpoint to run a data retrieval script  
+   1. Pushes the data in the job output directory to the manifest's presigned urls.
+      1. May want to namespace allowed directories for writing by auth source and user name.  
    2. Pushes container and job runner logs to (potentially different) job directory in Minio  
       1. Maybe different buckets for logs & results  
       2. Use presigned URLs to avoid passing credentials  
-   3. Check file integrity for all uploaded files  
+   3. Check file integrity for all uploaded files via CRC32
    4. Deletes all output  
    5. When complete, `touch` a completion signifier file  
-6. Service stores the task ID and submit time for the command in Mongo and updates state to
+9. Service stores the task ID and submit time for the command in Mongo and updates state to
    data retrieval submitted  
-7. Service uses the `/callback` SFAPI endpoint to register a callback for the completion
+10. Service uses the `/callback` SFAPI endpoint to register a callback for the completion
    signifier file  
-8. Service updates job state in Kafka
+11. Service updates job state in Kafka
 
 #### On retrieval completion signifier file callback
 
@@ -152,8 +152,9 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
 3. Service checks upload task id at the SFAPI `/tasks` endpoint and checks output is as expected  
 4. Service updates MongoDB with relevant task output and completed job state  
    1. Store all new file paths in Minio  
-   2. Ensure state hasn’t changed in the meantime  
-5. Service updates job state in Kafka
+   2. Ensure state hasn’t changed in the meantime
+5. Service deletes the job directory at NERSC
+6. Service updates job state in Kafka
 
 #### On errors
 
@@ -998,6 +999,15 @@ Set a maximum allocation allowed per job (say 100 hours?) so prevent users from 
 massive amounts of allocation on a single job. Admins can raise or lower the allocation.  
 Track total allocation used per user and prevent them from running jobs after a certain
 amount. Will need a way to reset the allocation when the KBase allocation is refreshed
+
+## Upload performance improvement
+
+Tar small files into an archive and have Minio unpack them server side to reduce the
+number of connections required. There's a 100GB limit to tar files so this can't necessarily
+be implemented naively for all uploads.
+
+https://docs.aws.amazon.com/snowball/latest/developer-guide/batching-small-files.html  
+https://blog.min.io/minio-optimizes-small-objects/  
 
 ## Preliminary task break down
 
