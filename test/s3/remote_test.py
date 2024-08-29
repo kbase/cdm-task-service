@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import shutil
 import tempfile
+from unittest import mock
 
 from conftest import assert_exception_correct, minio  # @UnusedImport
 from cdmtaskservice.s3.client import S3Client
@@ -12,12 +13,16 @@ from cdmtaskservice.s3.remote import (
     calculate_etag,
     crc32,
     download_presigned_url,
+    upload_presigned_url,
+    upload_presigned_url_with_crc32,
     FileCorruptionError,
     TransferError,
 )
 import config
 
 TESTDATA = Path(os.path.normpath((Path(__file__) / ".." / ".." / "testdata")))
+TEST_RAND1KB = TESTDATA / "random_bytes_1kB"
+TEST_RAND10KB = TESTDATA / "random_bytes_10kB"
 
 
 @pytest.fixture(scope="module")
@@ -33,12 +38,12 @@ def temp_dir():
 
 def test_calculate_etag():
     testset = [
-        (TESTDATA / "random_bytes_1kB", 1024, "b10278db14633f102103c5e9d75c0af0"),
-        (TESTDATA / "random_bytes_1kB", 10000, "b10278db14633f102103c5e9d75c0af0"),
-        (TESTDATA / "random_bytes_10kB", 1024, "b4b7898bf290001d169572b777efd34f-10"),
-        (TESTDATA / "random_bytes_10kB", 5000, "a70a4d1732484e75434df2c08570e1b2-3"),
-        (TESTDATA / "random_bytes_10kB", 10240, "3291fbb392f6fad06dbf331dfb74da81"),
-        (TESTDATA / "random_bytes_10kB", 100000, "3291fbb392f6fad06dbf331dfb74da81"),
+        (TEST_RAND1KB, 1024, "b10278db14633f102103c5e9d75c0af0"),
+        (TEST_RAND1KB, 10000, "b10278db14633f102103c5e9d75c0af0"),
+        (TEST_RAND10KB, 1024, "b4b7898bf290001d169572b777efd34f-10"),
+        (TEST_RAND10KB, 5000, "a70a4d1732484e75434df2c08570e1b2-3"),
+        (TEST_RAND10KB, 10240, "3291fbb392f6fad06dbf331dfb74da81"),
+        (TEST_RAND10KB, 100000, "3291fbb392f6fad06dbf331dfb74da81"),
     ]
     for infile, size, etag in testset:
         gottag = calculate_etag(infile, size)
@@ -47,11 +52,11 @@ def test_calculate_etag():
 
 def test_calculate_etag_fail():
     testset = [
-        (None, 1, ValueError("infile must be exist and be a file")),
-        (TESTDATA, 1, ValueError("infile must be exist and be a file")),
+        (None, 1, ValueError("infile must exist and be a file")),
+        (TESTDATA, 1, ValueError("infile must exist and be a file")),
         (TESTDATA / "empty_file", 1, ValueError("file is empty")),
-        (TESTDATA / "random_bytes_1kB", 0, ValueError("partsize must be > 0")),
-        (TESTDATA / "random_bytes_1kB", -10000, ValueError("partsize must be > 0")),
+        (TEST_RAND1KB, 0, ValueError("partsize must be > 0")),
+        (TEST_RAND1KB, -10000, ValueError("partsize must be > 0")),
     ]
     for infile, size, expected in testset:
         with pytest.raises(Exception) as got:
@@ -63,8 +68,8 @@ def test_crc32():
     # checked these with the linux crc32 program
     testset = [
         (TESTDATA / "empty_file", "00000000"),
-        (TESTDATA / "random_bytes_1kB", "ed9a6eb3"),
-        (TESTDATA / "random_bytes_10kB", "4ffc5208"),
+        (TEST_RAND1KB, "ed9a6eb3"),
+        (TEST_RAND10KB, "4ffc5208"),
     ]
     for infile, crc in testset:
         gotcrc = crc32(infile)
@@ -73,8 +78,8 @@ def test_crc32():
 
 def test_crc32_fail():
     testset = [
-        (None, ValueError("infile must be exist and be a file")),
-        (TESTDATA, ValueError("infile must be exist and be a file")),
+        (None, ValueError("infile must exist and be a file")),
+        (TESTDATA, ValueError("infile must exist and be a file")),
     ]
     for infile, expected in testset:
         with pytest.raises(Exception) as got:
@@ -90,7 +95,7 @@ async def test_download_presigned_url(minio, temp_dir):
     
     s3c = await _client(minio)
     url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
-    output = temp_dir / "temp1.txt"
+    output = temp_dir / "somedir" / "temp1.txt"  # test directory creation
     async with aiohttp.ClientSession() as sess:
         await download_presigned_url(sess, url, "a925576942e94b2ef57a066101b48876", 10, output)
     with open(output) as f:
@@ -101,7 +106,7 @@ async def test_download_presigned_url(minio, temp_dir):
 async def test_download_presigned_url_multipart(minio, temp_dir):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("nice-bucket")
-    res = await minio.upload_file(
+    await minio.upload_file(
         "nice-bucket/big_test_file", b"abcdefghij" * 600000, 4, b"bigolfile")
     
     s3c = await _client(minio)
@@ -115,18 +120,6 @@ async def test_download_presigned_url_multipart(minio, temp_dir):
 
 
 @pytest.mark.asyncio
-async def test_download_presigned_url_fail_no_session(minio, temp_dir):
-    output = temp_dir / "fail.txt"
-    et = "a925576942e94b2ef57a066101b48876"
-    s3c = await _client(minio)
-    url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
-    with pytest.raises(Exception) as got:
-        await download_presigned_url(None, url, et, 10, output)
-    assert_exception_correct(got.value, ValueError("session is required"))
-    assert not output.exists()
-
-
-@pytest.mark.asyncio
 async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -137,24 +130,27 @@ async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
     
     s3c = await _client(minio)
     url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
-    await _download_presigned_url_fail(None, et, ps, o, ValueError("url is required"))
-    await _download_presigned_url_fail("  \t   ", et, ps, o, ValueError("url is required"))
-    await _download_presigned_url_fail(url, None, ps, o, ValueError("etag is required"))
-    await _download_presigned_url_fail(url, "   \t  ", ps, o, ValueError("etag is required"))
-    await _download_presigned_url_fail(url, "foo", ps, o, FileCorruptionError(
-        f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
-        + "Expected foo, got a925576942e94b2ef57a066101b48876"))
-    await _download_presigned_url_fail(url, et, 0, o, ValueError("partsize must be > 0"))
-    await _download_presigned_url_fail(url, et, 3, o, FileCorruptionError(
-        f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
-        + "Expected a925576942e94b2ef57a066101b48876, got 1543089f5b20740cc5713f0437fcea8c-4"))
-    await _download_presigned_url_fail(url, et, ps, None, ValueError("outputpath is required"))
+    async with aiohttp.ClientSession() as s:
+        await _download_presigned_url_fail(None, url, et, ps, o, ValueError("session is required"))
+        await _download_presigned_url_fail(s, None, et, ps, o, ValueError("url is required"))
+        await _download_presigned_url_fail(s, "  \t   ", et, ps, o, ValueError("url is required"))
+        await _download_presigned_url_fail(s, url, None, ps, o, ValueError("etag is required"))
+        await _download_presigned_url_fail(
+            s, url, "   \t  ", ps, o, ValueError("etag is required"))
+        await _download_presigned_url_fail(s, url, "foo", ps, o, FileCorruptionError(
+            f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
+            + "Expected foo, got a925576942e94b2ef57a066101b48876"))
+        await _download_presigned_url_fail(s, url, et, 0, o, ValueError("partsize must be > 0"))
+        await _download_presigned_url_fail(s, url, et, 3, o, FileCorruptionError(
+            f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
+            + "Expected a925576942e94b2ef57a066101b48876, got 1543089f5b20740cc5713f0437fcea8c-4"))
+        await _download_presigned_url_fail(
+            s, url, et, ps, None, ValueError("outputpath is required"))
     
     
-async def _download_presigned_url_fail(url, etag, partsize, output, expected):
+async def _download_presigned_url_fail(sess, url, etag, partsize, output, expected):
     with pytest.raises(Exception) as got:
-        async with aiohttp.ClientSession() as sess:
-            await download_presigned_url(sess, url, etag, partsize, output)
+        await download_presigned_url(sess, url, etag, partsize, output)
     assert_exception_correct(got.value, expected)
     if output:
         assert not output.exists()
@@ -200,6 +196,170 @@ async def _download_presigned_url_fail_s3_error(minio, temp_dir, url, starts_wit
     assert contains in errmsg
     assert type(got.value) == TransferError
     assert not output.exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_presigned_url(minio):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    
+    s3c = await _client(minio)
+    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
+    urlcrc = (await s3c.presign_post_urls(S3Paths(["test-bucket/bar/myfilecrc"])))[0]
+    urlcrc.fields["x-amz-checksum-crc32"] = "T/xSCA=="
+    async with aiohttp.ClientSession() as sess:
+        await upload_presigned_url(sess, url.url, url.fields, TEST_RAND10KB)
+        await upload_presigned_url(sess, urlcrc.url, urlcrc.fields, TEST_RAND10KB)
+    with open(TEST_RAND10KB, "rb") as f:
+        expectedfile = f.read()
+    objdata = await minio.get_object("test-bucket", "foo/myfile")
+    objdatacrc = await minio.get_object("test-bucket", "bar/myfilecrc")
+    # It seems that the ChecksumCRC32 field is not returned from Minio as documented in S3
+    # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3/client/get_object.html
+    
+    for o in (objdata, objdatacrc):
+        body = await o["Body"].read()
+        assert body == expectedfile
+        assert o["ETag"] == '"3291fbb392f6fad06dbf331dfb74da81"'
+
+
+@pytest.mark.asyncio
+async def test_upload_presigned_url_with_crc(minio):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    
+    s3c = await _client(minio)
+    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
+    async with aiohttp.ClientSession() as sess:
+        await upload_presigned_url_with_crc32(sess, url.url, url.fields, TEST_RAND10KB)
+    with open(TEST_RAND10KB, "rb") as f:
+        expectedfile = f.read()
+    objdata = await minio.get_object("test-bucket", "foo/myfile")
+    # It seems that the ChecksumCRC32 field is not returned from Minio as documented in S3
+    # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3/client/get_object.html
+    
+    body = await objdata["Body"].read()
+    assert body == expectedfile
+    assert objdata["ETag"] == '"3291fbb392f6fad06dbf331dfb74da81"'
+
+
+@pytest.mark.asyncio
+async def test_upload_presigned_url_with_crc_internals(minio):
+    # this test just checks that the crc is being sent to the regular upload method
+    # correctly, since it's invisible otherwise. There's no way to submit an incorrect CRC
+    # and check that it fails, for example.
+    # TODO TEST if Minio ever returns the CRC in a get_object just check that.
+    s3c = await _client(minio)
+    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
+    with mock.patch("cdmtaskservice.s3.remote.upload_presigned_url") as method:
+        async with aiohttp.ClientSession() as sess:
+            await upload_presigned_url_with_crc32(sess, url.url, url.fields, TEST_RAND10KB)
+            fields = dict(url.fields)
+            fields["x-amz-checksum-crc32"] = "T/xSCA=="
+        method.assert_called_once_with(sess, url.url, fields, TEST_RAND10KB)
+
+
+@pytest.mark.asyncio
+async def test_upload_presigned_url_fail(minio):
+    s3c = await _client(minio)
+    r = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
+    url, flds = r.url, r.fields
+    fl = TEST_RAND10KB
+    
+    async with aiohttp.ClientSession() as s:
+        await _upload_presigned_url_fail(None, url, flds, fl, ValueError("session is required"))
+        await _upload_presigned_url_fail(s, None, flds, fl, ValueError("url is required"))
+        await _upload_presigned_url_fail(s, "  \t   ", flds, fl, ValueError("url is required"))
+        await _upload_presigned_url_fail(s, url, None, fl, ValueError("fields is required"))
+        await _upload_presigned_url_fail(s, url, {}, fl, ValueError("fields is required"))
+        await _upload_presigned_url_fail(s, url, dctp(flds, "key"), fl, ValueError(
+            "fields missing required 'key' field"))
+        await _upload_presigned_url_fail(s, url, dctp(flds, "signature"), fl, ValueError(
+            "fields missing required 'signature' field"))
+        await _upload_presigned_url_fail(s, url, dctp(flds, "policy"), fl, ValueError(
+            "fields missing required 'policy' field"))
+        await _upload_presigned_url_fail(s, url, dctp(flds, "AWSAccessKeyId"), fl, ValueError(
+            "fields missing required 'AWSAccessKeyId' field"))
+        await _upload_presigned_url_fail(s, url, dctws(flds, "key"), fl, ValueError(
+            "fields missing required 'key' field"))
+        await _upload_presigned_url_fail(s, url, dctws(flds, "signature"), fl, ValueError(
+            "fields missing required 'signature' field"))
+        await _upload_presigned_url_fail(s, url, dctws(flds, "policy"), fl, ValueError(
+            "fields missing required 'policy' field"))
+        await _upload_presigned_url_fail(s, url, dctws(flds, "AWSAccessKeyId"), fl, ValueError(
+            "fields missing required 'AWSAccessKeyId' field"))
+        await _upload_presigned_url_fail(s, url, flds, None, ValueError(
+            "infile must exist and be a file"))
+        await _upload_presigned_url_fail(s, url, flds, TESTDATA, ValueError(
+            "infile must exist and be a file"))
+
+
+def dctp(dic, key):
+    return {k: v for k, v in dic.items() if k != key}
+
+
+def dctws(dic, key):
+    return {k: v if not k == key else "  \t   " for k, v in dic.items()}
+
+
+async def _upload_presigned_url_fail(sess, url, fields, infile, expected):
+    with pytest.raises(Exception) as got:
+        await upload_presigned_url(sess, url, fields, infile)
+    assert_exception_correct(got.value, expected)
+    with pytest.raises(Exception) as got:
+        await upload_presigned_url_with_crc32(sess, url, fields, infile)
+    assert_exception_correct(got.value, expected)
+
+
+@pytest.mark.asyncio
+async def test_upload_presigned_url_fail_bad_crc(minio):
+    starts_with = (f"POST URL: http://localhost:{minio.port}/test-bucket Key: bar/myfilecrc 400"
+                   + "\nError:\n")
+    contains = ("<Error><Code>XAmzContentChecksumMismatch</Code><Message>The provided "
+                + "&#39;x-amz-checksum&#39; header does not match what was computed.</Message>"
+                + "<BucketName>test-bucket</BucketName><Resource>/test-bucket</Resource>"
+                + "<RequestId>"
+    )
+    
+    s3c = await _client(minio)
+    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/bar/myfilecrc"])))[0]
+    url.fields["x-amz-checksum-crc32"] = "T/xSCX=="
+    
+    await _upload_presigned_url_fail_s3_error(minio, url.url, url.fields, starts_with, contains)
+
+
+@pytest.mark.asyncio
+async def test_upload_presigned_url_fail_no_bucket(minio):
+    starts_with = (f"POST URL: http://localhost:{minio.port}/fake-bucket Key: bar/myfilecrc 404"
+                   + "\nError:\n")
+    contains = ("<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist"
+                + "</Message><BucketName>fake-bucket</BucketName><Resource>/fake-bucket"
+                + "</Resource><RequestId>"
+    )
+    
+    s3c = await _client(minio)
+    url = (await s3c.presign_post_urls(S3Paths(["fake-bucket/bar/myfilecrc"])))[0]
+    
+    await _upload_presigned_url_fail_s3_error(
+        minio, url.url, url.fields, starts_with, contains, test_crc=True)
+
+
+async def _upload_presigned_url_fail_s3_error(
+    minio, url, fields, starts_with, contains, test_crc=False
+):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    meths = [upload_presigned_url]
+    if test_crc:
+        meths.append(upload_presigned_url_with_crc32)
+    for method in meths:
+        with pytest.raises(Exception) as got:
+            async with aiohttp.ClientSession() as sess:
+                await method(sess, url, fields, TEST_RAND10KB)
+        errmsg = str(got.value)
+        assert errmsg.startswith(starts_with)
+        assert contains in errmsg
+        assert type(got.value) == TransferError
 
 
 async def _client(minio):
