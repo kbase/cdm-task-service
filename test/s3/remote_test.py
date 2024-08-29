@@ -21,6 +21,7 @@ from cdmtaskservice.s3.remote import (
 import config
 
 TESTDATA = Path(os.path.normpath((Path(__file__) / ".." / ".." / "testdata")))
+TEST_MT = TESTDATA / "empty_file"
 TEST_RAND1KB = TESTDATA / "random_bytes_1kB"
 TEST_RAND10KB = TESTDATA / "random_bytes_10kB"
 
@@ -38,6 +39,7 @@ def temp_dir():
 
 def test_calculate_etag():
     testset = [
+        (TEST_MT, 1024, "d41d8cd98f00b204e9800998ecf8427e"),
         (TEST_RAND1KB, 1024, "b10278db14633f102103c5e9d75c0af0"),
         (TEST_RAND1KB, 10000, "b10278db14633f102103c5e9d75c0af0"),
         (TEST_RAND10KB, 1024, "b4b7898bf290001d169572b777efd34f-10"),
@@ -54,7 +56,6 @@ def test_calculate_etag_fail():
     testset = [
         (None, 1, ValueError("infile must exist and be a file")),
         (TESTDATA, 1, ValueError("infile must exist and be a file")),
-        (TESTDATA / "empty_file", 1, ValueError("file is empty")),
         (TEST_RAND1KB, 0, ValueError("partsize must be > 0")),
         (TEST_RAND1KB, -10000, ValueError("partsize must be > 0")),
     ]
@@ -67,7 +68,7 @@ def test_calculate_etag_fail():
 def test_crc32():
     # checked these with the linux crc32 program
     testset = [
-        (TESTDATA / "empty_file", "00000000"),
+        (TEST_MT, "00000000"),
         (TEST_RAND1KB, "ed9a6eb3"),
         (TEST_RAND10KB, "4ffc5208"),
     ]
