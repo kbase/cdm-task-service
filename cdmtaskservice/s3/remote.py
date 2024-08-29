@@ -17,6 +17,7 @@ import zlib
 # Potential future (minor) performance improvement, but means more installs on remote clusters
 
 _CHUNK_SIZE_64KB = 2 ** 16
+_MT_FILE_MD5 = md5(b"").hexdigest()
 
 
 def calculate_etag(infile: Path, partsize: int) -> str:
@@ -58,7 +59,7 @@ def calculate_etag(infile: Path, partsize: int) -> str:
         while chunk := f.read(partsize):
             md5_digests.append(md5(chunk).digest())
     if len(md5_digests) == 0:
-        raise ValueError("file is empty")
+        return _MT_FILE_MD5
     if len(md5_digests) == 1:
         return md5_digests[0].hex()
     return md5(b''.join(md5_digests)).hexdigest() +  '-' + str(len(md5_digests))
