@@ -98,7 +98,7 @@ async def test_download_presigned_url(minio, temp_dir):
     url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
     output = temp_dir / "somedir" / "temp1.txt"  # test directory creation
     async with aiohttp.ClientSession() as sess:
-        await download_presigned_url(sess, url, "a925576942e94b2ef57a066101b48876", 10, output)
+        await download_presigned_url(sess, url, 10, output)
     with open(output) as f:
         assert f.read() == "abcdefghij"
 
@@ -114,8 +114,7 @@ async def test_download_presigned_url_multipart(minio, temp_dir):
     url = (await s3c.presign_get_urls(S3Paths(["nice-bucket/big_test_file"])))[0]
     output = temp_dir / "temp2.txt"
     async with aiohttp.ClientSession() as sess:
-        await download_presigned_url(
-            sess, url, "9728af2f2c566b2b944b96203769175d-5", 6000000, output)
+        await download_presigned_url(sess, url, 6000000, output)
     with open(output) as f:
         assert f.read() == "abcdefghij" * 600000 * 4 + "bigolfile"
 
@@ -125,33 +124,27 @@ async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     await minio.upload_file("test-bucket/myfile", b"abcdefghij")
-    et = "a925576942e94b2ef57a066101b48876"
     ps = 10
     o = temp_dir / "fail.txt"
     
     s3c = await _client(minio)
     url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
     async with aiohttp.ClientSession() as s:
-        await _download_presigned_url_fail(None, url, et, ps, o, ValueError("session is required"))
-        await _download_presigned_url_fail(s, None, et, ps, o, ValueError("url is required"))
-        await _download_presigned_url_fail(s, "  \t   ", et, ps, o, ValueError("url is required"))
-        await _download_presigned_url_fail(s, url, None, ps, o, ValueError("etag is required"))
-        await _download_presigned_url_fail(
-            s, url, "   \t  ", ps, o, ValueError("etag is required"))
-        await _download_presigned_url_fail(s, url, "foo", ps, o, FileCorruptionError(
+        await _download_presigned_url_fail(None, url, ps, o, ValueError("session is required"))
+        await _download_presigned_url_fail(s, None, ps, o, ValueError("url is required"))
+        await _download_presigned_url_fail(s, "  \t   ", ps, o, ValueError("url is required"))
+        await _download_presigned_url_fail(s, url, 0, o, ValueError("partsize must be > 0"))
+        await _download_presigned_url_fail(s, url, 3, o, FileCorruptionError(
             f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
-            + "Expected foo, got a925576942e94b2ef57a066101b48876"))
-        await _download_presigned_url_fail(s, url, et, 0, o, ValueError("partsize must be > 0"))
-        await _download_presigned_url_fail(s, url, et, 3, o, FileCorruptionError(
-            f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
-            + "Expected a925576942e94b2ef57a066101b48876, got 1543089f5b20740cc5713f0437fcea8c-4"))
+            + "Server provided a925576942e94b2ef57a066101b48876, "
+            + "file etag is 1543089f5b20740cc5713f0437fcea8c-4"))
         await _download_presigned_url_fail(
-            s, url, et, ps, None, ValueError("outputpath is required"))
+            s, url, ps, None, ValueError("outputpath is required"))
     
     
-async def _download_presigned_url_fail(sess, url, etag, partsize, output, expected):
+async def _download_presigned_url_fail(sess, url, partsize, output, expected):
     with pytest.raises(Exception) as got:
-        await download_presigned_url(sess, url, etag, partsize, output)
+        await download_presigned_url(sess, url, partsize, output)
     assert_exception_correct(got.value, expected)
     if output:
         assert not output.exists()
@@ -187,11 +180,10 @@ async def _download_presigned_url_fail_s3_error(minio, temp_dir, url, starts_wit
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     await minio.upload_file("test-bucket/myfile", b"abcdefghij")
-    et = "a925576942e94b2ef57a066101b48876"
     output = temp_dir / "fail_s3.txt"
     with pytest.raises(Exception) as got:
         async with aiohttp.ClientSession() as sess:
-            await download_presigned_url(sess, url, et, 10, output)
+            await download_presigned_url(sess, url, 10, output)
     errmsg = str(got.value)
     assert errmsg.startswith(starts_with)
     assert contains in errmsg

@@ -85,7 +85,6 @@ def _check_file(infile: Path):
 async def download_presigned_url(
     session: aiohttp.ClientSession,
     url: str,
-    etag: str,
     partsize: int,
     outputpath: Path
 ):
@@ -94,16 +93,15 @@ async def download_presigned_url(
     
     session - the http session.
     url - the presigned url.
-    etag - the etag to check the download against.
     partsize - the partsize used when uploading the file to S3
     path - where to store the file. If the file exists, it will be overwritten
     """
     _not_falsy(session, "session")
     _require_string(url, "url")
-    _require_string(etag, "etag")
     _not_falsy(outputpath, "outputpath")
     async with session.get(url) as resp:
         if resp.status > 199 and resp.status < 300:  # redirects are handled automatically
+            etag = resp.headers["Etag"].strip('"')
             outputpath.parent.mkdir(mode=0o700, exist_ok=True, parents=True)
             with open(outputpath, "wb") as f:
                 async for chunk in resp.content.iter_chunked(_CHUNK_SIZE_64KB):
@@ -120,7 +118,8 @@ async def download_presigned_url(
     if etag != got_etag:
         outputpath.unlink(missing_ok=True)
         raise FileCorruptionError(
-            f"Etag check failed for url {url.split('?')[0]}. Expected {etag}, got {got_etag}")
+            f"Etag check failed for url {url.split('?')[0]}. "
+            + f"Server provided {etag}, file etag is {got_etag}")
 
 
 _UPLOAD_REQUIRED_FIELDS = ["key", "AWSAccessKeyId", "signature", "policy"]
