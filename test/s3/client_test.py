@@ -67,7 +67,8 @@ async def _create_fail(host, akey, skey, expected, config=None, print_stacktrace
 async def test_get_object_meta_single_part(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    await minio.upload_file("test-bucket/test_file", b"abcdefghij")
+    # test that leading /s in key are ignored
+    await minio.upload_file("test-bucket///test_file", b"abcdefghij")
 
     s3c = await _client(minio)
     objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))

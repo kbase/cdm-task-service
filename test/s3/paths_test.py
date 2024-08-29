@@ -21,9 +21,11 @@ def test_init_fail_bad_path():
     testset = {
         None: "The s3 path at index x cannot be null or a whitespace string",
         "   \t   ": "The s3 path at index x cannot be null or a whitespace string",
-         "  /  ": "path '/' at index x must start with the s3 bucket and include a key",
-         "foo /  ": "path 'foo /' at index x must start with the s3 bucket and include a key",
-        " / bar   ": "path '/ bar' at index x must start with the s3 bucket and include a key",
+        "  /  ": "Path '  /  ' at index x must start with the s3 bucket and include a key",
+        "  /  /  ": "Bucket name at index x cannot be whitespace only",
+        "  ////bar  ":
+            "Path '  ////bar  ' at index x must start with the s3 bucket and include a key",
+        " / bar   ": "Path ' / bar   ' at index x must start with the s3 bucket and include a key",
         "il/foo": "Bucket name at index x must be > 2 and < 64 characters: il",
         ("illegal-bu" * 6) + "cket/foo":
             f"Bucket name at index x must be > 2 and < 64 characters: {'illegal-bu' * 6}cket",
@@ -37,6 +39,15 @@ def test_init_fail_bad_path():
         "illegal_bucket/foo": charerr + "illegal_bucket",
         "illegal-Bucket/foo": charerr + "illegal-Bucket",
         "illegal-βucket/foo": charerr + "illegal-βucket",
+        "illegal bucket/foo": charerr + "illegal bucket",
+        "buckit/foo//bar":
+            "Path 'buckit/foo//bar' at index x contains illegal character string '//' in the key",
+        "buckit///  //bar":
+            "Path 'buckit///  //bar' at index x contains illegal character string '//' in the key",
+        "buckit/foo/\nbar":
+            "Key foo/\nbar at index x contains a control character at position 4",
+        "buckit/foo/bar\t":
+            "Key foo/bar\t at index x contains a control character at position 7",
     }
     for k, v in testset.items():
         _init_fail(k, v)
@@ -58,24 +69,32 @@ def test_init():
     assert s3p.paths == ("foo/bar",)
     assert (len(s3p)) == 1
     
-    s3p = S3Paths(["foo/bar", "baz/bat  \t ", "   thingy-stuff9/𝛙hatever"])
-    assert s3p.paths == ("foo/bar", "baz/bat", "thingy-stuff9/𝛙hatever")
-    assert (len(s3p)) == 3
+    s3p = S3Paths([
+        "foo/bar",
+        "  ///  baz////    bat   /",
+        "   thingy-stuff9///    /𝛙hatever/ ",
+        "  bukkit  /      "])
+    assert s3p.paths == (
+        "foo/bar",
+        "baz/    bat   /",
+        "thingy-stuff9/    /𝛙hatever/ ",
+        "bukkit/      ")
+    assert (len(s3p)) == 4
 
 
 def test_split_paths():
-    s3p = S3Paths(["foo/bar", "baz/bat  \t ", "   thingy-stuff9/𝛙hatever/baz"])
+    s3p = S3Paths(["foo/bar", "baz/bat   ", "   //thingy-stuff9///𝛙hatever/baz"])
     
     assert list(s3p.split_paths()) == [
-        ["foo", "bar"], ["baz", "bat"], ["thingy-stuff9", "𝛙hatever/baz"]
+        ["foo", "bar"], ["baz", "bat   "], ["thingy-stuff9", "𝛙hatever/baz"]
     ]
     
     
 def test_split_paths_w_full_path():
-    s3p = S3Paths(["foo/bar", "baz/bat  \t ", "   thingy-stuff9/𝛙hatever/baz"])
+    s3p = S3Paths(["foo/bar", "baz/bat   ", "   thingy-stuff9/𝛙hatever/baz"])
     
     assert list(s3p.split_paths(include_full_path=True)) == [
         ["foo", "bar", "foo/bar"],
-        ["baz", "bat", "baz/bat"],
+        ["baz", "bat   ", "baz/bat   "],
         ["thingy-stuff9", "𝛙hatever/baz", "thingy-stuff9/𝛙hatever/baz"]
     ]
