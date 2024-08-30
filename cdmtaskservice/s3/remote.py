@@ -7,8 +7,10 @@ python versions.
 """
 
 import aiohttp
+import asyncio
 import base64
 from hashlib import md5
+import os
 from pathlib import Path
 from typing import Any
 import zlib
@@ -173,6 +175,55 @@ async def upload_presigned_url_with_crc32(
     fields = dict(fields)  # don't mutate the input
     fields["x-amz-checksum-crc32"] = base64.b64encode(crc32(infile)).decode()
     await upload_presigned_url(session, url, fields, infile)
+
+
+async def process_data_transfer_manifest(manifest: dict[str, Any]):
+    """
+    Process a manifest specifying data to upload or download to or from S3.
+    """
+    # The manifest should be only used by the CDM task service and so we don't document
+    # its structure.
+    # Similarly, it should only be produced and consumed by the service, and so we don't
+    # stress error checking too much.
+    # TODO TEST add tests for this and its dependency functions.
+    _not_falsy(manifest, "manifest")
+    root = Path("/")
+    if manifest.get("env-root"):
+        root = os.environ.get(manifest["env-root"])
+        if not root or not root.strip():
+            raise ValueError(f"Value of the environment variable {manifest['env-root']} "
+                             + "from the manifest env-root field is missing or the empty string")
+        root = Path(root)
+    if manifest["op"] == "download":
+        await _process_downloads(root, manifest["files"], manifest["concurrency"])
+    elif manifest["op"] == "upload":
+        await _process_uploads(root, manifest["files"], manifest["concurrency"])
+    else:
+        raise ValueError(f"unknown operation: {manifest['op']}")
+
+
+async def _process_uploads(root: Path, files: list[dict[str, Any]], concurrency: int):
+    raise ValueError("unimplemented")
+
+
+async def _process_downloads(root: Path, files: list[dict[str, Any]], concurrency: int):
+    semaphore = asyncio.Semaphore(concurrency)
+    async def sem_coro(coro):
+        async with semaphore:
+            return await coro
+    coros = []
+    try: 
+        async with aiohttp.ClientSession() as sess:
+            async with asyncio.TaskGroup() as tg:
+                for fil in files:
+                    coros.append(download_presigned_url(
+                        sess, fil["url"], fil["partsize"], root / fil["outputpath"]))
+                    tg.create_task(sem_coro(coros[-1]))
+                    # just throw any ExceptionGroups as is
+    finally:
+        # otherwise you can get coroutine never awaited warnings if a failure occurs
+        for c in coros:
+            c.close()
 
 
 # These arg checkers are duplicated in other places, but we want to minimize the number of files
