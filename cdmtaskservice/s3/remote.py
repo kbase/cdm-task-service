@@ -88,7 +88,8 @@ async def download_presigned_url(
     session: aiohttp.ClientSession,
     url: str,
     partsize: int,
-    outputpath: Path
+    outputpath: Path,
+    etag: str = None,
 ):
     """
     Download a presigned url from S3 and verify the E-tag.
@@ -97,13 +98,20 @@ async def download_presigned_url(
     url - the presigned url.
     partsize - the partsize used when uploading the file to S3
     path - where to store the file. If the file exists, it will be overwritten
+    etag - if provided, checks that the server Etag matches this Etag. The downloaded file is
+        always checked against the server provided Etag as an integrity check, but providing
+        an Etag can ensure the file hasn't changed on the server side since the last access.
     """
     _not_falsy(session, "session")
     _require_string(url, "url")
     _not_falsy(outputpath, "outputpath")
     async with session.get(url) as resp:
         if resp.status > 199 and resp.status < 300:  # redirects are handled automatically
-            etag = resp.headers["Etag"].strip('"')
+            serv_etag = resp.headers["Etag"].strip('"')
+            if etag and etag != serv_etag:
+                raise FileChangeError(
+                    f"Etag check failed for url {url.split('?')[0]}. "
+                    + f"Server provided {serv_etag}, user provided Etag requirement is {etag}")
             outputpath.parent.mkdir(mode=0o700, exist_ok=True, parents=True)
             with open(outputpath, "wb") as f:
                 async for chunk in resp.content.iter_chunked(_CHUNK_SIZE_64KB):
@@ -117,11 +125,11 @@ async def download_presigned_url(
     except ValueError:
         outputpath.unlink(missing_ok=True)
         raise
-    if etag != got_etag:
+    if got_etag != serv_etag:
         outputpath.unlink(missing_ok=True)
         raise FileCorruptionError(
             f"Etag check failed for url {url.split('?')[0]}. "
-            + f"Server provided {etag}, file etag is {got_etag}")
+            + f"Server provided {serv_etag}, file Etag is {got_etag}")
 
 
 _UPLOAD_REQUIRED_FIELDS = ["key", "AWSAccessKeyId", "signature", "policy"]
@@ -217,7 +225,12 @@ async def _process_downloads(root: Path, files: list[dict[str, Any]], concurrenc
             async with asyncio.TaskGroup() as tg:
                 for fil in files:
                     coros.append(download_presigned_url(
-                        sess, fil["url"], fil["partsize"], root / fil["outputpath"]))
+                        sess,
+                        fil["url"],
+                        fil["partsize"],
+                        root / fil["outputpath"],
+                        etag=fil["etag"]
+                    ))
                     tg.create_task(sem_coro(coros[-1]))
                     # just throw any ExceptionGroups as is
     finally:
@@ -248,3 +261,7 @@ class TransferError(Exception):
 
 class FileCorruptionError(Exception):
     """ Thrown when a file transfer results in a corrupt file """
+
+
+class FileChangeError(Exception):
+    """ Thrown when a file has changed since the last access """

@@ -17,6 +17,7 @@ from cdmtaskservice.s3.remote import (
     upload_presigned_url_with_crc32,
     FileCorruptionError,
     TransferError,
+    FileChangeError,
 )
 import config
 
@@ -98,7 +99,8 @@ async def test_download_presigned_url(minio, temp_dir):
     url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
     output = temp_dir / "somedir" / "temp1.txt"  # test directory creation
     async with aiohttp.ClientSession() as sess:
-        await download_presigned_url(sess, url, 10, output)
+        await download_presigned_url(
+            sess, url, 10, output, etag="a925576942e94b2ef57a066101b48876")
     with open(output) as f:
         assert f.read() == "abcdefghij"
 
@@ -134,17 +136,23 @@ async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
         await _download_presigned_url_fail(s, None, ps, o, ValueError("url is required"))
         await _download_presigned_url_fail(s, "  \t   ", ps, o, ValueError("url is required"))
         await _download_presigned_url_fail(s, url, 0, o, ValueError("partsize must be > 0"))
+        await _download_presigned_url_fail(s, url, 10, o, FileChangeError(
+            f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
+            + "Server provided a925576942e94b2ef57a066101b48876, "
+            + "user provided Etag requirement is foo"),
+            etag="foo"
+        )
         await _download_presigned_url_fail(s, url, 3, o, FileCorruptionError(
             f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
             + "Server provided a925576942e94b2ef57a066101b48876, "
-            + "file etag is 1543089f5b20740cc5713f0437fcea8c-4"))
+            + "file Etag is 1543089f5b20740cc5713f0437fcea8c-4"))
         await _download_presigned_url_fail(
             s, url, ps, None, ValueError("outputpath is required"))
     
     
-async def _download_presigned_url_fail(sess, url, partsize, output, expected):
+async def _download_presigned_url_fail(sess, url, partsize, output, expected, etag=None):
     with pytest.raises(Exception) as got:
-        await download_presigned_url(sess, url, partsize, output)
+        await download_presigned_url(sess, url, partsize, output, etag=etag)
     assert_exception_correct(got.value, expected)
     if output:
         assert not output.exists()

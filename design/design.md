@@ -438,6 +438,25 @@ Represents a set of parameters provided to job containers.
   * Flag arguments, such as `-i`, `--input-file`, or `--input-file=`. If the argument ends
     with an equals sign, no space is placed between the flag and parameter.
 
+#### File
+
+```
+{
+	"file": <S3 file location>,
+	"dataid": <data ID>,
+	"etag": <S3 file Etag>
+}
+```
+
+* `file`
+  * The locations of input files in S3, starting with the bucket, e.g. `/bucket/myfile.fa`.
+* `dataid`
+  * (Optional) An arbitrary data ID string for the file. The data ID can be used in manifest files
+    (see [Parameter](#parameter)).
+* `etag`
+  * The S3 Etag. If provided when creating the job, the Etag is checked against the S3 file Etag
+    and an error is thrown if they don't match. Always present after starting the job.
+
 #### JobInput
 
 ```
@@ -450,7 +469,7 @@ Represents a set of parameters provided to job containers.
   "containers_per_worker": <containers to run per worker>
   "reserved_time': <hours per worker to reserve>,
   "input_loc": "cdm_minio",
-  "input_files": [file1, ..., fileN] | {data_id1: file1, ... data_id2: file2},
+  "input_files": [File...]
   "input_dirs": [dir1, ..., dirN],
   "input_roots": [path1, ..., pathN]',
   "worker_file_mapping": "ordered_split" | "split_points",
@@ -478,12 +497,11 @@ Represents a set of parameters provided to job containers.
 * `input_loc`  
   * The location of the input files. Currently the only allowable value is `cdm_minio`.
 * `input_files`  
-  * The locations of input files in Minio, starting with the bucket, e.g. `/bucket/myfile.fa`.
-    Either a list of files or a mapping of an arbitrary data ID string to a file. The data IDs
-    can be used in manifest files (see [Parameter](#parameter)).
+  * The locations of input files in S3.
 * `input_dirs`  
   * The location of input "directories" in Minio. The service will list the directory and add
-    all the files to the `input_files` list. Incompatible with the data ID input format.
+    all the files to the `input_files` list. In this case the `File` `dataid` and `etag` fields
+    cannot be provided.
 * `input_roots`
   * If specified, preserves file hierarchies for Minio files below the given root paths,
     starting from the bucket. Any files that are not prefixed by a root path are placed in the
@@ -1170,6 +1188,10 @@ Further approvals are via Github PR reviews.
 ### 1.3.1
 
 * Added Parameters.refdata_mount_point
+
+### 1.3.2
+
+* Added ability to specify an Etag for files when starting a job.
 
 ## Appendices
 
