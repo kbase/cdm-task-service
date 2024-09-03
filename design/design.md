@@ -67,7 +67,11 @@ transfer code to Perlmutter. This also confirms connectivity and credentials.
 
 1. User makes an HTTP request to the integration service. See [Submit job](#submit-job)  
 2. Service performs sanity checks  
-   1. Is the user authorized to use the server?  
+   1. Is the user authorized to use the server?
+      1. Pull the user's roles from the KBase auth server. Check that
+         1. The user has a role indicating they are KBase staff
+         2. The user has a role indicating they have a NERSC account
+            1. When multiple compute sites are supported this will need adjustment
    2. Is the container on the allowed list?  
       1. Will need admin server APIs to view and modify the container allow list  
    3. Do the input files exist in Minio?  
@@ -1018,14 +1022,20 @@ massive amounts of allocation on a single job. Admins can raise or lower the all
 Track total allocation used per user and prevent them from running jobs after a certain
 amount. Will need a way to reset the allocation when the KBase allocation is refreshed
 
-## Upload performance improvement
+### Upload performance improvement
 
 Tar small files into an archive and have Minio unpack them server side to reduce the
 number of connections required. There's a 100GB limit to tar files so this can't necessarily
 be implemented naively for all uploads.
 
 https://docs.aws.amazon.com/snowball/latest/developer-guide/batching-small-files.html  
-https://blog.min.io/minio-optimizes-small-objects/  
+https://blog.min.io/minio-optimizes-small-objects/
+
+### Get NERSC user ID from KBase Auth service
+
+Add a admin specified arbitrary key / value metadata structure to the Auth user record. The
+metadata is only visible to admins and the specific user. Store the user's NERSC user ID in
+the metadata. The user ID can then be fetched by the CTS and incorporated into logs directly.
 
 ## Preliminary task break down
 
@@ -1192,6 +1202,11 @@ Further approvals are via Github PR reviews.
 ### 1.3.2
 
 * Added ability to specify an Etag for files when starting a job.
+
+### 1.3.3
+
+* Clarify authentication around checking NERSC accounts and add future work around NERSC user name
+  logging.
 
 ## Appendices
 
