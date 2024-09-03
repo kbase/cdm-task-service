@@ -298,6 +298,7 @@ An error directly returned to a user from the API when an error occurs.
   "id": <reference data ID, a UUID>,
   "file_loc": "cdm_minio",
   "file": <the path to the file in Minio>,
+  "etag": <the file's Etag>,
   "unpack": <boolean>,
   "nersc":
     {
@@ -316,8 +317,8 @@ An error directly returned to a user from the API when an error occurs.
 * `file`
   * The path in Minio for the reference data file, starting with the bucket, e.g.
     `/bucket/checkm2_refdata.tgz`.
-* `e_tag`
-  * The e-tag of the file. If provided when registering the reference data, if the e-tag doesn't
+* `etag`
+  * The Etag of the file. If provided when registering the reference data, if the Etag doesn't
     match the target file an error is raised.
 * `unpack`
   * Whether to unpack the file based on its extension. Supported extensions are
@@ -1207,6 +1208,10 @@ Further approvals are via Github PR reviews.
 
 * Clarify authentication around checking NERSC accounts and add future work around NERSC user name
   logging.
+
+### 1.3.4
+
+* Added missing `ReferenceData.etag` field.
 
 ## Appendices
 
