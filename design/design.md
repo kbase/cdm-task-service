@@ -391,16 +391,16 @@ The `type` field determines the behavior of the parameter.
   * Inserts the location of the input manifest file in the container. In this case the filenames
     for the worker container will be placed in a newline separated text file,
     one filename per line.
-* `manifest_file_header`
-  * A header line to add to the manifest file. Ignored if no manifest file is specified.
-    Defaults to no header.
-* `manifest_file_format`
-  * Specifies the format of the manifest file. Ignored if no manifest file is specified.
-    * `files`
-      * List the input files, one per line. This is the default.
-    * `data_ids`
-      * List the data IDs (See [JobInput](#jobinput)), one per line.
-  * String vs boolean value allows for future expansion.
+  * `manifest_file_header`
+    * A header line to add to the manifest file. Ignored if no manifest file is specified.
+      Defaults to no header.
+  * `manifest_file_format`
+    * Specifies the format of the manifest file. Ignored if no manifest file is specified.
+      * `files`
+        * List the input files, one per line. This is the default.
+      * `data_ids`
+        * List the data IDs (See [JobInput](#jobinput)), one per line.
+    * String vs boolean value allows for future expansion.
 
 #### Parameters
 
@@ -418,8 +418,13 @@ Represents a set of parameters provided to job containers.
   "flag_args": {
     <flag1>: Parameter,
     ...
-    <flagN>: Parameter,
+    <flagN>: Parameter
   },
+  "environment": {
+    <env_key1>: Parameter,
+    ...
+    <env_keyN>: Parameter
+  }
 }
 ```
 
@@ -442,6 +447,8 @@ Represents a set of parameters provided to job containers.
 * `flag_args`  
   * Flag arguments, such as `-i`, `--input-file`, or `--input-file=`. If the argument ends
     with an equals sign, no space is placed between the flag and parameter.
+* `environment`
+  * Environmental parameters provided to the container at startup.
 
 #### File
 
@@ -1212,6 +1219,10 @@ Further approvals are via Github PR reviews.
 ### 1.3.4
 
 * Added missing `ReferenceData.etag` field.
+
+### 1.3.5
+
+* Added `Parameters.environment` field.
 
 ## Appendices
 
