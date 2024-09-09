@@ -86,13 +86,15 @@ async def test_get_object_meta_single_part(minio):
 
 
 @pytest.mark.asyncio
-async def test_get_object_meta_multipart(minio):
+async def test_get_object_meta_multipart_and_insecure_ssl(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     await minio.upload_file(
         "test-bucket/big_test_file", b"abcdefghij" * 600000, 3, b"bigolfile")
 
-    s3c = await _client(minio)
+    # There's not a lot to test with insecure ssl other than it doesn't break things
+    # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
+    s3c = await _client(minio, insecure_ssl=True)
     objm = await s3c.get_object_meta(S3Paths(["test-bucket/big_test_file"]))
     assert len(objm) == 1
     _check_obj_meta(
@@ -290,8 +292,9 @@ async def _presign_get_post_fail(s3c, paths, expiration, expected):
     assert_exception_correct(got.value, ValueError(expected))
 
 
-async def _client(minio):
-    return await S3Client.create(minio.host,  minio.access_key, minio.secret_key)
+async def _client(minio, insecure_ssl=False):
+    return await S3Client.create(
+        minio.host,  minio.access_key, minio.secret_key, insecure_ssl=insecure_ssl)
 
 
 def _check_obj_meta(objm, path, e_tag, size, part_size, has_parts, num_parts, effsize):

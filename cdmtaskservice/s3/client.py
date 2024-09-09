@@ -97,7 +97,8 @@ class S3Client:
         access_key: str,
         secret_key: str,
         config: dict[str, Any] = None,
-        skip_connection_check: bool = False
+        skip_connection_check: bool = False,
+        insecure_ssl: bool = False,
     ) -> Self:
         """
         Create the client.
@@ -109,8 +110,9 @@ class S3Client:
             https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
         skip_connetion_check - don't try to list_buckets while creating the client to check
             the host and credentials are correct.
+        insecure_ssl - skip ssl certificate checks.
         """
-        s3c = S3Client(endpoint_url, access_key, secret_key, config)
+        s3c = S3Client(endpoint_url, access_key, secret_key, config, insecure_ssl)
         if not skip_connection_check:
             async def list_buckets(client):
                 return await client.list_buckets()
@@ -118,13 +120,19 @@ class S3Client:
         return s3c
     
     def __init__(
-        self, endpoint_url: str, access_key: str, secret_key: str, config: dict[str, Any]
+        self,
+        endpoint_url: str,
+        access_key: str,
+        secret_key: str,
+        config: dict[str, Any],
+        insecure_ssl: bool,
     ):
         self._url = _require_string(endpoint_url, "endpoint_url")
         self._ak = _require_string(access_key, "access_key")
         self._sk = _require_string(secret_key, "secret_key")
         self._config = Config(**config) if config else None
         self._sess = get_session()
+        self._insecure_ssl = insecure_ssl
     
     def _client(self):
         # Creating a client seems to be pretty cheap, usually < 20ms.
@@ -134,6 +142,7 @@ class S3Client:
             aws_access_key_id=self._ak,
             aws_secret_access_key=self._sk,
             config=self._config,
+            verify=not self._insecure_ssl,
         )
         
     async def _fnc_wrapper(self, client, func):

@@ -90,6 +90,7 @@ async def download_presigned_url(
     partsize: int,
     outputpath: Path,
     etag: str = None,
+    insecure_ssl: bool = False,
 ):
     """
     Download a presigned url from S3 and verify the E-tag.
@@ -101,11 +102,12 @@ async def download_presigned_url(
     etag - if provided, checks that the server Etag matches this Etag. The downloaded file is
         always checked against the server provided Etag as an integrity check, but providing
         an Etag can ensure the file hasn't changed on the server side since the last access.
+    insecure_ssl - skip the ssl certificate check.
     """
     _not_falsy(session, "session")
     _require_string(url, "url")
     _not_falsy(outputpath, "outputpath")
-    async with session.get(url) as resp:
+    async with session.get(url, ssl=not insecure_ssl) as resp:
         if resp.status > 199 and resp.status < 300:  # redirects are handled automatically
             serv_etag = resp.headers["Etag"].strip('"')
             if etag and etag != serv_etag:
@@ -140,6 +142,7 @@ async def upload_presigned_url(
     url: str,
     fields: dict[str, str],
     infile: Path,
+    insecure_ssl: bool = False,
 ):
     """
     Upload a file to S3 via a presigned url. If the object already exists in S3, it will be
@@ -149,6 +152,7 @@ async def upload_presigned_url(
     url - the presigned url.
     fields - the fields associated with the presigned url returned by the S3 client.
     infile - the file to upload.
+    insecure_ssl - skip the ssl certificate check.
     """
     _not_falsy(session, "session")
     _require_string(url, "url")
@@ -160,7 +164,7 @@ async def upload_presigned_url(
     data = aiohttp.FormData(fields)
     with open(infile, "rb") as f:
         data.add_field("file", f)
-        async with session.post(url, data=data) as resp:
+        async with session.post(url, ssl=not insecure_ssl, data=data) as resp:
             # Returns 204 no content on success
             if resp.status < 200 or resp.status > 299:  # redirects are handled automatically
                 # assume the error output isn't too huge
@@ -202,19 +206,34 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
             raise ValueError(f"Value of the environment variable {manifest['env-root']} "
                              + "from the manifest env-root field is missing or the empty string")
         root = Path(root)
+    insecuressl = manifest.get("insecure-ssl", False)
     if manifest["op"] == "download":
-        await _process_downloads(root, manifest["files"], manifest["concurrency"])
+        await _process_downloads(
+            root,
+            manifest["files"],
+            manifest["concurrency"],
+            insecuressl,
+        )
     elif manifest["op"] == "upload":
-        await _process_uploads(root, manifest["files"], manifest["concurrency"])
+        await _process_uploads(
+            root,
+            manifest["files"],
+            manifest["concurrency"],
+            insecuressl,
+        )
     else:
         raise ValueError(f"unknown operation: {manifest['op']}")
 
 
-async def _process_uploads(root: Path, files: list[dict[str, Any]], concurrency: int):
+async def _process_uploads(
+    root: Path, files: list[dict[str, Any]], concurrency: int, insecure_ssl: bool
+):
     raise ValueError("unimplemented")
 
 
-async def _process_downloads(root: Path, files: list[dict[str, Any]], concurrency: int):
+async def _process_downloads(
+    root: Path, files: list[dict[str, Any]], concurrency: int, insecure_ssl: bool
+):
     semaphore = asyncio.Semaphore(concurrency)
     async def sem_coro(coro):
         async with semaphore:
@@ -229,7 +248,8 @@ async def _process_downloads(root: Path, files: list[dict[str, Any]], concurrenc
                         fil["url"],
                         fil["partsize"],
                         root / fil["outputpath"],
-                        etag=fil["etag"]
+                        etag=fil["etag"],
+                        insecure_ssl=insecure_ssl,
                     ))
                     tg.create_task(sem_coro(coros[-1]))
                     # just throw any ExceptionGroups as is
