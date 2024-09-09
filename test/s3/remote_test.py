@@ -106,13 +106,15 @@ async def test_download_presigned_url(minio, temp_dir):
 
 
 @pytest.mark.asyncio
-async def test_download_presigned_url_multipart(minio, temp_dir):
+async def test_download_presigned_url_multipart_and_insecure_ssl(minio, temp_dir):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("nice-bucket")
     await minio.upload_file(
         "nice-bucket/big_test_file", b"abcdefghij" * 600000, 4, b"bigolfile")
-    
-    s3c = await _client(minio)
+
+    # There's not a lot to test with insecure ssl other than it doesn't break things
+    # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
+    s3c = await _client(minio, insecure_ssl=True)
     url = (await s3c.presign_get_urls(S3Paths(["nice-bucket/big_test_file"])))[0]
     output = temp_dir / "temp2.txt"
     async with aiohttp.ClientSession() as sess:
@@ -225,11 +227,13 @@ async def test_upload_presigned_url(minio):
 
 
 @pytest.mark.asyncio
-async def test_upload_presigned_url_with_crc(minio):
+async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     
-    s3c = await _client(minio)
+    # There's no a lot to test with insecure ssl other than it doesn't break things
+    # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
+    s3c = await _client(minio, insecure_ssl=True)
     url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
     async with aiohttp.ClientSession() as sess:
         await upload_presigned_url_with_crc32(sess, url.url, url.fields, TEST_RAND10KB)
@@ -363,5 +367,6 @@ async def _upload_presigned_url_fail_s3_error(
         assert type(got.value) == TransferError
 
 
-async def _client(minio):
-    return await S3Client.create(minio.host,  minio.access_key, minio.secret_key)
+async def _client(minio, insecure_ssl=False):
+    return await S3Client.create(
+        minio.host,  minio.access_key, minio.secret_key, insecure_ssl=insecure_ssl)
