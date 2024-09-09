@@ -14,6 +14,7 @@ from typing import Any, Self
 
 from .exceptions import S3ClientConnectError, S3PathError, S3UnexpectedError
 from .paths import S3Paths
+from cdmtaskservice.arg_checkers import not_falsy, check_int, require_string
 
 
 class S3ObjectMeta:
@@ -127,9 +128,9 @@ class S3Client:
         config: dict[str, Any],
         insecure_ssl: bool,
     ):
-        self._url = _require_string(endpoint_url, "endpoint_url")
-        self._ak = _require_string(access_key, "access_key")
-        self._sk = _require_string(secret_key, "secret_key")
+        self._url = require_string(endpoint_url, "endpoint_url")
+        self._ak = require_string(access_key, "access_key")
+        self._sk = require_string(secret_key, "secret_key")
         self._config = Config(**config) if config else None
         self._sess = get_session()
         self._insecure_ssl = insecure_ssl
@@ -209,8 +210,8 @@ class S3Client:
         paths - the paths to query
         concurrency - the number of simultaneous connections to S3
         """
-        _not_falsy(paths, "paths")
-        _check_int(concurrency, "concurrency")
+        not_falsy(paths, "paths")
+        check_int(concurrency, "concurrency")
         funcs = []
         for buk, key, path in paths.split_paths(include_full_path=True):
             async def head(client, buk=buk, key=key):  # bind the current value of the variables
@@ -241,8 +242,8 @@ class S3Client:
         paths - the paths in question.
         expiration_sec - the expiration time of the urls.
         """
-        _not_falsy(paths, "paths")
-        _check_int(expiration_sec, "expiration_sec")
+        not_falsy(paths, "paths")
+        check_int(expiration_sec, "expiration_sec")
         results = []
         async with self._client() as client:
             for buk, key in paths.split_paths():
@@ -265,8 +266,8 @@ class S3Client:
         paths - the paths in question.
         expiration_sec - the expiration time of the urls.
         """
-        _not_falsy(paths, "paths")
-        _check_int(expiration_sec, "expiration_sec")
+        not_falsy(paths, "paths")
+        check_int(expiration_sec, "expiration_sec")
         results = []
         async with self._client() as client:
             for buk, key in paths.split_paths():
@@ -274,19 +275,3 @@ class S3Client:
                     Bucket=buk, Key=key, ExpiresIn=expiration_sec)
                 results.append(S3PresignedPost(ret["url"], ret["fields"]))
         return results
-
-
-def _not_falsy(obj: Any, name: str):
-    if not obj:
-        raise ValueError(f"{name} is required")
-
-
-def _require_string(string: str, name: str):
-    if not string or not string.strip():
-        raise ValueError(f"{name} is required")
-    return string.strip()
-
-
-def _check_int(inte: int, name: str, minimum: int = 1):
-    if inte < minimum:
-        raise ValueError(f"{name} must be >= {minimum}")
