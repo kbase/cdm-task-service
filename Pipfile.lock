@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "f8c62a922970c09a3199d32c3caf95c22daf7a152d1258555acd94a941f64f34"
+            "sha256": "b32bbe6e48f3a437f415f039d6dfd7eb0bf0a850f90da588be2c8d6dd1a07f87"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -18,11 +18,12 @@
     "default": {
         "aiobotocore": {
             "hashes": [
-                "sha256:18cbd934ed835a04020c2cffe5d1cfbeb9ff0a340a8c7f0a869c17cf3e43de6a",
-                "sha256:8ae2ffe3fd227923c69e12271b7a723c7c93853d8dbbd214e774613bd444b32f"
+                "sha256:6d0b4a51d70bc33b1b4eba411076b0cc979aecbdad8e084bab202202423c0725",
+                "sha256:988eef33fd9dd4b070959cfec922278e84166950695b2160bd581623cb6a420c"
             ],
             "index": "pypi",
-            "version": "==2.13.2"
+            "markers": "python_version >= '3.8'",
+            "version": "==2.15.0"
         },
         "aiohappyeyeballs": {
             "hashes": [
@@ -127,6 +128,7 @@
                 "sha256:fd31f176429cecbc1ba499d4aba31aaccfea488f418d60376b911269d3b883c5"
             ],
             "index": "pypi",
+            "markers": "python_version >= '3.8'",
             "version": "==3.10.5"
         },
         "aioitertools": {
@@ -179,11 +181,11 @@
         },
         "botocore": {
             "hashes": [
-                "sha256:13b011d7b206ce00727dcee26548fa3b550db9046d5a0e90ac25a6e6c8fde6ef",
-                "sha256:502ddafe1d627fcf1e4c007c86454e5dd011dba7c58bd8e8a5368a79f3e387dc"
+                "sha256:1b48c94e8a4bbe23143f3d1c21a32b9ffc7476b651ef42371ab45d678f6dbfbc",
+                "sha256:3564a980d95ff2861a6ca74313173d8778aa659125c63cf49c93ad23896c63b1"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==1.34.131"
+            "version": "==1.35.16"
         },
         "certifi": {
             "hashes": [
@@ -416,11 +418,11 @@
         },
         "idna": {
             "hashes": [
-                "sha256:050b4e5baadcd44d760cedbd2b8e639f2ff89bbc7a5730fcc662954303377aac",
-                "sha256:d838c2c0ed6fced7693d5e8ab8e734d5f8fda53a039c0164afb0b82e771e3603"
+                "sha256:12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9",
+                "sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"
             ],
             "markers": "python_version >= '3.6'",
-            "version": "==3.8"
+            "version": "==3.10"
         },
         "jmespath": {
             "hashes": [
