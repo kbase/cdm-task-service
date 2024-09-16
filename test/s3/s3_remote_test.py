@@ -91,16 +91,29 @@ def test_crc32_fail():
 
 @pytest.mark.asyncio
 async def test_download_presigned_url(minio, temp_dir):
+    await _test_download_presigned_url(minio, temp_dir, "temp1.txt", True)
+    
+    with open(temp_dir / "somedir" / "temp2.txt", "w") as f:
+        f.write("foo")
+    await _test_download_presigned_url(minio, temp_dir, "temp2.txt", True)
+    
+    with open(temp_dir / "somedir" / "temp3.txt", "w") as f:
+        f.write("abcdefghij")
+    await _test_download_presigned_url(minio, temp_dir, "temp3.txt", False)
+
+
+async def _test_download_presigned_url(minio, temp_dir, filename, expected_return):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     await minio.upload_file("test-bucket/myfile", b"abcdefghij")
     
     s3c = await _client(minio)
     url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
-    output = temp_dir / "somedir" / "temp1.txt"  # test directory creation
+    output = temp_dir / "somedir" / filename  # test directory creation for the first case
     async with aiohttp.ClientSession() as sess:
-        await download_presigned_url(
+        res = await download_presigned_url(
             sess, url, 10, output, etag="a925576942e94b2ef57a066101b48876")
+    assert res == expected_return
     with open(output) as f:
         assert f.read() == "abcdefghij"
 
@@ -118,7 +131,8 @@ async def test_download_presigned_url_multipart_and_insecure_ssl(minio, temp_dir
     url = (await s3c.presign_get_urls(S3Paths(["nice-bucket/big_test_file"])))[0]
     output = temp_dir / "temp2.txt"
     async with aiohttp.ClientSession() as sess:
-        await download_presigned_url(sess, url, 6000000, output)
+        res = await download_presigned_url(sess, url, 6000000, output)
+    assert res is True
     with open(output) as f:
         assert f.read() == "abcdefghij" * 600000 * 4 + "bigolfile"
 

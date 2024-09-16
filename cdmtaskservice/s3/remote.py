@@ -98,15 +98,25 @@ async def download_presigned_url(
     session - the http session.
     url - the presigned url.
     partsize - the partsize used when uploading the file to S3
-    path - where to store the file. If the file exists, it will be overwritten
-    etag - if provided, checks that the server Etag matches this Etag. The downloaded file is
-        always checked against the server provided Etag as an integrity check, but providing
-        an Etag can ensure the file hasn't changed on the server side since the last access.
+    outputpath - where to store the file. If the file exists, it will be overwritten
+    etag - if provided,
+         a) checks that the server Etag matches this Etag. The downloaded file is
+            always checked against the server provided Etag as an integrity check, but providing
+            an Etag can ensure the file hasn't changed on the server side since the last access.
+        b) if a file already exists at outputpath and matches the etag, the download is skipped.
     insecure_ssl - skip the ssl certificate check.
+    
+    Returns True if the download occurred or False if the file already exists.
     """
     _not_falsy(session, "session")
     _require_string(url, "url")
     _not_falsy(outputpath, "outputpath")
+    if partsize < 1:
+        raise ValueError("partsize must be > 0")
+    if etag and outputpath.is_file():
+        got_etag = calculate_etag(outputpath, partsize)
+        if got_etag == etag:
+            return False
     async with session.get(url, ssl=not insecure_ssl) as resp:
         if resp.status > 199 and resp.status < 300:  # redirects are handled automatically
             serv_etag = resp.headers["Etag"].strip('"')
@@ -114,7 +124,7 @@ async def download_presigned_url(
                 raise FileChangeError(
                     f"Etag check failed for url {url.split('?')[0]}. "
                     + f"Server provided {serv_etag}, user provided Etag requirement is {etag}")
-            outputpath.parent.mkdir(mode=0o700, exist_ok=True, parents=True)
+            outputpath.parent.mkdir(exist_ok=True, parents=True)
             with open(outputpath, "wb") as f:
                 async for chunk in resp.content.iter_chunked(_CHUNK_SIZE_64KB):
                     f.write(chunk)
@@ -122,16 +132,13 @@ async def download_presigned_url(
             # assume the error output isn't too huge
             err = await resp.read()
             raise TransferError(f"GET URL: {url.split('?')[0]} {resp.status}\nError:\n{err}")
-    try:
-        got_etag = calculate_etag(outputpath, partsize)
-    except ValueError:
-        outputpath.unlink(missing_ok=True)
-        raise
+    got_etag = calculate_etag(outputpath, partsize)
     if got_etag != serv_etag:
         outputpath.unlink(missing_ok=True)
         raise FileCorruptionError(
             f"Etag check failed for url {url.split('?')[0]}. "
             + f"Server provided {serv_etag}, file Etag is {got_etag}")
+    return True
 
 
 _UPLOAD_REQUIRED_FIELDS = ["key", "AWSAccessKeyId", "signature", "policy"]
