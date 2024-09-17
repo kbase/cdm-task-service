@@ -6,6 +6,8 @@ import asyncio
 from collections.abc import Awaitable
 import io
 import inspect
+import json
+import logging
 from pathlib import Path
 from sfapi_client import AsyncClient
 from sfapi_client.paths import AsyncRemotePath
@@ -14,8 +16,9 @@ import sys
 from types import ModuleType
 from typing import Self
 
-from cdmtaskservice.arg_checkers import not_falsy
+from cdmtaskservice.arg_checkers import not_falsy, require_string, check_int
 from cdmtaskservice.nersc import remote
+from cdmtaskservice.s3.client import S3ObjectMeta
 
 # This is mostly tested manually to avoid modifying files at NERSC.
 
@@ -26,6 +29,12 @@ from cdmtaskservice.nersc import remote
 
 # hard code the API version 
 _URL_API = "https://api.nersc.gov/api/v1.2"
+_URL_API_BETA = "https://api.nersc.gov/api/beta"
+_COMMAND_PATH = "utilities/command"
+
+_MAX_CALLBACK_TIMEOUT = 3 * 24 * 3600
+
+_MANIFEST_ROOT_DIR = Path("cdm_task_service")
 
 # TODO PROD add start and end time to task output and record
 # TODO TICKET ask NERSC for start & completion times for tasks
@@ -156,6 +165,10 @@ class NERSCManager:
                          + '"')
                     tg.create_task(perlmutter.run(command))
     
+    async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
+        # TODO ERRORHANDlING deal with errors 
+        return (await client.post(f"{_COMMAND_PATH}/{machine}", data={"executable": exe})).json()
+    
     async def _upload_file_to_nersc(
         self,
         compute: AsyncCompute,
@@ -179,3 +192,97 @@ class NERSCManager:
         if make_exe:
             cmd = f'bash -c "chmod a+x {target}"'
             await compute.run(cmd)
+
+    async def download_s3_files(
+        self,
+        job_id: str,
+        objects: list[S3ObjectMeta],
+        presigned_urls: list[str],
+        callback_url: str,
+        concurrency: int = 10,
+        insecure_ssl: bool = False
+    ) -> str:
+        """
+        Download a set of files to NERSC from an S3 instance.
+        
+        job_id - the ID of the job for which the files are being transferred. 
+            This must be a unique ID, and no other transfers should be occurring for the job.
+        objects - the S3 files to download.
+        presigned_urls - the presigned download URLs for each object, in the same order as
+            the objects.
+        callback_url - the URL to provide to NERSC as a callback for when the download is
+            complete.
+        concurrency - the number of simultaneous downloads to process.
+        insecure_ssl - whether to skip the cert check for the S3 URL.
+        
+        Returns the NERSC task ID for the download.
+        """
+        maniio = self._create_download_manifest(
+            job_id, objects, presigned_urls, concurrency, insecure_ssl)
+        path = Path("$SCRATCH") / _MANIFEST_ROOT_DIR / job_id / f"download_manifest.json"
+        async with AsyncClient(
+            api_base_url=_URL_API, access_token=await self._cl_tkn_provider()
+        ) as cli:
+            dtn = await cli.compute(Machine.dtns)
+            # TODO CLEANUP manifests after some period of time
+            await self._upload_file_to_nersc(dtn, path, bio=maniio)
+            command = (
+                "bash -c '"
+                    + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
+                    + f"export CTS_MANIFEST_LOCATION={path}; "
+                    + f"export CTS_TOUCH_ON_COMPLETE={str(path) + '.complete'}; "
+                    + f"export SCRATCH=$SCRATCH; "
+                    + f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}'
+                + "'"
+            )
+            # TODO NERSCFEATURE send call back with command when NERSC supports
+            task_id  = (await self._run_command(cli, Machine.dtns, command))["task_id"]
+            # TODO LOGGING figure out how to handle logging, see other logging todos
+            # log task ID in case the next step fails
+            # Could maybe pass in a task ID receiver or something?
+            logging.getLogger(__name__).info(f"Created upload task with id {task_id}")
+        callback = {
+            # TODO PROD what happens in a timeout? Nothing? the callback triggers?
+            "timeout": _MAX_CALLBACK_TIMEOUT,
+            "url": callback_url,
+            "path_condition": {
+                "path": str(path) + ".complete",
+                "machine": Machine.dtns,
+            }
+        }
+        # TODO NERSCFEATURE use callback specific methods when client supports and remove beta
+        async with AsyncClient(
+            api_base_url=_URL_API_BETA, access_token=await self._cl_tkn_provider()
+        ) as cli:
+            await cli.post("callback/", json=callback)
+        return task_id
+    
+    def _create_download_manifest(
+            self,
+            job_id: str,
+            objects: list[S3ObjectMeta],
+            presigned_urls: list[str],
+            concurrency: int,
+            insecure_ssl: bool,
+        ) -> io.BytesIO:
+        require_string(job_id, "job_id")
+        not_falsy(objects, "objects")
+        not_falsy(presigned_urls, "presigned_urls")
+        if len(objects) != len(presigned_urls):
+            raise ValueError("Must provide same number of paths and urls")
+        manifest = {
+            "file-transfers": {
+                "op": "download",
+                "concurrency": check_int(concurrency, "concurrency"),
+                "insecure-ssl": insecure_ssl,
+                "files": [
+                    {
+                        "url": url,
+                        "outputpath": str(self._jaws_root_path / job_id / meta.path),
+                        "etag": meta.e_tag,
+                        "partsize": meta.effective_part_size,
+                    } for url, meta in zip(presigned_urls, objects)
+                ]
+            }
+        }
+        return io.BytesIO(json.dumps(manifest).encode())
