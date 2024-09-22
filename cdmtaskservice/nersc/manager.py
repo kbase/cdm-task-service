@@ -33,6 +33,8 @@ _URL_API_BETA = "https://api.nersc.gov/api/beta"
 _COMMAND_PATH = "utilities/command"
 
 _MAX_CALLBACK_TIMEOUT = 3 * 24 * 3600
+_MIN_TIMEOUT_SEC = 300
+_SEC_PER_GB = 2 * 60  # may want to make this configurable
 
 _MANIFEST_ROOT_DIR = Path("cdm_task_service")
 
@@ -275,12 +277,15 @@ class NERSCManager:
                 "op": "download",
                 "concurrency": check_int(concurrency, "concurrency"),
                 "insecure-ssl": insecure_ssl,
+                "min-timeout-sec": _MIN_TIMEOUT_SEC,
+                "sec-per-GB": _SEC_PER_GB,
                 "files": [
                     {
                         "url": url,
                         "outputpath": str(self._jaws_root_path / job_id / meta.path),
                         "etag": meta.e_tag,
                         "partsize": meta.effective_part_size,
+                        "size": meta.size,
                     } for url, meta in zip(presigned_urls, objects)
                 ]
             }
