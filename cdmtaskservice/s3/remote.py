@@ -12,7 +12,7 @@ import base64
 from hashlib import md5
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable
 import zlib
 
 # Probably not necessary, but coould look into aiofiles for some of these methods
@@ -91,6 +91,7 @@ async def download_presigned_url(
     outputpath: Path,
     etag: str = None,
     insecure_ssl: bool = False,
+    timeout_sec: int = 600,
 ):
     """
     Download a presigned url from S3 and verify the E-tag.
@@ -105,6 +106,7 @@ async def download_presigned_url(
             an Etag can ensure the file hasn't changed on the server side since the last access.
         b) if a file already exists at outputpath and matches the etag, the download is skipped.
     insecure_ssl - skip the ssl certificate check.
+    timeout_sec - the time, in seconds, before the download times out.
     
     Returns True if the download occurred or False if the file already exists.
     """
@@ -117,21 +119,26 @@ async def download_presigned_url(
         got_etag = calculate_etag(outputpath, partsize)
         if got_etag == etag:
             return False
-    async with session.get(url, ssl=not insecure_ssl) as resp:
-        if resp.status > 199 and resp.status < 300:  # redirects are handled automatically
-            serv_etag = resp.headers["Etag"].strip('"')
-            if etag and etag != serv_etag:
-                raise FileChangeError(
-                    f"Etag check failed for url {url.split('?')[0]}. "
-                    + f"Server provided {serv_etag}, user provided Etag requirement is {etag}")
-            outputpath.parent.mkdir(exist_ok=True, parents=True)
-            with open(outputpath, "wb") as f:
-                async for chunk in resp.content.iter_chunked(_CHUNK_SIZE_64KB):
-                    f.write(chunk)
-        else:
-            # assume the error output isn't too huge
-            err = await resp.read()
-            raise TransferError(f"GET URL: {url.split('?')[0]} {resp.status}\nError:\n{err}")
+    tout = aiohttp.ClientTimeout(total=timeout_sec)
+    try:
+        async with session.get(url, ssl=not insecure_ssl, timeout=tout) as resp:
+            if resp.status > 199 and resp.status < 300:  # redirects are handled automatically
+                serv_etag = resp.headers["Etag"].strip('"')
+                if etag and etag != serv_etag:
+                    raise FileChangeError(
+                        f"Etag check failed for url {url.split('?')[0]}. "
+                        + f"Server provided {serv_etag}, user provided Etag requirement is {etag}")
+                outputpath.parent.mkdir(exist_ok=True, parents=True)
+                with open(outputpath, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(_CHUNK_SIZE_64KB):
+                        f.write(chunk)
+            else:
+                # assume the error output isn't too huge
+                err = await resp.read()
+                raise TransferError(f"GET URL: {url.split('?')[0]} {resp.status}\nError:\n{err}")
+    except asyncio.TimeoutError as e:
+        raise TimeoutError(f"Timeout downloading to file {outputpath} with timeout {timeout_sec}s"
+                           ) from e
     got_etag = calculate_etag(outputpath, partsize)
     if got_etag != serv_etag:
         outputpath.unlink(missing_ok=True)
@@ -150,6 +157,7 @@ async def upload_presigned_url(
     fields: dict[str, str],
     infile: Path,
     insecure_ssl: bool = False,
+    timeout_sec: int = 600,
 ):
     """
     Upload a file to S3 via a presigned url. If the object already exists in S3, it will be
@@ -160,6 +168,7 @@ async def upload_presigned_url(
     fields - the fields associated with the presigned url returned by the S3 client.
     infile - the file to upload.
     insecure_ssl - skip the ssl certificate check.
+    timeout_sec - the time, in seconds, before the upload times out.
     """
     _not_falsy(session, "session")
     _require_string(url, "url")
@@ -171,13 +180,18 @@ async def upload_presigned_url(
     data = aiohttp.FormData(fields)
     with open(infile, "rb") as f:
         data.add_field("file", f)
-        async with session.post(url, ssl=not insecure_ssl, data=data) as resp:
-            # Returns 204 no content on success
-            if resp.status < 200 or resp.status > 299:  # redirects are handled automatically
-                # assume the error output isn't too huge
-                err = await resp.read()
-                raise TransferError(
-                    f"POST URL: {url} Key: {fields['key']} {resp.status}\nError:\n{err}")
+        tout = aiohttp.ClientTimeout(total=timeout_sec)
+        try:
+            async with session.post(url, ssl=not insecure_ssl, data=data, timeout=tout) as resp:
+                # Returns 204 no content on success
+                if resp.status < 200 or resp.status > 299:  # redirects are handled automatically
+                    # assume the error output isn't too huge
+                    err = await resp.read()
+                    raise TransferError(
+                        f"POST URL: {url} Key: {fields['key']} {resp.status}\nError:\n{err}")
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(f"Timeout uploading from file {infile} with timeout {timeout_sec}s"
+                               ) from e
 
 
 async def upload_presigned_url_with_crc32(
@@ -185,6 +199,8 @@ async def upload_presigned_url_with_crc32(
     url: str,
     fields: dict[str, str],
     infile: Path,
+    insecure_ssl: bool = False,
+    timeout_sec: int = 600,
 ):
     """
     As upload_presigned_url but calculates the crc32 of the input file and sends it to S3 as
@@ -193,7 +209,55 @@ async def upload_presigned_url_with_crc32(
     _not_falsy(fields, "fields")
     fields = dict(fields)  # don't mutate the input
     fields["x-amz-checksum-crc32"] = base64.b64encode(crc32(infile)).decode()
-    await upload_presigned_url(session, url, fields, infile)
+    await upload_presigned_url(
+        session, url, fields, infile, insecure_ssl=insecure_ssl, timeout_sec=timeout_sec)
+
+
+async def _process_uploads(
+    sess: aiohttp.ClientSession,
+    root: Path,
+    files: list[dict[str, Any]],
+    concurrency: int,
+    insecure_ssl: bool,
+    min_timeout_sec: int,
+    sec_per_GB: float,
+):
+    tasks = [upload_presigned_url_with_crc32(
+        sess,
+        fil["url"],
+        fil["fields"],
+        root / fil["file"],
+        insecure_ssl=insecure_ssl,
+        timeout_sec=_timeout(min_timeout_sec, (root / fil["file"]).stat().st_size, sec_per_GB),
+    ) for fil in files]
+    await _run_tasks(tasks, concurrency)
+
+
+async def _process_downloads(
+    sess: aiohttp.ClientSession,
+    root: Path,
+    files: list[dict[str, Any]],
+    concurrency: int,
+    insecure_ssl: bool,
+    min_timeout_sec: int,
+    sec_per_GB: float,
+):
+    tasks = [download_presigned_url(
+        sess,
+        fil["url"],
+        fil["partsize"],
+        root / fil["outputpath"],
+        etag=fil["etag"],
+        insecure_ssl=insecure_ssl,
+        timeout_sec=_timeout(min_timeout_sec, fil["size"], sec_per_GB),
+    ) for fil in files]
+    await _run_tasks(tasks, concurrency)
+
+
+_OP_TO_FUNC = {
+    "upload": _process_uploads,
+    "download": _process_downloads,
+}
 
 
 async def process_data_transfer_manifest(manifest: dict[str, Any]):
@@ -206,6 +270,9 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
     # stress error checking too much.
     # TODO TEST add tests for this and its dependency functions.
     _not_falsy(manifest, "manifest")
+    func = _OP_TO_FUNC.get(manifest["op"])
+    if not func:
+        raise ValueError(f"unknown operation: {manifest['op']}")
     root = Path("/")
     if manifest.get("env-root"):
         root = os.environ.get(manifest["env-root"])
@@ -213,57 +280,39 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
             raise ValueError(f"Value of the environment variable {manifest['env-root']} "
                              + "from the manifest env-root field is missing or the empty string")
         root = Path(root)
-    insecuressl = manifest.get("insecure-ssl", False)
-    if manifest["op"] == "download":
-        await _process_downloads(
+    async with aiohttp.ClientSession() as sess:
+        await func(
+            sess,
             root,
             manifest["files"],
             manifest["concurrency"],
-            insecuressl,
+            manifest.get("insecure-ssl", False),
+            manifest['min-timeout-sec'],
+            manifest["sec-per-GB"],
         )
-    elif manifest["op"] == "upload":
-        await _process_uploads(
-            root,
-            manifest["files"],
-            manifest["concurrency"],
-            insecuressl,
-        )
-    else:
-        raise ValueError(f"unknown operation: {manifest['op']}")
 
 
-async def _process_uploads(
-    root: Path, files: list[dict[str, Any]], concurrency: int, insecure_ssl: bool
-):
-    raise ValueError("unimplemented")
+def _timeout(min_timeout_sec: int, filesize: int, sec_per_GB: float) -> float:
+    return max(min_timeout_sec, sec_per_GB * filesize / 1_000_000_000)
 
 
-async def _process_downloads(
-    root: Path, files: list[dict[str, Any]], concurrency: int, insecure_ssl: bool
+async def _run_tasks(
+    tasks: list[Awaitable],
+    concurrency: int
 ):
     semaphore = asyncio.Semaphore(concurrency)
     async def sem_coro(coro):
         async with semaphore:
             return await coro
-    coros = []
     try: 
-        async with aiohttp.ClientSession() as sess:
-            async with asyncio.TaskGroup() as tg:
-                for fil in files:
-                    coros.append(download_presigned_url(
-                        sess,
-                        fil["url"],
-                        fil["partsize"],
-                        root / fil["outputpath"],
-                        etag=fil["etag"],
-                        insecure_ssl=insecure_ssl,
-                    ))
-                    tg.create_task(sem_coro(coros[-1]))
-                    # just throw any ExceptionGroups as is
+        async with asyncio.TaskGroup() as tg:
+            for t in tasks:
+                tg.create_task(sem_coro(t))
+                # just throw any ExceptionGroups as is
     finally:
         # otherwise you can get coroutine never awaited warnings if a failure occurs
-        for c in coros:
-            c.close()
+        for t in tasks:
+            t.close()
 
 
 # These arg checkers are duplicated in other places, but we want to minimize the number of files
@@ -286,7 +335,11 @@ class TransferError(Exception):
     """ Thrown when a S3 transfer fails. """
 
 
-class FileCorruptionError(Exception):
+class TimeoutError(TransferError):
+    """ Thrown when a S3 transfer timesout. """
+
+
+class FileCorruptionError(TransferError):
     """ Thrown when a file transfer results in a corrupt file """
 
 

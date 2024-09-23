@@ -18,6 +18,7 @@ from cdmtaskservice.s3.remote import (
     FileCorruptionError,
     TransferError,
     FileChangeError,
+    TimeoutError,
 )
 import config
 
@@ -112,7 +113,7 @@ async def _test_download_presigned_url(minio, temp_dir, filename, expected_retur
     output = temp_dir / "somedir" / filename  # test directory creation for the first case
     async with aiohttp.ClientSession() as sess:
         res = await download_presigned_url(
-            sess, url, 10, output, etag="a925576942e94b2ef57a066101b48876")
+            sess, url, 10, output, etag="a925576942e94b2ef57a066101b48876", timeout_sec=5)
     assert res == expected_return
     with open(output) as f:
         assert f.read() == "abcdefghij"
@@ -125,13 +126,13 @@ async def test_download_presigned_url_multipart_and_insecure_ssl(minio, temp_dir
     await minio.upload_file(
         "nice-bucket/big_test_file", b"abcdefghij" * 600000, 4, b"bigolfile")
 
-    # There's not a lot to test with insecure ssl other than it doesn't break things
-    # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
-    s3c = await _client(minio, insecure_ssl=True)
+    s3c = await _client(minio)
     url = (await s3c.presign_get_urls(S3Paths(["nice-bucket/big_test_file"])))[0]
     output = temp_dir / "temp2.txt"
     async with aiohttp.ClientSession() as sess:
-        res = await download_presigned_url(sess, url, 6000000, output)
+        # There's not a lot to test with insecure ssl other than it doesn't break things
+        # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
+        res = await download_presigned_url(sess, url, 6000000, output, insecure_ssl=True)
     assert res is True
     with open(output) as f:
         assert f.read() == "abcdefghij" * 600000 * 4 + "bigolfile"
@@ -164,11 +165,18 @@ async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
             + "file Etag is 1543089f5b20740cc5713f0437fcea8c-4"))
         await _download_presigned_url_fail(
             s, url, ps, None, ValueError("outputpath is required"))
+        await _download_presigned_url_fail(
+            s, url, 10, o, TimeoutError(f"Timeout downloading to file {o} with timeout 1e-05s"),
+            timeout_sec=0.00001
+        )
     
     
-async def _download_presigned_url_fail(sess, url, partsize, output, expected, etag=None):
+async def _download_presigned_url_fail(
+    sess, url, partsize, output, expected, etag=None, timeout_sec=600
+):
     with pytest.raises(Exception) as got:
-        await download_presigned_url(sess, url, partsize, output, etag=etag)
+        await download_presigned_url(
+            sess, url, partsize, output, etag=etag, timeout_sec=timeout_sec)
     assert_exception_correct(got.value, expected)
     if output:
         assert not output.exists()
@@ -225,7 +233,7 @@ async def test_upload_presigned_url(minio):
     urlcrc = (await s3c.presign_post_urls(S3Paths(["test-bucket/bar/myfilecrc"])))[0]
     urlcrc.fields["x-amz-checksum-crc32"] = "T/xSCA=="
     async with aiohttp.ClientSession() as sess:
-        await upload_presigned_url(sess, url.url, url.fields, TEST_RAND10KB)
+        await upload_presigned_url(sess, url.url, url.fields, TEST_RAND10KB, timeout_sec=5)
         await upload_presigned_url(sess, urlcrc.url, urlcrc.fields, TEST_RAND10KB)
     with open(TEST_RAND10KB, "rb") as f:
         expectedfile = f.read()
@@ -245,12 +253,13 @@ async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     
-    # There's no a lot to test with insecure ssl other than it doesn't break things
-    # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
-    s3c = await _client(minio, insecure_ssl=True)
+    s3c = await _client(minio)
     url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
     async with aiohttp.ClientSession() as sess:
-        await upload_presigned_url_with_crc32(sess, url.url, url.fields, TEST_RAND10KB)
+        # There's no a lot to test with insecure ssl other than it doesn't break things
+        # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
+        await upload_presigned_url_with_crc32(
+            sess, url.url, url.fields, TEST_RAND10KB, insecure_ssl=True, timeout_sec=5)
     with open(TEST_RAND10KB, "rb") as f:
         expectedfile = f.read()
     objdata = await minio.get_object("test-bucket", "foo/myfile")
@@ -275,7 +284,8 @@ async def test_upload_presigned_url_with_crc_internals(minio):
             await upload_presigned_url_with_crc32(sess, url.url, url.fields, TEST_RAND10KB)
             fields = dict(url.fields)
             fields["x-amz-checksum-crc32"] = "T/xSCA=="
-        method.assert_called_once_with(sess, url.url, fields, TEST_RAND10KB)
+        method.assert_called_once_with(
+            sess, url.url, fields, TEST_RAND10KB, insecure_ssl=False, timeout_sec=600)
 
 
 @pytest.mark.asyncio
@@ -311,6 +321,10 @@ async def test_upload_presigned_url_fail(minio):
             "infile must exist and be a file"))
         await _upload_presigned_url_fail(s, url, flds, TESTDATA, ValueError(
             "infile must exist and be a file"))
+        await _upload_presigned_url_fail(
+            s, url, flds, fl,
+            TimeoutError(f"Timeout uploading from file {fl} with timeout 0.001s"),
+            timeout_sec=0.001)
 
 
 def dctp(dic, key):
@@ -321,12 +335,12 @@ def dctws(dic, key):
     return {k: v if not k == key else "  \t   " for k, v in dic.items()}
 
 
-async def _upload_presigned_url_fail(sess, url, fields, infile, expected):
+async def _upload_presigned_url_fail(sess, url, fields, infile, expected, timeout_sec=600):
     with pytest.raises(Exception) as got:
-        await upload_presigned_url(sess, url, fields, infile)
+        await upload_presigned_url(sess, url, fields, infile, timeout_sec=timeout_sec)
     assert_exception_correct(got.value, expected)
     with pytest.raises(Exception) as got:
-        await upload_presigned_url_with_crc32(sess, url, fields, infile)
+        await upload_presigned_url_with_crc32(sess, url, fields, infile, timeout_sec=timeout_sec)
     assert_exception_correct(got.value, expected)
 
 
@@ -381,6 +395,5 @@ async def _upload_presigned_url_fail_s3_error(
         assert type(got.value) == TransferError
 
 
-async def _client(minio, insecure_ssl=False):
-    return await S3Client.create(
-        minio.host,  minio.access_key, minio.secret_key, insecure_ssl=insecure_ssl)
+async def _client(minio):
+    return await S3Client.create(minio.host,  minio.access_key, minio.secret_key)
