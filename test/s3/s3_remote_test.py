@@ -18,7 +18,7 @@ from cdmtaskservice.s3.remote import (
     FileCorruptionError,
     TransferError,
     FileChangeError,
-    TimeoutError,
+    RemoteTimeoutError,
 )
 import config
 
@@ -166,7 +166,7 @@ async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
         await _download_presigned_url_fail(
             s, url, ps, None, ValueError("outputpath is required"))
         await _download_presigned_url_fail(
-            s, url, 10, o, TimeoutError(f"Timeout downloading to file {o} with timeout 1e-05s"),
+            s, url, 10, o, RemoteTimeoutError(f"Timeout downloading to file {o} with timeout 1e-05s"),
             timeout_sec=0.00001
         )
     
@@ -323,7 +323,7 @@ async def test_upload_presigned_url_fail(minio):
             "infile must exist and be a file"))
         await _upload_presigned_url_fail(
             s, url, flds, fl,
-            TimeoutError(f"Timeout uploading from file {fl} with timeout 0.001s"),
+            RemoteTimeoutError(f"Timeout uploading from file {fl} with timeout 0.001s"),
             timeout_sec=0.001)
 
 
