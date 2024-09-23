@@ -18,11 +18,12 @@ from typing import Self
 
 from cdmtaskservice.arg_checkers import not_falsy, require_string, check_int
 from cdmtaskservice.nersc import remote
-from cdmtaskservice.s3.client import S3ObjectMeta
+from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
 
 # This is mostly tested manually to avoid modifying files at NERSC.
 
 # TODO TEST add tests in test_manual
+# TODO TEST add automated tests for stuff that doesn't contact nersc (arg checks etc.)
 # TODO ERRORHANDLING wrap sfapi errors in server specific errors
 
 # TODO CLEANUP clean up old code versions @NERSC somehow. Not particularly important
@@ -221,13 +222,48 @@ class NERSCManager:
         """
         maniio = self._create_download_manifest(
             job_id, objects, presigned_urls, concurrency, insecure_ssl)
-        path = Path("$SCRATCH") / _MANIFEST_ROOT_DIR / job_id / f"download_manifest.json"
+        return await self._process_manifest(
+            maniio, job_id, callback_url, "download_manifest.json", "download")
+    
+    async def upload_s3_files(
+        self,
+        job_id: str,
+        remote_files: list[Path],
+        presigned_urls: list[S3PresignedPost],
+        callback_url: str,
+        concurrency: int = 10,
+        insecure_ssl: bool = False
+    ) -> str:
+        """
+        Upload a set of files to an S3 instance from NERSC.
+        
+        job_id - the ID of the job for which the files are being transferred. 
+            This must be a unique ID, and no other transfers should be occurring for the job.
+        remote_files - the files to upload.
+        presigned_urls - the presigned upload URLs for each file, in the same order as
+            the file.
+        callback_url - the URL to provide to NERSC as a callback for when the upload is
+            complete.
+        concurrency - the number of simultaneous uploads to process.
+        insecure_ssl - whether to skip the cert check for the S3 URL.
+        
+        Returns the NERSC task ID for the upload.
+        """
+        maniio = self._create_upload_manifest(
+            remote_files, presigned_urls, concurrency, insecure_ssl)
+        return await self._process_manifest(
+            maniio, job_id, callback_url, "upload_manifest.json", "upload")
+    
+    async def _process_manifest(
+        self, manifest: io.BytesIO, job_id: str, callback_url: str, filename: str, task_type: str
+    ):
+        path = Path("$SCRATCH") / _MANIFEST_ROOT_DIR / job_id / filename
         async with AsyncClient(
             api_base_url=_URL_API, access_token=await self._cl_tkn_provider()
         ) as cli:
             dtn = await cli.compute(Machine.dtns)
             # TODO CLEANUP manifests after some period of time
-            await self._upload_file_to_nersc(dtn, path, bio=maniio)
+            await self._upload_file_to_nersc(dtn, path, bio=manifest)
             command = (
                 "bash -c '"
                     + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
@@ -242,7 +278,8 @@ class NERSCManager:
             # TODO LOGGING figure out how to handle logging, see other logging todos
             # log task ID in case the next step fails
             # Could maybe pass in a task ID receiver or something?
-            logging.getLogger(__name__).info(f"Created upload task with id {task_id}")
+            logging.getLogger(__name__).info(
+                f"Created {task_type} task with id {task_id} for job {job_id}")
         callback = {
             # TODO PROD what happens in a timeout? Nothing? the callback triggers?
             "timeout": _MAX_CALLBACK_TIMEOUT,
@@ -260,13 +297,13 @@ class NERSCManager:
         return task_id
     
     def _create_download_manifest(
-            self,
-            job_id: str,
-            objects: list[S3ObjectMeta],
-            presigned_urls: list[str],
-            concurrency: int,
-            insecure_ssl: bool,
-        ) -> io.BytesIO:
+        self,
+        job_id: str,
+        objects: list[S3ObjectMeta],
+        presigned_urls: list[str],
+        concurrency: int,
+        insecure_ssl: bool,
+    ) -> io.BytesIO:
         require_string(job_id, "job_id")
         not_falsy(objects, "objects")
         not_falsy(presigned_urls, "presigned_urls")
@@ -287,6 +324,35 @@ class NERSCManager:
                         "partsize": meta.effective_part_size,
                         "size": meta.size,
                     } for url, meta in zip(presigned_urls, objects)
+                ]
+            }
+        }
+        return io.BytesIO(json.dumps(manifest).encode())
+    
+    def _create_upload_manifest(
+        self,
+        remote_files: list[Path],
+        presigned_urls: list[S3PresignedPost],
+        concurrency: int,
+        insecure_ssl: bool,
+    ) -> io.BytesIO:
+        not_falsy(remote_files, "remote_files")
+        not_falsy(presigned_urls, "presigned_urls")
+        if len(remote_files) != len(presigned_urls):
+            raise ValueError("Must provide same number of files and urls")
+        manifest = {
+            "file-transfers": {
+                "op": "upload",
+                "concurrency": check_int(concurrency, "concurrency"),
+                "insecure-ssl": insecure_ssl,
+                "min-timeout-sec": _MIN_TIMEOUT_SEC,
+                "sec-per-GB": _SEC_PER_GB,
+                "files": [
+                    {
+                        "url": url.url,
+                        "fields": url.fields,
+                        "file": str(file),
+                    } for url, file in zip(presigned_urls, remote_files)
                 ]
             }
         }

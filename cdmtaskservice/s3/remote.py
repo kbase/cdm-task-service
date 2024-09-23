@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Awaitable
 import zlib
 
-# Probably not necessary, but coould look into aiofiles for some of these methods
+# Probably not necessary, but could look into aiofiles for some of these methods
 # Potential future (minor) performance improvement, but means more installs on remote clusters
 
 _CHUNK_SIZE_64KB = 2 ** 16
@@ -122,7 +122,7 @@ async def download_presigned_url(
     tout = aiohttp.ClientTimeout(total=timeout_sec)
     try:
         async with session.get(url, ssl=not insecure_ssl, timeout=tout) as resp:
-            if resp.status > 199 and resp.status < 300:  # redirects are handled automatically
+            if 199 < resp.status < 300:  # redirects are handled automatically
                 serv_etag = resp.headers["Etag"].strip('"')
                 if etag and etag != serv_etag:
                     raise FileChangeError(
@@ -137,7 +137,7 @@ async def download_presigned_url(
                 err = await resp.read()
                 raise TransferError(f"GET URL: {url.split('?')[0]} {resp.status}\nError:\n{err}")
     except asyncio.TimeoutError as e:
-        raise TimeoutError(f"Timeout downloading to file {outputpath} with timeout {timeout_sec}s"
+        raise RemoteTimeoutError(f"Timeout downloading to file {outputpath} with timeout {timeout_sec}s"
                            ) from e
     got_etag = calculate_etag(outputpath, partsize)
     if got_etag != serv_etag:
@@ -190,7 +190,7 @@ async def upload_presigned_url(
                     raise TransferError(
                         f"POST URL: {url} Key: {fields['key']} {resp.status}\nError:\n{err}")
         except asyncio.TimeoutError as e:
-            raise TimeoutError(f"Timeout uploading from file {infile} with timeout {timeout_sec}s"
+            raise RemoteTimeoutError(f"Timeout uploading from file {infile} with timeout {timeout_sec}s"
                                ) from e
 
 
@@ -268,6 +268,11 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
     # its structure.
     # Similarly, it should only be produced and consumed by the service, and so we don't
     # stress error checking too much.
+    # Potential performance improvements:
+    # * aiofiles
+    # * Add multiprocessing; not clear if helpful given low CPU load expected 
+    # * See if multipart uploads are possible with presigned urls
+    #   * Presumably only helpful if disk reads are the bottleneck
     # TODO TEST add tests for this and its dependency functions.
     _not_falsy(manifest, "manifest")
     func = _OP_TO_FUNC.get(manifest["op"])
@@ -335,7 +340,7 @@ class TransferError(Exception):
     """ Thrown when a S3 transfer fails. """
 
 
-class TimeoutError(TransferError):
+class RemoteTimeoutError(TransferError):
     """ Thrown when a S3 transfer timesout. """
 
 
