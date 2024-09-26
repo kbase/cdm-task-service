@@ -30,10 +30,8 @@ from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
 
 # hard code the API version 
 _URL_API = "https://api.nersc.gov/api/v1.2"
-_URL_API_BETA = "https://api.nersc.gov/api/beta"
 _COMMAND_PATH = "utilities/command"
 
-_MAX_CALLBACK_TIMEOUT = 3 * 24 * 3600
 _MIN_TIMEOUT_SEC = 300
 _SEC_PER_GB = 2 * 60  # may want to make this configurable
 
@@ -106,7 +104,8 @@ class NERSCManager:
         """
         Create the NERSC manager.
         
-        client_token_provider - a function that provides a valid client token.
+        client_token_provider - a function that provides a valid client token. It is assumed that
+            the user associated with the token does not change.
         nersc_code_path - the path in which to store remote code at NERSC. It is advised to
             include version information in the path to avoid code conflicts.
         jaws_root_path - the path under which input files should be stored such that they're
@@ -138,6 +137,7 @@ class NERSCManager:
             api_base_url=_URL_API, access_token=await self._cl_tkn_provider()
         ) as cli:
             perlmutter = await cli.compute(Machine.perlmutter)
+            dtns = await cli.compute(Machine.dtns)
             async with asyncio.TaskGroup() as tg:
                 for mod in _CTS_DEPENDENCIES:
                     target = self._nersc_code_path
@@ -154,6 +154,7 @@ class NERSCManager:
                     bio=io.BytesIO(_PROCESS_DATA_XFER_MANIFEST.encode()),
                     make_exe=True,
                 ))
+                res = tg.create_task(dtns.run('bash -c "echo $SCRATCH"'))
                 if _PIP_DEPENDENCIES:
                     deps = " ".join(
                         # may need to do something else if module doesn't have __version__
@@ -167,6 +168,7 @@ class NERSCManager:
                              + f"pip install {deps}"  # adding notapackage causes a failure
                          + '"')
                     tg.create_task(perlmutter.run(command))
+            self._dtn_scratch = Path(res.result().strip())
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
@@ -257,7 +259,7 @@ class NERSCManager:
     async def _process_manifest(
         self, manifest: io.BytesIO, job_id: str, callback_url: str, filename: str, task_type: str
     ):
-        path = Path("$SCRATCH") / _MANIFEST_ROOT_DIR / job_id / filename
+        path = self._dtn_scratch / _MANIFEST_ROOT_DIR / job_id / filename
         async with AsyncClient(
             api_base_url=_URL_API, access_token=await self._cl_tkn_provider()
         ) as cli:
@@ -280,20 +282,7 @@ class NERSCManager:
             # Could maybe pass in a task ID receiver or something?
             logging.getLogger(__name__).info(
                 f"Created {task_type} task with id {task_id} for job {job_id}")
-        callback = {
-            # TODO PROD what happens in a timeout? Nothing? the callback triggers?
-            "timeout": _MAX_CALLBACK_TIMEOUT,
-            "url": callback_url,
-            "path_condition": {
-                "path": str(path) + ".complete",
-                "machine": Machine.dtns,
-            }
-        }
-        # TODO NERSCFEATURE use callback specific methods when client supports and remove beta
-        async with AsyncClient(
-            api_base_url=_URL_API_BETA, access_token=await self._cl_tkn_provider()
-        ) as cli:
-            await cli.post("callback/", json=callback)
+        # TDOO CALLBACK readd callback. The current method was erroring and we're switching anyway
         return task_id
     
     def _create_download_manifest(
