@@ -50,12 +50,12 @@ module load python
 
 export PYTHONPATH=$CTS_CODE_LOCATION
 export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
-export CTS_TOUCH_ON_COMPLETE=$CTS_TOUCH_ON_COMPLETE
+export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
 export SCRATCH=$SCRATCH
 
 echo "PYTHONPATH=[$PYTHONPATH]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
-echo "CTS_TOUCH_ON_COMPLETE=[$CTS_TOUCH_ON_COMPLETE]"
+echo "CTS_CALLBACK_URL=[$CTS_CALLBACK_URL]"
 echo "SCRATCH=[$SCRATCH]"
 
 python $CTS_CODE_LOCATION/{"/".join(remote.__name__.split("."))}.py
@@ -270,19 +270,15 @@ class NERSCManager:
                 "bash -c '"
                     + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
                     + f"export CTS_MANIFEST_LOCATION={path}; "
-                    + f"export CTS_TOUCH_ON_COMPLETE={str(path) + '.complete'}; "
+                    + f"export CTS_CALLBACK_URL={callback_url}; "
                     + f"export SCRATCH=$SCRATCH; "
                     + f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}'
                 + "'"
             )
-            # TODO NERSCFEATURE send call back with command when NERSC supports
             task_id  = (await self._run_command(cli, Machine.dtns, command))["task_id"]
             # TODO LOGGING figure out how to handle logging, see other logging todos
-            # log task ID in case the next step fails
-            # Could maybe pass in a task ID receiver or something?
             logging.getLogger(__name__).info(
                 f"Created {task_type} task with id {task_id} for job {job_id}")
-        # TDOO CALLBACK readd callback. The current method was erroring and we're switching anyway
         return task_id
     
     def _create_download_manifest(
@@ -298,25 +294,17 @@ class NERSCManager:
         not_falsy(presigned_urls, "presigned_urls")
         if len(objects) != len(presigned_urls):
             raise ValueError("Must provide same number of paths and urls")
-        manifest = {
-            "file-transfers": {
-                "op": "download",
-                "concurrency": check_int(concurrency, "concurrency"),
-                "insecure-ssl": insecure_ssl,
-                "min-timeout-sec": _MIN_TIMEOUT_SEC,
-                "sec-per-GB": _SEC_PER_GB,
-                "files": [
-                    {
-                        "url": url,
-                        "outputpath": str(self._jaws_root_path / job_id / meta.path),
-                        "etag": meta.e_tag,
-                        "partsize": meta.effective_part_size,
-                        "size": meta.size,
-                    } for url, meta in zip(presigned_urls, objects)
-                ]
-            }
-        }
-        return io.BytesIO(json.dumps(manifest).encode())
+        manifest = self._base_manifest("download", concurrency, insecure_ssl)
+        manifest["files"] = [
+            {
+                "url": url,
+                "outputpath": str(self._jaws_root_path / job_id / meta.path),
+                "etag": meta.e_tag,
+                "partsize": meta.effective_part_size,
+                "size": meta.size,
+            } for url, meta in zip(presigned_urls, objects)
+        ]
+        return io.BytesIO(json.dumps({"file-transfers": manifest}).encode())
     
     def _create_upload_manifest(
         self,
@@ -329,20 +317,21 @@ class NERSCManager:
         not_falsy(presigned_urls, "presigned_urls")
         if len(remote_files) != len(presigned_urls):
             raise ValueError("Must provide same number of files and urls")
-        manifest = {
-            "file-transfers": {
-                "op": "upload",
-                "concurrency": check_int(concurrency, "concurrency"),
-                "insecure-ssl": insecure_ssl,
-                "min-timeout-sec": _MIN_TIMEOUT_SEC,
-                "sec-per-GB": _SEC_PER_GB,
-                "files": [
-                    {
-                        "url": url.url,
-                        "fields": url.fields,
-                        "file": str(file),
-                    } for url, file in zip(presigned_urls, remote_files)
-                ]
-            }
+        manifest = self._base_manifest("upload", concurrency, insecure_ssl)
+        manifest["files"] = [
+            {
+                "url": url.url,
+                "fields": url.fields,
+                "file": str(file),
+            } for url, file in zip(presigned_urls, remote_files)
+        ]
+        return io.BytesIO(json.dumps({"file-transfers": manifest}).encode())
+    
+    def _base_manifest(self, op: str, concurrency: int, insecure_ssl: bool):
+        return {
+            "op": op,
+            "concurrency": check_int(concurrency, "concurrency"),
+            "insecure-ssl": insecure_ssl,
+            "min-timeout-sec": _MIN_TIMEOUT_SEC,
+            "sec-per-GB": _SEC_PER_GB,
         }
-        return io.BytesIO(json.dumps(manifest).encode())
