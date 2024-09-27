@@ -28,6 +28,8 @@ def process_data_transfer_manifest(manifest_file_path: str, callback_url: str):
     # Similarly, it should only be produced and consumed by the service, and so we don't
     # stress error checking too much.
     # TODO TEST add tests for this and its dependency functions, including logging
+    # Potential performance improvement could include a shared cross job cache for files
+    #    only useful if jobs are reusing the same files, whcih seems def possible
     log = logging.getLogger(__name__)
     try:
         with open(manifest_file_path) as f:

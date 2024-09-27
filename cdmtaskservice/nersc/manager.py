@@ -97,6 +97,8 @@ class NERSCManager:
     @classmethod
     async def create(
         cls,
+        # TODO replace this with a client provider and let the client manage the token.
+        #      means the client can update the token while polling
         client_token_provider: Awaitable[[], str],
         nersc_code_path: Path,
         jaws_root_path: Path,
