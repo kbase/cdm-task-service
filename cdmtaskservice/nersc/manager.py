@@ -28,8 +28,6 @@ from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
 
 # TODO CLEANUP clean up old code versions @NERSC somehow. Not particularly important
 
-# hard code the API version 
-_URL_API = "https://api.nersc.gov/api/v1.2"
 _COMMAND_PATH = "utilities/command"
 
 _MIN_TIMEOUT_SEC = 300
@@ -38,7 +36,6 @@ _SEC_PER_GB = 2 * 60  # may want to make this configurable
 _MANIFEST_ROOT_DIR = Path("cdm_task_service")
 
 # TODO PROD add start and end time to task output and record
-# TODO TICKET ask NERSC for start & completion times for tasks
 # TODO NERSCFEATURE if NERSC puts python 3.11 on the dtns revert to regular load 
 _PYTHON_LOAD_HACK = "module use /global/common/software/nersc/pe/modulefiles/latest"
 _PROCESS_DATA_XFER_MANIFEST_FILENAME = "process_data_transfer_manifest.sh"
@@ -85,9 +82,6 @@ def _get_dependencies(mod: ModuleType, cts_dep: set[ModuleType], pip_dep: set[Mo
             pip_dep.add(m)
 _get_dependencies(remote, _CTS_DEPENDENCIES, _PIP_DEPENDENCIES)
 
-# TODO AUTH use authlib's AsyncOAuth2Client ensure_active_token to get tokens, otherwise
-# there's a new token call every time the client is created
-
 
 class NERSCManager:
     """
@@ -97,33 +91,31 @@ class NERSCManager:
     @classmethod
     async def create(
         cls,
-        # TODO replace this with a client provider and let the client manage the token.
-        #      means the client can update the token while polling
-        client_token_provider: Awaitable[[], str],
+        client_provider: Awaitable[[], AsyncClient],
         nersc_code_path: Path,
         jaws_root_path: Path,
     ) -> Self:
         """
         Create the NERSC manager.
         
-        client_token_provider - a function that provides a valid client token. It is assumed that
-            the user associated with the token does not change.
+        client_provider - a function that provides a valid SFAPI client. It is assumed that
+            the user associated with the client does not change.
         nersc_code_path - the path in which to store remote code at NERSC. It is advised to
             include version information in the path to avoid code conflicts.
         jaws_root_path - the path under which input files should be stored such that they're
             available to JAWS.
         """
-        nm = NERSCManager(client_token_provider, nersc_code_path, jaws_root_path)
+        nm = NERSCManager(client_provider, nersc_code_path, jaws_root_path)
         await nm._setup_remote_code()
         return nm
         
     def __init__(
             self,
-            client_token_provider: Awaitable[[], str],
+            client_provider: Awaitable[[], str],
             nersc_code_path: Path,
             jaws_root_path: Path,
         ):
-        self._cl_tkn_provider = not_falsy(client_token_provider, "client_token_provider")
+        self._client_provider = not_falsy(client_provider, "client_provider")
         self._nersc_code_path = self._check_path(nersc_code_path, "nersc_code_path")
         self._jaws_root_path = self._check_path(jaws_root_path, "jaws_root_path")
 
@@ -135,42 +127,40 @@ class NERSCManager:
         return path
 
     async def _setup_remote_code(self):
-        async with AsyncClient(
-            api_base_url=_URL_API, access_token=await self._cl_tkn_provider()
-        ) as cli:
-            perlmutter = await cli.compute(Machine.perlmutter)
-            dtns = await cli.compute(Machine.dtns)
-            async with asyncio.TaskGroup() as tg:
-                for mod in _CTS_DEPENDENCIES:
-                    target = self._nersc_code_path
-                    for module in mod.__name__.split("."):
-                        target = target / module
-                    tg.create_task(self._upload_file_to_nersc(
-                        perlmutter,
-                        target.with_suffix(".py"),
-                        file=mod.__file__)
-                    )
+        cli = self._client_provider()
+        perlmutter = await cli.compute(Machine.perlmutter)
+        dtns = await cli.compute(Machine.dtns)
+        async with asyncio.TaskGroup() as tg:
+            for mod in _CTS_DEPENDENCIES:
+                target = self._nersc_code_path
+                for module in mod.__name__.split("."):
+                    target = target / module
                 tg.create_task(self._upload_file_to_nersc(
                     perlmutter,
-                    self._nersc_code_path / _PROCESS_DATA_XFER_MANIFEST_FILENAME,
-                    bio=io.BytesIO(_PROCESS_DATA_XFER_MANIFEST.encode()),
-                    make_exe=True,
-                ))
-                res = tg.create_task(dtns.run('bash -c "echo $SCRATCH"'))
-                if _PIP_DEPENDENCIES:
-                    deps = " ".join(
-                        # may need to do something else if module doesn't have __version__
-                        [f"{mod.__name__}=={mod.__version__}" for mod in _PIP_DEPENDENCIES])
-                    command = (
-                        'bash -c "'
-                             + f"{_PYTHON_LOAD_HACK}; "
-                             + f"module load python; "
-                             # Unlikely, but this could cause problems if multiple versions
-                             # of the server are running at once. Don't worry about it for now 
-                             + f"pip install {deps}"  # adding notapackage causes a failure
-                         + '"')
-                    tg.create_task(perlmutter.run(command))
-            self._dtn_scratch = Path(res.result().strip())
+                    target.with_suffix(".py"),
+                    file=mod.__file__)
+                )
+            tg.create_task(self._upload_file_to_nersc(
+                perlmutter,
+                self._nersc_code_path / _PROCESS_DATA_XFER_MANIFEST_FILENAME,
+                bio=io.BytesIO(_PROCESS_DATA_XFER_MANIFEST.encode()),
+                make_exe=True,
+            ))
+            res = tg.create_task(dtns.run('bash -c "echo $SCRATCH"'))
+            if _PIP_DEPENDENCIES:
+                deps = " ".join(
+                    # may need to do something else if module doesn't have __version__
+                    [f"{mod.__name__}=={mod.__version__}" for mod in _PIP_DEPENDENCIES])
+                command = (
+                    'bash -c "'
+                         + f"{_PYTHON_LOAD_HACK}; "
+                         + f"module load python; "
+                         # Unlikely, but this could cause problems if multiple versions
+                         # of the server are running at once. Don't worry about it for now 
+                         + f"pip install {deps}"  # adding notapackage causes a failure
+                     + '"')
+                tg.create_task(perlmutter.run(command))
+        self._dtn_scratch = Path(res.result().strip())
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
@@ -197,7 +187,7 @@ class NERSCManager:
         else:
             await asrp.upload(bio)
         if make_exe:
-            cmd = f'bash -c "chmod a+x {target}"'
+            cmd = f'bash -c "chmod u+x {target}"'
             await compute.run(cmd)
 
     async def download_s3_files(
@@ -262,25 +252,23 @@ class NERSCManager:
         self, manifest: io.BytesIO, job_id: str, callback_url: str, filename: str, task_type: str
     ):
         path = self._dtn_scratch / _MANIFEST_ROOT_DIR / job_id / filename
-        async with AsyncClient(
-            api_base_url=_URL_API, access_token=await self._cl_tkn_provider()
-        ) as cli:
-            dtn = await cli.compute(Machine.dtns)
-            # TODO CLEANUP manifests after some period of time
-            await self._upload_file_to_nersc(dtn, path, bio=manifest)
-            command = (
-                "bash -c '"
-                    + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
-                    + f"export CTS_MANIFEST_LOCATION={path}; "
-                    + f"export CTS_CALLBACK_URL={callback_url}; "
-                    + f"export SCRATCH=$SCRATCH; "
-                    + f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}'
-                + "'"
-            )
-            task_id  = (await self._run_command(cli, Machine.dtns, command))["task_id"]
-            # TODO LOGGING figure out how to handle logging, see other logging todos
-            logging.getLogger(__name__).info(
-                f"Created {task_type} task with id {task_id} for job {job_id}")
+        cli = self._client_provider()
+        dtn = await cli.compute(Machine.dtns)
+        # TODO CLEANUP manifests after some period of time
+        await self._upload_file_to_nersc(dtn, path, bio=manifest)
+        command = (
+            "bash -c '"
+                + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
+                + f"export CTS_MANIFEST_LOCATION={path}; "
+                + f"export CTS_CALLBACK_URL={callback_url}; "
+                + f"export SCRATCH=$SCRATCH; "
+                + f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}'
+            + "'"
+        )
+        task_id  = (await self._run_command(cli, Machine.dtns, command))["task_id"]
+        # TODO LOGGING figure out how to handle logging, see other logging todos
+        logging.getLogger(__name__).info(
+            f"Created {task_type} task with id {task_id} for job {job_id}")
         return task_id
     
     def _create_download_manifest(
