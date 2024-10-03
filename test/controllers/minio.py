@@ -96,7 +96,7 @@ class MinioController:
 
     async def get_object(self, bucket, key) -> dict[str, Any]:
         async with self.get_client() as client:
-            return await client.get_object(Bucket=bucket, Key=key)
+            return await client.get_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
 
     async def upload_file(self, path, main_part, num_main_parts=1, last_part=None
     ) -> dict[str, Any]:

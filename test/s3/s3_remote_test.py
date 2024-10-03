@@ -239,13 +239,12 @@ async def test_upload_presigned_url(minio):
         expectedfile = f.read()
     objdata = await minio.get_object("test-bucket", "foo/myfile")
     objdatacrc = await minio.get_object("test-bucket", "bar/myfilecrc")
-    # It seems that the ChecksumCRC32 field is not returned from Minio as documented in S3
-    # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3/client/get_object.html
     
-    for o in (objdata, objdatacrc):
+    for o, crc in ((objdata, None), (objdatacrc, "T/xSCA==")):
         body = await o["Body"].read()
         assert body == expectedfile
         assert o["ETag"] == '"3291fbb392f6fad06dbf331dfb74da81"'
+        assert o.get("ChecksumCRC32") == crc
 
 
 @pytest.mark.asyncio
@@ -259,33 +258,15 @@ async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
         # There's no a lot to test with insecure ssl other than it doesn't break things
         # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
         await upload_presigned_url_with_crc32(
-            sess, url.url, url.fields, TEST_RAND10KB, insecure_ssl=True, timeout_sec=5)
-    with open(TEST_RAND10KB, "rb") as f:
+            sess, url.url, url.fields, TEST_RAND1KB, insecure_ssl=True, timeout_sec=5)
+    with open(TEST_RAND1KB, "rb") as f:
         expectedfile = f.read()
     objdata = await minio.get_object("test-bucket", "foo/myfile")
-    # It seems that the ChecksumCRC32 field is not returned from Minio as documented in S3
-    # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3/client/get_object.html
     
     body = await objdata["Body"].read()
     assert body == expectedfile
-    assert objdata["ETag"] == '"3291fbb392f6fad06dbf331dfb74da81"'
-
-
-@pytest.mark.asyncio
-async def test_upload_presigned_url_with_crc_internals(minio):
-    # this test just checks that the crc is being sent to the regular upload method
-    # correctly, since it's invisible otherwise. There's no way to submit an incorrect CRC
-    # and check that it fails, for example.
-    # TODO TEST if Minio ever returns the CRC in a get_object just check that.
-    s3c = await _client(minio)
-    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
-    with mock.patch("cdmtaskservice.s3.remote.upload_presigned_url") as method:
-        async with aiohttp.ClientSession() as sess:
-            await upload_presigned_url_with_crc32(sess, url.url, url.fields, TEST_RAND10KB)
-            fields = dict(url.fields)
-            fields["x-amz-checksum-crc32"] = "T/xSCA=="
-        method.assert_called_once_with(
-            sess, url.url, fields, TEST_RAND10KB, insecure_ssl=False, timeout_sec=600)
+    assert objdata["ETag"] == '"b10278db14633f102103c5e9d75c0af0"'
+    assert objdata["ChecksumCRC32"] == "7Zpusw=="
 
 
 @pytest.mark.asyncio
