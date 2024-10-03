@@ -33,7 +33,7 @@ _COMMAND_PATH = "utilities/command"
 _MIN_TIMEOUT_SEC = 300
 _SEC_PER_GB = 2 * 60  # may want to make this configurable
 
-_MANIFEST_ROOT_DIR = Path("cdm_task_service")
+_CTS_SCRATCH_ROOT_DIR = Path("cdm_task_service")
 
 # TODO PROD add start and end time to task output and record
 # TODO NERSCFEATURE if NERSC puts python 3.11 on the dtns revert to regular load 
@@ -93,7 +93,6 @@ class NERSCManager:
         cls,
         client_provider: Awaitable[[], AsyncClient],
         nersc_code_path: Path,
-        jaws_root_path: Path,
     ) -> Self:
         """
         Create the NERSC manager.
@@ -102,10 +101,8 @@ class NERSCManager:
             the user associated with the client does not change.
         nersc_code_path - the path in which to store remote code at NERSC. It is advised to
             include version information in the path to avoid code conflicts.
-        jaws_root_path - the path under which input files should be stored such that they're
-            available to JAWS.
         """
-        nm = NERSCManager(client_provider, nersc_code_path, jaws_root_path)
+        nm = NERSCManager(client_provider, nersc_code_path)
         await nm._setup_remote_code()
         return nm
         
@@ -113,11 +110,9 @@ class NERSCManager:
             self,
             client_provider: Awaitable[[], str],
             nersc_code_path: Path,
-            jaws_root_path: Path,
         ):
         self._client_provider = not_falsy(client_provider, "client_provider")
         self._nersc_code_path = self._check_path(nersc_code_path, "nersc_code_path")
-        self._jaws_root_path = self._check_path(jaws_root_path, "jaws_root_path")
 
     def _check_path(self, path: Path, name: str):
         not_falsy(path, name)
@@ -251,7 +246,7 @@ class NERSCManager:
     async def _process_manifest(
         self, manifest: io.BytesIO, job_id: str, callback_url: str, filename: str, task_type: str
     ):
-        path = self._dtn_scratch / _MANIFEST_ROOT_DIR / job_id / filename
+        path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job_id / filename
         cli = self._client_provider()
         dtn = await cli.compute(Machine.dtns)
         # TODO CLEANUP manifests after some period of time
@@ -288,7 +283,12 @@ class NERSCManager:
         manifest["files"] = [
             {
                 "url": url,
-                "outputpath": str(self._jaws_root_path / job_id / meta.path),
+                # TODO CACHING have the remote code make a file cache - just give it the root,
+                #              job ID and the minio path and have it handle the rest.
+                #              This allows JAWS / Cromwell to cache the files if they have the
+                #              same path, which they won't if there's a job ID in the mix
+                "outputpath": str(self._dtn_scratch / 
+                                  _CTS_SCRATCH_ROOT_DIR/ job_id / "files" / meta.path),
                 "etag": meta.e_tag,
                 "partsize": meta.effective_part_size,
                 "size": meta.size,
