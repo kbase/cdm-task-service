@@ -6,7 +6,7 @@ from cdmtaskservice.dockerimages import (
     DockerImageInfo,
     ImageNameParseError,
     CranePathError,
-    DigestFetchError,
+    ImageInfoFetchError,
 )
 import config as testcfg
 from conftest import assert_exception_correct
@@ -29,7 +29,7 @@ async def test_create_fail_invalid_crane_path():
 
 
 @pytest.mark.asyncio
-async def test_get_digest_from_name_succeed():
+async def test_get_digest_from_name():
     ws0_15_0_sha = "sha256:7e41821daf50abcd511654ddd9bdf66ed6374a30a1d62547631e79dcbe4ad92e"
     ws0_10_2_sha = "sha256:285b1229730192eac5b502c44bfffff98e9840057821d1a26bed47a05bc44874"
     # no longer pushing to dockerhub so this shouldn't change, unlike ghcr
@@ -43,14 +43,29 @@ async def test_get_digest_from_name_succeed():
         "kbase/workspace_deluxe": ws_docker_latest,
         "kbase/workspace_deluxe:latest": ws_docker_latest,
     }
+    dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
     for k, v in testset.items():
-        dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
         dig = await dii.get_digest_from_name(k)
         assert dig == v
 
 
 @pytest.mark.asyncio
-async def test_get_digest_from_name_fail():
+async def test_get_entrypoint_from_name():
+    testset = {
+        "ghcr.io/kbase/workspace_deluxe:0.15.0": ["/kb/deployment/bin/dockerize"],
+        "ghcr.io/kbaseapps/kb_quast:pr-36": ["./scripts/entrypoint.sh"],
+        "library/ubuntu:24.04": None,
+        "ghcr.io/kbase/collections:checkm2_0.1.6":
+            ["/app/collections/src/loaders/compute_tools/entrypoint.sh"],
+    }
+    dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
+    for k, v in testset.items():
+        ep = await dii.get_entrypoint_from_name(k)
+        assert ep == v
+
+
+@pytest.mark.asyncio
+async def test_image_methods_fail():
     testset = {
         None: ImageNameParseError("No image name provided"),
         "gc_hr.io/kbase/workspace_deluxe:0.15.0": ImageNameParseError(
@@ -65,35 +80,44 @@ async def test_get_digest_from_name_fail():
         "ghcr.io/kbase/Workspace_deluxe:0.15.0": ImageNameParseError(
             "path or tag contains upper case characters in image name "
             + "'ghcr.io/kbase/Workspace_deluxe:0.15.0'"),
-        "superfakehostforrealihope.io/kbase/workspace_deluxe:0.15.0": DigestFetchError(
-            "Failed to get digest for image superfakehostforrealihope.io/kbase/workspace_deluxe:"
+        "superfakehostforrealihope.io/kbase/workspace_deluxe:0.15.0": ImageInfoFetchError(
+            "Failed to access information for image "
+            + "superfakehostforrealihope.io/kbase/workspace_deluxe:"
             + "0.15.0. Error code was: no such host"),
         # note misspelling of ghcr
-        "gchr.io/kbase/workspace_deluxe:0.15.0": DigestFetchError(
-            "Failed to get digest for image gchr.io/kbase/workspace_deluxe:0.15.0. "
+        "gchr.io/kbase/workspace_deluxe:0.15.0": ImageInfoFetchError(
+            "Failed to access information for image gchr.io/kbase/workspace_deluxe:0.15.0. "
             + "Error code was: handshake failure"),
-        "hcr.io/kbase/workspace_deluxe:0.15.0": DigestFetchError(
-            "Failed to get digest for image hcr.io/kbase/workspace_deluxe:0.15.0. "
+        "hcr.io/kbase/workspace_deluxe:0.15.0": ImageInfoFetchError(
+            "Failed to access information for image hcr.io/kbase/workspace_deluxe:0.15.0. "
             + "Image was not found on the host"),
-        "ghcr.io/kbase/workspace_not_deluxe:0.15.0": DigestFetchError(
-            "Failed to get digest for image ghcr.io/kbase/workspace_not_deluxe:0.15.0. "
+        "ghcr.io/kbase/workspace_not_deluxe:0.15.0": ImageInfoFetchError(
+            "Failed to access information for image ghcr.io/kbase/workspace_not_deluxe:0.15.0. "
             + "Error code was: requested access to the resource is denied"),
     }
+    dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
     for k, v in testset.items():
         with pytest.raises(Exception) as got:
-            dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
             await dii.get_digest_from_name(k)
+        assert_exception_correct(got.value, v)
+        with pytest.raises(Exception) as got:
+            await dii.get_entrypoint_from_name(k)
         assert_exception_correct(got.value, v)
 
 
+
 @pytest.mark.asyncio
-async def test_get_digest_from_name_fail_bad_chars():
+async def test_image_methods_fail_bad_chars():
     # test some of the scary chars for shell injection
+    dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
     for c in "[]$()`&|<>;,\n{}'\"":
         name = f"kbase/workspace{c}deluxe"
-        with pytest.raises(Exception) as got:
-            dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
-            await dii.get_digest_from_name(name)
-        assert_exception_correct(got.value, ImageNameParseError(
+        err = ImageNameParseError(
             "path or tag contains non-alphanumeric characters other than '_-:.@' "
-            + f"in image name '{name}'"))
+            + f"in image name '{name}'")
+        with pytest.raises(Exception) as got:
+            await dii.get_digest_from_name(name)
+        assert_exception_correct(got.value, err)
+        with pytest.raises(Exception) as got:
+            await dii.get_entrypoint_from_name(name)
+        assert_exception_correct(got.value, err)
