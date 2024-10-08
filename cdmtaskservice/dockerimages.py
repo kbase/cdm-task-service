@@ -10,6 +10,7 @@ Contains code for querying container information without access to a docker serv
 # I didn't find it.
 
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
@@ -53,8 +54,11 @@ class DockerImageInfo:
         Assumes that a namespace is always present (so names like `image:tag` will be rejected)
         and the path always has 2 components, the namespace and the image name.
         """
+        return await self._validate_and_run_crane(image_name, "digest")
+    
+    async def _validate_and_run_crane(self, image_name: str, command: str) -> str:
         image_name = _validate_image_name(image_name)
-        retcode, stdo, stde = await self._run_crane("digest", image_name)
+        retcode, stdo, stde = await self._run_crane(command, image_name)
         if retcode > 0:
             # TODO LOGGING figure out how this is going to work, want to associate logs with
             #              user names, ips, etc.
@@ -64,16 +68,34 @@ class DockerImageInfo:
                 f"crane lookup of image {image_name} failed, retcode: {retcode}, stderr:\n{stde}")
             # special case when crane spits out html and the regular error parsing doesn't work
             if "404 not found" in stde.lower():
-                raise DigestFetchError(
-                    f"Failed to get digest for image {image_name}. "
+                raise ImageInfoFetchError(
+                    f"Failed to access information for image {image_name}. "
                     + "Image was not found on the host")
             # This is pretty fragile for non-docker repository hosts.
             # Not really sure what else to do here
             # Allowlist for hosts?
             errcode = stde.split("\n")[-1].split(':')[-1].strip()
-            raise DigestFetchError(
-                f"Failed to get digest for image {image_name}. Error code was: {errcode}")
+            raise ImageInfoFetchError(
+                f"Failed to access information for image {image_name}. Error code was: {errcode}")
         return stdo
+
+    async def get_entrypoint_from_name(self, image_name: str) -> list[str] | None:
+        """
+        Get the image entrypoint given the image name.
+        
+        Assumes that a namespace is always present (so names like `image:tag` will be rejected)
+        and the path always has 2 components, the namespace and the image name.
+        
+        Returns None if there is no entrypoint.
+        """
+        ret = await self._validate_and_run_crane(image_name, "config")
+        try:
+            cfg = json.loads(ret)
+        except json.JSONDecodeError as e:
+            # Can't think of a good way to test this
+            raise ImageInfoFetchError(
+                f"Unable to parse response for remote image {image_name} into JSON: {e}") from e
+        return cfg["config"].get("Entrypoint")
 
     async def _run_crane(self, *args) -> (int, str, str):
         # crane has very small output so just buffer in memory
@@ -150,5 +172,5 @@ class ImageNameParseError(ImageInfoError):
     """ Thrown when an image name couldn't be parsed. """
 
 
-class DigestFetchError(ImageInfoError):
-    """ Thrown when an error occurs fetching a digest for an image. """
+class ImageInfoFetchError(ImageInfoError):
+    """ Thrown when an error occurs fetching information about an image. """

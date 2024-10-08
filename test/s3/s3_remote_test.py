@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 import shutil
 import tempfile
-from unittest import mock
 
 from conftest import assert_exception_correct, minio  # @UnusedImport
 from cdmtaskservice.s3.client import S3Client
