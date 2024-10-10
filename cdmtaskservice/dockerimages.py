@@ -10,13 +10,25 @@ Contains code for querying container information without access to a docker serv
 # I didn't find it.
 
 import asyncio
+from collections import namedtuple
 import json
 import logging
 import os
 from pathlib import Path
+import re
 from typing import Self
 
-from fqdn import FQDN
+from docker_image import reference
+
+
+_DISALLOWED_CHARS=re.compile(r"([^a-zA-Z0-9@:_.\-\/])")
+
+
+NormedImageName = namedtuple(
+    "NormedImageName",
+    ("normedname", "tag", "olddigest"),
+    defaults=(None, None)
+)
 
 
 class DockerImageInfo:
@@ -47,27 +59,41 @@ class DockerImageInfo:
             raise CranePathError("crane_absolute_path must be absolute")
         self._crane = crane_absolute_path
 
-    async def get_digest_from_name(self, image_name: str) -> str:
+    async def normalize_image_name(self, image_name: str) -> NormedImageName:
         """
-        Get an image digest given the image name.
+        Given an image name, returns a normalized version of the name in the form
+        `host/namespace/path@sha`. This form always refers to the same image and is compatible
+        with Docker, Shifter, and Apptainer. 
         
-        Assumes that a namespace is always present (so names like `image:tag` will be rejected)
-        and the path always has 2 components, the namespace and the image name.
+        If the input image name contains a tag, it is provided in the returned tuple. Note that
+        the tag may or may not refer to the image referenced by the SHA in the future.
+        
+        The SHA is sourced from the remote repository digest; if a sha is provided in the input
+        image name it is included in the returned tuple.
         """
-        return await self._validate_and_run_crane(image_name, "digest")
+        ref = _parse_image_name(image_name)
+        digest = await self._run_crane_command(_assemble_name(ref), "digest")
+        return NormedImageName(
+            normedname=f'{ref["name"]}@{digest}',
+            tag=ref["tag"],
+            olddigest=ref["digest"])
     
-    async def _validate_and_run_crane(self, image_name: str, command: str) -> str:
-        image_name = _validate_image_name(image_name)
+    async def _run_crane_command(self, image_name: str, command: str) -> str:
         retcode, stdo, stde = await self._run_crane(command, image_name)
         if retcode > 0:
             # TODO LOGGING figure out how this is going to work, want to associate logs with
             #              user names, ips, etc.
-            # TDOO TEST logging add tests for logging before exiting prototype stage
+            # TODO TEST logging add tests for logging before exiting prototype stage
             #           manual testing for now
             logging.getLogger(__name__).error(
                 f"crane lookup of image {image_name} failed, retcode: {retcode}, stderr:\n{stde}")
-            # special case when crane spits out html and the regular error parsing doesn't work
-            if "404 not found" in stde.lower():
+            stdel = stde.lower()
+            # special cases when crane spits out html and the regular error parsing doesn't work
+            if "unauthorized" in stdel:  # config command doesn't include 401
+                raise ImageInfoFetchError(
+                    f"Failed to access information for image {image_name}. "
+                    + "Unauthorized to access image")
+            if "404 not found" in stdel:
                 raise ImageInfoFetchError(
                     f"Failed to access information for image {image_name}. "
                     + "Image was not found on the host")
@@ -88,7 +114,9 @@ class DockerImageInfo:
         
         Returns None if there is no entrypoint.
         """
-        ret = await self._validate_and_run_crane(image_name, "config")
+        ret = await self._run_crane_command(
+            _assemble_name(_parse_image_name(image_name)),
+           "config")
         try:
             cfg = json.loads(ret)
         except json.JSONDecodeError as e:
@@ -112,52 +140,35 @@ class DockerImageInfo:
         return proc.returncode, stdo.decode().strip(), stde.decode().strip()
 
 
-def _validate_image_name(image_name: str) -> str:
+def _parse_image_name(image_name: str) -> reference.Reference:
     image_name = image_name.strip() if image_name is not None else None
     # Image name rules: https://docs.docker.com/reference/cli/docker/image/tag/
     # Don't do an exhaustive check here, but enough that we're reasonably confident
     # it's a real name and there's no shell injection risk
-    # Also allows us to provide more specific error messages
     if not image_name:
         raise ImageNameParseError("No image name provided")
-    parts = image_name.split("/")
-    # assume a namespace is always present
-    if len(parts) == 2:  # docker
-        host, repo, image_and_tag = None, parts[0], parts[1]
-    elif len(parts) == 3:
-        host, repo, image_and_tag = parts
-    else:
-        # theoretically can have > 2 slashes, but don't bother with that case for now.
-        raise ImageNameParseError(f"Expected 1 or 2 '/' symbols in image name '{image_name}'")
-    if host and not FQDN(host).is_valid:
-        raise ImageNameParseError(f"Illegal host '{host}' in image name '{image_name}'")
-    _check_path(image_name, repo)
-    _check_path(image_name, image_and_tag)
-    return image_name
-
-
-# legal non alphanum characters in docker image name path / tag
-_TRANS_TABLE = str.maketrans({
-    '-': None,
-    '.': None,
-    '_': None,
-    ':': None,
-    '@': None,  # for digests
-})
-
-
-def _check_path(image_name, part):
-    part = part.translate(_TRANS_TABLE)
-    if not part.isalnum():
+    # check for illegal chars first or bad things can happen:
+    # https://github.com/realityone/docker-image-py/issues/12
+    match = _DISALLOWED_CHARS.search(image_name)
+    if match:
         raise ImageNameParseError(
-            "path or tag contains non-alphanumeric characters other than '_-:.@' "
-            + f"in image name '{image_name}'")
-    if not part.isascii():
-        raise ImageNameParseError(
-            f"path or tag contains non-ascii characters in image name '{image_name}'")
-    if not part.islower(): 
-        raise ImageNameParseError(
-            f"path or tag contains upper case characters in image name '{image_name}'")
+            f"Illegal character in image name '{image_name}': '{match.group(1)}'")
+    try:
+        return reference.Reference.parse_normalized_named(image_name)
+    except reference.InvalidReference as e:
+        # error messages aren't super great but it's a good chunk of code to make it better,
+        # and a user should be able to figure out the error by examination or trying to pull the
+        # image themselves
+        raise ImageNameParseError(f"Unable to parse image name '{image_name}': {e}") from e
+
+
+def _assemble_name(ref: reference.Reference) -> str:
+    name = ref["name"]
+    if ref["tag"]:
+        name += f':{ref["tag"]}'
+    if ref["digest"]:
+        name += f'@{ref["digest"]}'
+    return name
 
 
 class ImageInfoError(Exception):
