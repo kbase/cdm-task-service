@@ -3,7 +3,7 @@ Handler for data transfer between CDM sources and NERSC.
 '''
 
 import asyncio
-from collections.abc import Awaitable
+from collections.abc import Callable
 import io
 import inspect
 import json
@@ -91,7 +91,7 @@ class NERSCManager:
     @classmethod
     async def create(
         cls,
-        client_provider: Awaitable[[], AsyncClient],
+        client_provider: Callable[[], AsyncClient],
         nersc_code_path: Path,
     ) -> Self:
         """
@@ -108,7 +108,7 @@ class NERSCManager:
         
     def __init__(
             self,
-            client_provider: Awaitable[[], str],
+            client_provider: Callable[[], str],
             nersc_code_path: Path,
         ):
         self._client_provider = not_falsy(client_provider, "client_provider")

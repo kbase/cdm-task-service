@@ -19,7 +19,7 @@ from cdmtaskservice.s3.remote import (
     FileChangeError,
     RemoteTimeoutError,
 )
-import config
+from test_common import config
 
 TESTDATA = Path(os.path.normpath((Path(__file__) / ".." / ".." / "testdata")))
 TEST_MT = TESTDATA / "empty_file"
