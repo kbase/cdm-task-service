@@ -10,7 +10,7 @@ from cdmtaskservice.dockerimages import (
     ImageInfoFetchError,
     ImageInfoError,
 )
-import config as testcfg
+from test_common import config as testcfg
 from conftest import assert_exception_correct
 
 

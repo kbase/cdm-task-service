@@ -13,7 +13,7 @@ from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 
 from controllers.minio import MinioController
-import config
+from test_common import config
 
 
 async def main():

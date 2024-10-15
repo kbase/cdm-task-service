@@ -6,7 +6,7 @@ import time
 import traceback
 
 from controllers.minio import MinioController
-import config
+from test_common import config
 
 
 def assert_exception_correct(got: Exception, expected: Exception, print_traceback=False):
