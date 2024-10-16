@@ -91,7 +91,6 @@ class NERSCSFAPIClientProvider:
                     self._clients_to_close.get()
                 else:
                     break
-                
     
     async def _update_client(self, infinite_recovery: bool):
         # TODO TEST this is going to need some nasty patching
