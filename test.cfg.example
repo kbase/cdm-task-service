@@ -20,3 +20,12 @@ test.temp.dir=cdm_task_service_temp
 
 # Whether to keep temporary test files. `true` means keep, anything else means delete.
 test.temp.dir.keep=false
+
+
+### Below this line are configs needed for manual tests only ###
+
+# Path to a NERSC Superfacility API credentials file with the client ID in the first line
+# and the PEM format secret key in the rest of the file, and the expected username for the
+# credentials
+test.sfapicreds.path=/path/to/creds
+test.sfapicreds.user=someNERSCusername
