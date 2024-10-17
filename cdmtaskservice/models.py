@@ -3,6 +3,7 @@ Pydantic models for the CTS.
 """
 
 from enum import Enum
+from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Annotated, Self
 
@@ -10,10 +11,16 @@ from cdmtaskservice.arg_checkers import contains_control_characters
 
 
 # TODO TEST
+# TODO EXAMPLES try using examples instead of the deprecated example. Last time I tried no joy
+
+# https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
+# POSiX fully portable filenames and /
+_PATH_REGEX=r"^[\w.-/]+$"
 
 
 class ParameterType(str, Enum):
     """ The type of a parameter if not a string literal. """
+
     INPUT_FILES = "input_files"
     """
     This parameter type will cause the list of input files for the container to be inserted
@@ -29,6 +36,7 @@ class ParameterType(str, Enum):
 
 class InputFilesFormat(str, Enum):
     """ The format of an input files type parameter. """
+
     COMMA_SEPARATED_LIST = "comma_separated_list"
     """ The input files will be inserted as a comma separated list. """
     
@@ -37,7 +45,7 @@ class InputFilesFormat(str, Enum):
     
     REPEAT_PARAMETER = "repeat_parameter"
     """
-    The input files will be inserted as a space separated list, which each file preceded
+    The input files will be inserted as a space separated list, with each file preceded
     by the parameter flag. Only valid for CLI flag based arguments. If the flag ends with an
     equals sign, there is no space left between the flag and the parameter.
     
@@ -49,6 +57,7 @@ class InputFilesFormat(str, Enum):
 
 class ManifestFileFormat(str, Enum):
     """ The format of a manifest file. """
+
     FILES = "files"
     """ The manifest file will consist of a list of the input files, one per line. """
     
@@ -61,6 +70,7 @@ class ManifestFileFormat(str, Enum):
 
 class Parameter(BaseModel):
     """ Represents the value of a parameter passed to a container. """
+
     type: Annotated[ParameterType, Field(
         example=ParameterType.INPUT_FILES, description="The type of the parameter",
     )]
@@ -112,3 +122,119 @@ class Parameter(BaseModel):
                 # Impossible to test but here for safety if new types are added
                 raise ValueError(f"Unknown parameter type: {self.type}")
         return self
+
+
+class Parameters(BaseModel):
+    """ A set of parameters for a job. """
+    
+    input_mount_point: Annotated[str, Field(
+        example="/input_files",
+        default="/input_files",
+        description="Where to place input files in the container. "
+            + "Must start from the container root and include at least one directory "
+            + "when resolved.",
+        min_length=1,
+        max_length=1024,
+        pattern=_PATH_REGEX,
+    )] = "/input_files"
+    output_mount_point: Annotated[str, Field(
+        example="/output_files",
+        default="/output_files",
+        description="Where output files should be written in the container. "
+            + "Must start from the container root and include at least one directory "
+            + "when resolved.",
+        min_length=1,
+        max_length=1024,
+        pattern=_PATH_REGEX,
+    )] = "/output_files"
+    # TODO REFDATA if the container requires refdata throw an error if this is None
+    refdata_mount_point: Annotated[str | None, Field(
+        example="/reference_data",
+        description="Where reference data files should be pleased in the container. "
+            + "Must start from the container root and include at least one directory "
+            + "when resolved.",
+        min_length=1,
+        max_length=1024,
+        pattern=_PATH_REGEX,
+    )] = None
+    positional_args: Annotated[list[str | Parameter] | None, Field(
+        example=[
+            "process",
+            {
+                "type": ParameterType.INPUT_FILES.value,
+                "input_files_format": InputFilesFormat.COMMA_SEPARATED_LIST.value,
+            }
+        ],
+        description="A list of positional parameters to be inserted at the end of the container "
+            + "entrypoint command. Strings are treated as literals and can each be no more than "
+            + "1000 characters."
+        # TODO SECURITY be sure to quote the strings https://docs.python.org/dev/library/shlex.html#shlex.quote
+    )] = None
+    flag_args: Annotated[dict[str, str | Parameter] | None, Field(
+        example={
+            "--output-dir": "/output_files",
+            "--input-file=": {
+                "type": ParameterType.INPUT_FILES.value,
+                "input_files_format": InputFilesFormat.REPEAT_PARAMETER.value,
+            },
+        },
+        description="A dictionary of flag parameters to be inserted into the container "
+            + "entrypoint command line. Strings are treated as literals. Keys and strings "
+            + "can each be no more than 1000 characters."
+        # TODO SECURITY be sure to quote the keys and strings https://docs.python.org/dev/library/shlex.html#shlex.quote
+    )] = None
+    environment: Annotated[dict[str, str | Parameter] | None, Field(
+        example={
+            "DIAMOND_DB_PATH": "/reference_data",
+            "FILE_MANIFEST": {
+                "type": ParameterType.MANIFEST_FILE.value,
+                "manifest_file_format": ManifestFileFormat.FILES.value,
+                "manifest_file_header": "infiles",
+            },
+        },
+        description="A dictionary of environment variables to be inserted into the container. "
+            + "Strings are treated as literals. Keys and strings "
+            + "can each be no more than 1000 characters."
+        # TODO SECURITY be sure to quote the keys and strings https://docs.python.org/dev/library/shlex.html#shlex.quote
+    )] = None
+    
+    @field_validator(
+        "input_mount_point",
+        "output_mount_point",
+        "refdata_mount_point",
+        mode="before",
+    )
+    @classmethod
+    def _check_path(cls, v):
+        if v is None:
+            return None
+        vp = Path(v)
+        if vp.root != "/":
+            raise ValueError("path must be absolute")
+        if len(vp.resolve().parts) < 2:
+            raise ValueError("path must contain at least one directory under root")
+        return v
+    
+    @field_validator("positional_args", mode="before")
+    @classmethod
+    def _check_pos_args(cls, v):
+        if v is None:
+            return None
+        for i, val in enumerate(v):
+            cls._check_val(val, f"string at index {i}")
+        return v
+
+    @field_validator("flag_args", "environment", mode="before")
+    @classmethod
+    def _check_key_args(cls, v):
+        if v is None:
+            return None
+        for key, val in v.items():
+            cls._check_val(key, "key")
+            cls._check_val(val, f"value for key {key}")
+        return v
+
+    @classmethod
+    def _check_val(cls, v, name):
+        if isinstance(v, str) and len(v) > 1000:
+            raise ValueError(f"{name} is longer than 1000 characters")
