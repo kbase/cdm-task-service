@@ -20,3 +20,8 @@ MINIO_EXE_PATH = Path(TEST_CFG.get("test.minio.exe"))
 MINIO_MC_EXE_PATH = Path(TEST_CFG.get("test.minio.mc.exe"))
 TEMP_DIR       = Path(TEST_CFG.get("test.temp.dir"))
 TEMP_DIR_KEEP  = TEST_CFG.get("test.temp.dir.keep") == "true"
+
+# Don't use these in automated tests, would require putting creds into github which would be
+# a huge pain since they expire frequently
+SFAPI_CREDS_FILE_PATH = Path(TEST_CFG.get("test.sfapicreds.path"))
+SFAPI_CREDS_USER = TEST_CFG.get("test.sfapicreds.user")
