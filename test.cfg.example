@@ -26,6 +26,8 @@ test.temp.dir.keep=false
 
 # Path to a NERSC Superfacility API credentials file with the client ID in the first line
 # and the PEM format secret key in the rest of the file, and the expected username for the
-# credentials
+# credentials.
+# Getting credentials is described here:
+# https://docs.nersc.gov/services/sfapi/authentication/#client
 test.sfapicreds.path=/path/to/creds
 test.sfapicreds.user=someNERSCusername
