@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Annotated, Self
 
 from cdmtaskservice.arg_checkers import contains_control_characters
+from cdmtaskservice.s3.paths import validate_path, S3PathError
 
 
 # TODO TEST
@@ -16,6 +17,15 @@ from cdmtaskservice.arg_checkers import contains_control_characters
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
 # POSiX fully portable filenames and /
 _PATH_REGEX=r"^[\w.-/]+$"
+
+
+def _err_on_control_chars(s: str, allowed_chars: list[str]):
+    if s is None:
+        return s
+    pos = contains_control_characters(s, allowed_chars=allowed_chars)
+    if pos > -1: 
+        raise ValueError(f"contains a disallowed control character at position {pos}")
+    return s
 
 
 class ParameterType(str, Enum):
@@ -98,12 +108,7 @@ class Parameter(BaseModel):
     @field_validator("manifest_file_header", mode="before")
     @classmethod
     def _validate_manifest_file_header(cls, v):
-        if v is None:
-            return None
-        pos = contains_control_characters(v, allowed_chars=["\t"])
-        if pos > -1: 
-            raise ValueError(f"contains a non tab control character at position {pos}")
-        return v
+        return _err_on_control_chars(v, allowed_chars=["\t"])
 
     @model_validator(mode="after")
     def _check_fields(self) -> Self:
@@ -238,3 +243,46 @@ class Parameters(BaseModel):
     def _check_val(cls, v, name):
         if isinstance(v, str) and len(v) > 1000:
             raise ValueError(f"{name} is longer than 1000 characters")
+
+
+class S3File(BaseModel):
+    """ A file in an S3 instance. """
+    
+    file: Annotated[str, Field(
+        example="mybucket/foo/bar/baz.jpg",
+        description="A path to an object in an S3 instance, starting with the bucket.",
+        min_length=3 + 1 + 1,  # 3 for bucket + / + 1 char
+        max_length=63 + 1 + 1024,  # 63 for bucket + / + 1024 bytes
+    )]
+    data_id: Annotated[str | None, Field(
+        example="GCA_000146795.3",
+        description="An arbitrary string representing the ID of the data in the file.",
+        min_length=1,
+        max_length=255,
+    )] = None
+    etag: Annotated[str | None, Field(
+        example="a70a4d1732484e75434df2c08570e1b2-3",
+        description="The S3 e-tag of the file. Weak e-tags are not supported. "
+            + "If provided on input it is checked against the "
+            + "target file e-tag before proceeding. Always provided with output.",
+        min_length=32,
+        max_length=32 + 1 + 5,  # 32 for the md5ish + dash + up to 10000 parts = 38
+    )] = None
+    
+    @field_validator("file", mode="before")
+    @classmethod
+    def _check_file(cls, v):
+        try:
+            return validate_path(v)
+        except S3PathError as e:
+            raise ValueError(str(e)) from e
+
+    @field_validator("data_id", mode="before")
+    @classmethod
+    def _check_data_id(cls, v):
+        return _err_on_control_chars(v)
+
+    # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
+    # the way in and will come from S3 on the way out
+    
+# TODO FEATURE How to handle all vs all? Current model is splitting file list between containers

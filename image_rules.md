@@ -19,3 +19,7 @@ TODO incorporate into documentation when it exists
   done is considered output
 * Do not write to anywhere except the output mount point
   * Shifter mounts FS as readonly
+* Hardlinks do not work across mounts, e.g. you cannot hardlink someting from the input monnt
+  to the output mount
+  * I don't think this will ever be an issue, but if it is we could make a single mount with
+    subdirs for input and output
