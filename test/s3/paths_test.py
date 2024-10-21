@@ -17,6 +17,7 @@ def test_init_fail_no_path():
 def test_init_fail_bad_path():
     
     charerr = "Bucket name at index x may only contain '-' and lowercase ascii alphanumerics: "
+    longkey = ("a" * 1000) + "𐎦" + ("a" * 21)  # symbol is 4 bytes in utf-8
         
     testset = {
         None: "The s3 path at index x cannot be null or a whitespace string",
@@ -45,9 +46,13 @@ def test_init_fail_bad_path():
         "buckit///  //bar":
             "Path 'buckit///  //bar' at index x contains illegal character string '//' in the key",
         "buckit/foo/\nbar":
-            "Key foo/\nbar at index x contains a control character at position 4",
+            "Path buckit/foo/\nbar at index x contains a control character "
+            + "in the key at position 4",
         "buckit/foo/bar\t":
-            "Key foo/bar\t at index x contains a control character at position 7",
+            "Path buckit/foo/bar\t at index x contains a control character "
+            + "in the key at position 7",
+        "buckit/" + longkey:
+             f"Path 'buckit/{longkey}' at index x's key is longer than 1024 bytes in UTF-8",
     }
     for k, v in testset.items():
         _init_fail(k, v)
