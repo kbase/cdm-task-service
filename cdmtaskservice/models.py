@@ -2,9 +2,10 @@
 Pydantic models for the CTS.
 """
 
+import datetime
 from enum import Enum
 from pathlib import Path
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ByteSize, field_validator, model_validator
 from typing import Annotated, Self
 
 from cdmtaskservice.arg_checkers import contains_control_characters
@@ -19,7 +20,14 @@ from cdmtaskservice.s3.paths import validate_path, S3PathError
 _PATH_REGEX=r"^[\w.-/]+$"
 
 
-def _err_on_control_chars(s: str, allowed_chars: list[str]):
+def _validate_s3_path(s3path: str, index: int = None):
+    try:
+        return validate_path(s3path, index=index)
+    except S3PathError as e:
+        raise ValueError(str(e)) from e
+
+
+def _err_on_control_chars(s: str, allowed_chars: list[str] = None):
     if s is None:
         return s
     pos = contains_control_characters(s, allowed_chars=allowed_chars)
@@ -130,7 +138,7 @@ class Parameter(BaseModel):
 
 
 class Parameters(BaseModel):
-    """ A set of parameters for a job. """
+    """ A set of parameters for a container in a job. """
     
     input_mount_point: Annotated[str, Field(
         example="/input_files",
@@ -272,10 +280,7 @@ class S3File(BaseModel):
     @field_validator("file", mode="before")
     @classmethod
     def _check_file(cls, v):
-        try:
-            return validate_path(v)
-        except S3PathError as e:
-            raise ValueError(str(e)) from e
+        return _validate_s3_path(v)
 
     @field_validator("data_id", mode="before")
     @classmethod
@@ -286,3 +291,123 @@ class S3File(BaseModel):
     # the way in and will come from S3 on the way out
     
 # TODO FEATURE How to handle all vs all? Current model is splitting file list between containers
+
+
+class Cluster(str, Enum):
+    """ The location where a job should run. """
+
+    PERLMUTTER_JAWS = "perlmutter-jaws"
+    """ The Perlmutter cluster at NESRC run via JAWS. """
+
+    # TODO LAWRENCIUM add when available
+
+
+class JobInput(BaseModel):
+    """ Input to a Job. """
+    
+    # In the design there's a field for authentication source. This seems so unlikely to ever
+    # be implemented we're leaving it out here. If it is implemented kbase should be the default.
+    
+    # Similarly, the design allows for multiple S3 instances. We'll implement with a default
+    # when actually needed.
+    
+    cluster: Annotated[Cluster, Field(
+        example=Cluster.PERLMUTTER_JAWS.value,
+        description="The compute location where a job should run."
+    )]
+    container: Annotated[str, Field(
+        example="ghcr.io/kbase/collections:checkm2_0.1.6"
+            + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+        description="The Docker image to run for the job. Include the SHA to ensure the "
+            + "exact code requested is run.",
+        # Don't bother validating other than some basic checks, validation will occur when
+        # checking / getting the image SHA from the remote repository
+        min_length=1,
+        max_length=1000
+    )]
+    params: Annotated[Parameters, Field(
+        description="The job parameters."
+    )]
+    num_containers: Annotated[int, Field(
+        example=1,
+        default=1,
+        description="The number of containers to run in parallel. Input files will be split "
+            + "between the containers. If there are more containers than input files the "
+            + "container count will be reduced appropriately",
+        ge=1,
+        # TODO LIMITS whats a reasonable max number of containers per job? 1k seems ok for now 
+        le=1000,
+    )] = 1
+    cpus: Annotated[int, Field(
+        example=1,
+        default=1,
+        description="The number of CPUs to allocate per container.",
+        ge=1,
+        # https://jaws-docs.readthedocs.io/en/latest/Resources/compute_resources.html#table-of-available-resources
+        le=256,
+    )] = 1
+    memory: Annotated[ByteSize, Field(
+        example="10MB",
+        default="10MB",
+        description="The amount of memory to allocate per container.",
+        # https://jaws-docs.readthedocs.io/en/latest/Resources/compute_resources.html#table-of-available-resources
+        ge=1 * 1000 * 1000,
+        le=492 * 1000 * 1000 * 1000
+    )] = 10 * 1000 * 1000
+    runtime: Annotated[datetime.timedelta, Field(
+        example="PT12H30M5S",  # TODO EXAMPLES add a seconds example if examples works
+        default = "PT60S",
+        description="The runtime required for each container as the number of seconds or an "
+            + "ISO8601 duration string.",
+        ge=1,
+        le=3 * 24 * 60 * 60,  # max JAWS runtime
+    )] = datetime.timedelta(seconds=60)
+    input_files: Annotated[list[str] | list[S3File], Field(
+        example=[  # TODO EXAMPLES add a string example if examples works
+            {
+                "file": "mybucket/foo/bat",
+                "data_id": "GCA_000146795.3",
+                "etag": "a70a4d1732484e75434df2c08570e1b2-3"
+            }
+        ],
+        description="The S3 input files for the job, either a list of file paths as strings or a "
+            + "list of data structures including the file path and optionally a data ID and / or "
+            + "ETag. The file paths always start with the bucket. "
+            + "When returned from the service, the Etag is always included.",
+        min_length=1,
+    )]
+    input_roots: Annotated[list[str] | None, Field(
+        example=["mybucket/foo/bar"],
+        description="If specified, preserves file hierarchies for S3 files below the given "
+            + "root paths, starting from the bucket. Any files that are not prefixed by a "
+            + "root path are placed in the root directory of the job input dir. "
+            + "If any input files have the same path in the input dir, the job fails. "
+            + 'For example, given a input_roots entry of ["mybucket/foo/bar"] and the input '
+            + 'files ["otherbucket/foo", "mybucket/bar", "mybucket/foo/bar/baz/bat"] the job '
+            + "input directory would include the files foo, bar, and baz/bat. "
+            + 'To preserve hierarchies for all files, set input_roots to ["/"]',
+    )] = None
+    output_dir: Annotated[str, Field(
+        example="mybucket/out",
+        description="The S3 folder, starting with the bucket, in which to place results.",
+        min_length=3 + 1 + 1,
+        max_length=63 + 1 + 1024
+    )]
+    
+    @field_validator("input_roots", "input_files", mode="before")
+    @classmethod
+    def _check_files(cls, v):
+        if v is None:
+            return None
+        newlist= []
+        for i, f in enumerate(v):
+            if isinstance(f, str):
+                newlist.append(_validate_s3_path(f, index=i))
+            else:
+                newlist.append(f)
+        return newlist
+    
+    @field_validator("output_dir", mode="before")
+    @classmethod
+    def _check_outdir(cls, v):
+        return _validate_s3_path(v)
