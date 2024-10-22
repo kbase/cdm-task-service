@@ -21,6 +21,8 @@ _PATH_REGEX=r"^[\w.-/]+$"
 
 
 def _validate_s3_path(s3path: str, index: int = None):
+    if not isinstance(s3path, str):  # run as a before validator so needs to check type
+        raise ValueError("S3 paths must be a string")
     try:
         return validate_path(s3path, index=index)
     except S3PathError as e:
@@ -113,7 +115,7 @@ class Parameter(BaseModel):
         max_length=1000,
     )] = None
     
-    @field_validator("manifest_file_header", mode="before")
+    @field_validator("manifest_file_header", mode="after")
     @classmethod
     def _validate_manifest_file_header(cls, v):
         return _err_on_control_chars(v, allowed_chars=["\t"])
@@ -215,7 +217,7 @@ class Parameters(BaseModel):
         "input_mount_point",
         "output_mount_point",
         "refdata_mount_point",
-        mode="before",
+        mode="after",
     )
     @classmethod
     def _check_path(cls, v):
@@ -228,7 +230,7 @@ class Parameters(BaseModel):
             raise ValueError("path must contain at least one directory under root")
         return v
     
-    @field_validator("positional_args", mode="before")
+    @field_validator("positional_args", mode="after")
     @classmethod
     def _check_pos_args(cls, v):
         if v is None:
@@ -237,7 +239,7 @@ class Parameters(BaseModel):
             cls._check_val(val, f"string at index {i}")
         return v
 
-    @field_validator("flag_args", "environment", mode="before")
+    @field_validator("flag_args", "environment", mode="after")
     @classmethod
     def _check_key_args(cls, v):
         if v is None:
@@ -282,7 +284,7 @@ class S3File(BaseModel):
     def _check_file(cls, v):
         return _validate_s3_path(v)
 
-    @field_validator("data_id", mode="before")
+    @field_validator("data_id", mode="after")
     @classmethod
     def _check_data_id(cls, v):
         return _err_on_control_chars(v)
@@ -373,6 +375,7 @@ class JobInput(BaseModel):
         description="The S3 input files for the job, either a list of file paths as strings or a "
             + "list of data structures including the file path and optionally a data ID and / or "
             + "ETag. The file paths always start with the bucket. "
+            + "Either all or no files must have data IDs associated with them."
             + "When returned from the service, the Etag is always included.",
         min_length=1,
     )]
@@ -406,6 +409,16 @@ class JobInput(BaseModel):
             else:
                 newlist.append(f)
         return newlist
+    
+    @field_validator("input_files", mode="after")
+    @classmethod
+    def _check_data_ids(cls, v):
+        if not isinstance(v[0], S3File):
+            return v
+        data_ids = bool(v[0].data_id)
+        for f in v:
+            if bool(f.data_id) is not data_ids:
+                raise ValueError("Either all or no files must have data IDs")
     
     @field_validator("output_dir", mode="before")
     @classmethod
