@@ -4,8 +4,16 @@ Pydantic models for the CTS.
 
 import datetime
 from enum import Enum
+import math
 from pathlib import Path
-from pydantic import BaseModel, Field, ByteSize, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ByteSize,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 from typing import Annotated, Self
 
 from cdmtaskservice.arg_checkers import contains_control_characters
@@ -139,8 +147,43 @@ class Parameter(BaseModel):
         return self
 
 
+ArgumentString = Annotated[str, StringConstraints(
+    min_length=1,
+    max_length=1024,
+    pattern=r"^[\w\./][\w\./-]*$"  # open this up as needed, careful to not allow dangerous chars
+)]
+
+
+Flag = Annotated[str, StringConstraints(
+    min_length=2,
+    max_length=256,
+    # open this up as needed, careful to not allow dangerous chars
+    pattern=r"^--?[a-zA-Z][\w\.-]*=?$"
+)]
+
+
+EnvironmentVariable = Annotated[str, StringConstraints(
+    min_length=1,
+    max_length=256,
+    pattern=r"^[A-Z_][A-Z0-9_]*$"  # https://stackoverflow.com/a/2821183/643675
+)]
+
+
 class Parameters(BaseModel):
-    """ A set of parameters for a container in a job. """
+    # TODO OPENAPI check f strings work with the open api docs
+    f"""
+    A set of parameters for a container in a job.
+    
+    Specifying files as part of arguments to a job can be done in two ways:
+    
+    * If the entrypoint command takes a glob or a directory as an argument, that glob or
+      directory can be specified literally in an argument. All files will be available in the
+      input mount point, with paths resulting from the path in S3 as well as the input_roots
+      parameter from the job input.
+    * If individual filenames need to be specified, use a {Parameter.__name__} instance in
+      the positional, flag, or environmental arguments. At most one {Parameter.__name__} can
+      be specified per parameter set.
+    """
     
     input_mount_point: Annotated[str, Field(
         example="/input_files",
@@ -172,7 +215,7 @@ class Parameters(BaseModel):
         max_length=1024,
         pattern=_PATH_REGEX,
     )] = None
-    positional_args: Annotated[list[str | Parameter] | None, Field(
+    positional_args: Annotated[list[ArgumentString | Parameter] | None, Field(
         example=[
             "process",
             {
@@ -185,7 +228,7 @@ class Parameters(BaseModel):
             + "1000 characters."
         # TODO SECURITY be sure to quote the strings https://docs.python.org/dev/library/shlex.html#shlex.quote
     )] = None
-    flag_args: Annotated[dict[str, str | Parameter] | None, Field(
+    flag_args: Annotated[dict[Flag, ArgumentString | Parameter] | None, Field(
         example={
             "--output-dir": "/output_files",
             "--input-file=": {
@@ -198,7 +241,7 @@ class Parameters(BaseModel):
             + "can each be no more than 1000 characters."
         # TODO SECURITY be sure to quote the keys and strings https://docs.python.org/dev/library/shlex.html#shlex.quote
     )] = None
-    environment: Annotated[dict[str, str | Parameter] | None, Field(
+    environment: Annotated[dict[EnvironmentVariable, ArgumentString | Parameter] | None, Field(
         example={
             "DIAMOND_DB_PATH": "/reference_data",
             "FILE_MANIFEST": {
@@ -230,29 +273,36 @@ class Parameters(BaseModel):
             raise ValueError("path must contain at least one directory under root")
         return v
     
-    @field_validator("positional_args", mode="after")
-    @classmethod
-    def _check_pos_args(cls, v):
-        if v is None:
-            return None
-        for i, val in enumerate(v):
-            cls._check_val(val, f"string at index {i}")
-        return v
+    @model_validator(mode="after")
+    def _check_parameters(self) -> Self:
+        self.get_parameter()
+        return self
+    
+    def get_parameter(self) -> Parameter | None:
+        """
+        If a file specification parameter is present in the arguments, get it.
+        Returns None otherwise.
+        """
+        param = None
+        if self.positional_args:
+            for p in self.positional_args:
+                param = self._check_parameter(param, p)
+        if self.flag_args:
+            for p in self.flag_args.values():
+                param = self._check_parameter(param, p)
+        if self.environment:
+            for p in self.environment.values():
+                param = self._check_parameter(param, p)
+        return param
 
-    @field_validator("flag_args", "environment", mode="after")
-    @classmethod
-    def _check_key_args(cls, v):
-        if v is None:
-            return None
-        for key, val in v.items():
-            cls._check_val(key, "key")
-            cls._check_val(val, f"value for key {key}")
-        return v
-
-    @classmethod
-    def _check_val(cls, v, name):
-        if isinstance(v, str) and len(v) > 1000:
-            raise ValueError(f"{name} is longer than 1000 characters")
+    def _check_parameter(self, param, p):
+        if isinstance(p, Parameter):
+            if param is not None:
+                raise ValueError(
+                    # This may need to change for all vs all analyses
+                    f"At most one {Parameter.__name__} instance is allowed per parameter set")
+            return p
+        return param
 
 
 class S3File(BaseModel):
@@ -402,7 +452,7 @@ class JobInput(BaseModel):
     def _check_files(cls, v):
         if v is None:
             return None
-        newlist= []
+        newlist = []
         for i, f in enumerate(v):
             if isinstance(f, str):
                 newlist.append(_validate_s3_path(f, index=i))
@@ -419,8 +469,24 @@ class JobInput(BaseModel):
         for f in v:
             if bool(f.data_id) is not data_ids:
                 raise ValueError("Either all or no files must have data IDs")
+        return v
     
     @field_validator("output_dir", mode="before")
     @classmethod
     def _check_outdir(cls, v):
         return _validate_s3_path(v)
+
+        
+    def get_containter_count(self) -> int:
+        """
+        Returns the minimum of the specified number of containers and the number of input files.
+        """
+        return min(self.num_containers, len(self.input_files))
+    
+    def get_files_per_container(self) -> (int, int):
+        """
+        Returns the number of files to be run per container as a tuple of the files per container
+        and the remainder of files left over to be run in the last container.
+        """
+        fpc = math.ceil(len(self.input_files) / self.get_containter_count())
+        return (fpc, len(self.input_files) % fpc)
