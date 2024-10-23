@@ -477,7 +477,7 @@ class JobInput(BaseModel):
         return _validate_s3_path(v)
 
         
-    def get_containter_count(self) -> int:
+    def get_container_count(self) -> int:
         """
         Returns the minimum of the specified number of containers and the number of input files.
         """
@@ -488,5 +488,5 @@ class JobInput(BaseModel):
         Returns the number of files to be run per container as a tuple of the files per container
         and the remainder of files left over to be run in the last container.
         """
-        fpc = math.ceil(len(self.input_files) / self.get_containter_count())
+        fpc = math.ceil(len(self.input_files) / self.get_container_count())
         return (fpc, len(self.input_files) % fpc)
