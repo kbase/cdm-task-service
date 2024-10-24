@@ -10,6 +10,7 @@ from pydantic import (
     BaseModel,
     Field,
     ByteSize,
+    ConfigDict,
     StringConstraints,
     field_validator,
     model_validator,
@@ -342,8 +343,7 @@ class S3File(BaseModel):
     # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
     # the way in and will come from S3 on the way out
     
-    class Config:
-        frozen=True
+    model_config = ConfigDict(frozen=True)
     
 # TODO FEATURE How to handle all vs all? Current model is splitting file list between containers
 
