@@ -10,11 +10,12 @@ from pydantic import (
     BaseModel,
     Field,
     ByteSize,
+    ConfigDict,
     StringConstraints,
     field_validator,
     model_validator,
 )
-from typing import Annotated, Self
+from typing import Annotated, Self, NamedTuple
 
 from cdmtaskservice.arg_checkers import contains_control_characters
 from cdmtaskservice.s3.paths import validate_path, S3PathError
@@ -342,6 +343,8 @@ class S3File(BaseModel):
     # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
     # the way in and will come from S3 on the way out
     
+    model_config = ConfigDict(frozen=True)
+    
 # TODO FEATURE How to handle all vs all? Current model is splitting file list between containers
 
 
@@ -352,6 +355,19 @@ class Cluster(str, Enum):
     """ The Perlmutter cluster at NESRC run via JAWS. """
 
     # TODO LAWRENCIUM add when available
+
+
+FilesPerContainer = NamedTuple("FilesPerContainer", [
+    ("containers", int), ("files_per_container", int), ("last_container", int)])
+"""
+Information about splitting files to be processed among containers.
+
+containers - the number of containers expected to be run; this is the mimimum of the specified
+    container count and the number of files.
+files_per_container - the number of files to be run per container
+last_container - the remainder of files to be run in the last container. Always less than
+    files_per_container.
+"""
 
 
 class JobInput(BaseModel):
@@ -476,17 +492,16 @@ class JobInput(BaseModel):
     def _check_outdir(cls, v):
         return _validate_s3_path(v)
 
+    def inputs_are_S3File(self) -> bool:
+        f"""
+        Returns True if the inputfiles are of type {S3File.__name__}, False otherwise.
+        """
+        return isinstance(self.input_files[0], S3File)
         
-    def get_container_count(self) -> int:
+    def get_files_per_container(self) -> FilesPerContainer:
         """
-        Returns the minimum of the specified number of containers and the number of input files.
+        Returns the number of files to be run per container.
         """
-        return min(self.num_containers, len(self.input_files))
-    
-    def get_files_per_container(self) -> (int, int):
-        """
-        Returns the number of files to be run per container as a tuple of the files per container
-        and the remainder of files left over to be run in the last container.
-        """
-        fpc = math.ceil(len(self.input_files) / self.get_container_count())
-        return (fpc, len(self.input_files) % fpc)
+        containers = min(self.num_containers, len(self.input_files))
+        fpc = math.ceil(len(self.input_files) / containers)
+        return FilesPerContainer(containers, fpc, len(self.input_files) % fpc)
