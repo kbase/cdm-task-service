@@ -383,7 +383,7 @@ class JobInput(BaseModel):
         example=Cluster.PERLMUTTER_JAWS.value,
         description="The compute location where a job should run."
     )]
-    container: Annotated[str, Field(
+    image: Annotated[str, Field(
         example="ghcr.io/kbase/collections:checkm2_0.1.6"
             + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
         description="The Docker image to run for the job. Include the SHA to ensure the "
@@ -393,9 +393,7 @@ class JobInput(BaseModel):
         min_length=1,
         max_length=1000
     )]
-    params: Annotated[Parameters, Field(
-        description="The job parameters."
-    )]
+    params: Annotated[Parameters, Field(description="The job parameters.")]
     num_containers: Annotated[int, Field(
         example=1,
         default=1,
@@ -505,3 +503,70 @@ class JobInput(BaseModel):
         containers = min(self.num_containers, len(self.input_files))
         fpc = math.ceil(len(self.input_files) / containers)
         return FilesPerContainer(containers, fpc, len(self.input_files) % fpc)
+
+
+class JobState(str, Enum):
+    """
+    The state of a job.
+    """
+    # TODO OPENAPI add documentation when the server is running & it's clear how enum docs work
+    CREATED = "created"
+    UPLOAD_SUBMITTED = "upload_submitted"
+    JOB_SUBMITTING = "job_submitting"
+    JOB_SUBMITTED = "job_submitted"
+    DOWNLOAD_SUBMITTING = "download_submitting"
+    DOWNLOAD_SUBMITTED = "download_submitted"
+    COMPLETE = "complete"
+    ERROR = "error"
+
+
+class Image(BaseModel):
+    """
+    Information about a Docker image.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    normed_name: Annotated[str, Field(
+        example="ghcr.io/kbase/collections"
+            +"@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+        description="The normalized name of the a docker image, consisting of the "
+            + "host, path, and digest.",
+    )]
+    entrypoint: Annotated[list[str], Field(
+        example=["checkm2", "predict"],
+        description="The entrypoint command extracted from the image."
+    )]
+    tag: Annotated[str | None, Field(
+        example="checkm2_0.1.6 ",
+        description="The image tag at registration time. "
+            + "The tag may no longer point to the same image."
+    )] = None
+    # TODO REFERENCEDATA add reference data ID
+
+
+class Job(BaseModel):
+    """
+    Information about a job.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    id: Annotated[str, Field(
+        description="An opaque, unique string that serves as the job's ID.",
+    )]
+    job_input: Annotated[JobInput, Field(description="The job input.")]
+    user: Annotated[str, Field(example="myuserid", description="The user that ran the job.")]
+    image: Annotated[Image, Field(description="The image to be run in the job.")]
+    state: Annotated[JobState, Field(
+        example=JobState.COMPLETE.value,
+        description="The state of the job."
+    )]
+    # hmm, should this be a dict vs a list of tuples?
+    transition_times: Annotated[list[tuple[JobState, datetime.datetime]], Field(
+        example=[
+            (JobState.CREATED.value, "2024-10-24T22:35:40Z"),
+            (JobState.UPLOAD_SUBMITTED.value, "2024-10-24T22:35:41Z"),
+            (JobState.JOB_SUBMITTING, "2024-10-24T22:47:67Z"),
+        ],
+        description="A list of tuples of (job_state, time_job_state_entered)."
+    )]
+    # TODO JOBRUNNING add job info like the jaws ID(?) and log locations. See design doc.
+    #      should we expose the JAWS ID to users? Maybe just admins. Subclass this if so
+    # TODO ERRORHANDLING add error field and class
