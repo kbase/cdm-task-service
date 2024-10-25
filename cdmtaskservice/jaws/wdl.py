@@ -2,8 +2,6 @@
 A builder of Workflow Definition Language documents for the purposes of running CTS jobs with JAWS.
 '''
 
-# Apparently there aren't any programmatic WDL builders in python? Parsers exist
-
 # TODO TEST
 # TODO TEST parse output with miniwdl or something for syntax checking
 # TODO TEST manually test with JAWS
@@ -13,8 +11,7 @@ import math
 import shlex
 from typing import NamedTuple, Any
 
-from cdmtaskservice.models import JobInput, S3File
-from cdmtaskservice.dockerimages import NormedImageName
+from cdmtaskservice.models import Job, S3File
 
 
 _WDL_VERSION = "1.0"  # Cromwell, and therefore JAWS, only supports 1.0
@@ -30,13 +27,7 @@ wdl - the WDL file as a string.
 input_json - the input.json file as a dict.
 """
 
-def generate_wdl(
-    # TODO ARGS this is a big argument list, probably want to rethink
-    job_input: JobInput,
-    image: NormedImageName,
-    entrypoint: list[str],
-    file_mapping: dict[S3File, str]
-) -> JawsInput:
+def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
     """
     Generate input for a JAWS run in the form of a WDL file and input.json file contents.
     
@@ -47,22 +38,27 @@ def generate_wdl(
         These can be absolute paths or relative to the location of the WDL file.
     """
     # It'd be nice if there were a programmatic WDL writer but I haven't been able to find one
-    if not job_input.inputs_are_S3File():
+    if not job.job_input.inputs_are_S3File():
         raise ValueError("input files must be S3 files with the E-tag")
-    workflow_name = image.normedname.split("@")[0].translate(_IMAGE_TRANS_CHARS)
+    workflow_name = job.image.normed_name.split("@")[0].translate(_IMAGE_TRANS_CHARS)
     ins = []
-    for f in job_input.input_files:
+    for f in job.job_input.input_files:
         if f not in file_mapping:
             raise ValueError(f"file_mapping missing {f}")
         ins.append(file_mapping[f])
-    fpc_tuple = job_input.get_files_per_container()
+    fpc_tuple = job.job_input.get_files_per_container()
     fpc = fpc_tuple.files_per_container
     input_json = {f"{workflow_name}.input_files": [
             ins[i:i + fpc] for i in range(0, fpc * fpc_tuple.containers, fpc)
         ]
     }
+    # Inserting the job ID into the WDL should not bust the Cromwell cache:
+    # https://kbase.slack.com/archives/CGJDCR22D/p1729786486819809
+    # https://cromwell.readthedocs.io/en/stable/cromwell_features/CallCaching/
     wdl = f"""
 version {_WDL_VERSION}
+
+# CTS_JOB_ID: {job.id}
 
 workflow {workflow_name} {{
   input {{
@@ -96,7 +92,7 @@ task run_container {{
     done
       
     # run the command
-    {" ".join([shlex.quote(e) for e in entrypoint])}
+    {" ".join([shlex.quote(e) for e in job.image.entrypoint])}
   
     # list the output of the command
     find ./__output__ -type f > ./output_files.txt
@@ -109,10 +105,10 @@ task run_container {{
   }}
   
   runtime {{
-    docker: "{image.normedname}"
-    runtime_minutes: {math.ceil(job_input.runtime.total_seconds() / 60)}
-    memory: "{job_input.memory} B"
-    cpu: {job_input.cpus}
+    docker: "{job.image.normed_name}"
+    runtime_minutes: {math.ceil(job.job_input.runtime.total_seconds() / 60)}
+    memory: "{job.job_input.memory} B"
+    cpu: {job.job_input.cpus}
   }}
 }}
 """
