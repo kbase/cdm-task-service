@@ -70,8 +70,7 @@ def validate_path(path: str, index: int = None) -> str:
     if len(parts) != 2:
         raise S3PathError(
             f"Path '{path}'{i} must start with the s3 bucket and include a key")
-    bucket = parts[0].strip()  # be nice to users and clean up the name a bit
-    _validate_bucket_name(i, bucket)
+    bucket = validate_bucket_name(parts[0], index=index)
     key = parts[1].lstrip("/")  # Leading /s are ignored by s3, but spaces and trailing /s count
     if len(key.encode("UTF-8")) > 1024:
         raise S3PathError(f"Path '{path}'{i}'s key is longer than 1024 bytes in UTF-8")
@@ -86,9 +85,20 @@ def validate_path(path: str, index: int = None) -> str:
     return f"{bucket}/{key}"
 
 
-def _validate_bucket_name(i: str, bucket_name: str):
+# TDOO TEST add tests for public method
+def validate_bucket_name(bucket_name: str, index: int = None):
+    """
+    Validate an S3 bucket name.
+    
+    bucket_name - the bucket name to validate.
+    index - the index of the bucket name in some external data structure.
+        The index will be added to error messages.
+    
+    Returns a bucket name stripped of whitespace..
+    """
     # https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
-    bn = bucket_name
+    i = f" at index {index}" if index is not None else ""
+    bn = bucket_name.strip()
     if not bn:
         raise S3PathError(f"Bucket name{i} cannot be whitespace only")
     if len(bn) < 3 or len(bn) > 63:
@@ -100,3 +110,4 @@ def _validate_bucket_name(i: str, bucket_name: str):
     if not bn.replace("-", "").isalnum() or not bn.isascii() or not bn.islower():
         raise S3PathError(
             f"Bucket name{i} may only contain '-' and lowercase ascii alphanumerics: {bn}")
+    return bn

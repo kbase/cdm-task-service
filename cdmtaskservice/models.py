@@ -18,7 +18,7 @@ from pydantic import (
 from typing import Annotated, Self, NamedTuple
 
 from cdmtaskservice.arg_checkers import contains_control_characters
-from cdmtaskservice.s3.paths import validate_path, S3PathError
+from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathError
 
 
 # TODO TEST
@@ -29,7 +29,14 @@ from cdmtaskservice.s3.paths import validate_path, S3PathError
 _PATH_REGEX=r"^[\w.-/]+$"
 
 
-def _validate_s3_path(s3path: str, index: int = None):
+def _validate_bucket_name(bucket: str, index: int = None) -> str:
+    try:
+        return validate_bucket_name(bucket, index=index)
+    except S3PathError as e:
+        raise ValueError(str(e)) from e
+
+
+def _validate_s3_path(s3path: str, index: int = None) -> str:
     if not isinstance(s3path, str):  # run as a before validator so needs to check type
         raise ValueError("S3 paths must be a string")
     try:
@@ -452,7 +459,9 @@ class JobInput(BaseModel):
             + 'For example, given a input_roots entry of ["mybucket/foo/bar"] and the input '
             + 'files ["otherbucket/foo", "mybucket/bar", "mybucket/foo/bar/baz/bat"] the job '
             + "input directory would include the files foo, bar, and baz/bat. "
-            + 'To preserve hierarchies for all files, set input_roots to ["/"]',
+            + 'To preserve hierarchies for all files, set input_roots to [""].  '
+            + "If an input file matches more than one root, the longest root is used. "
+            + "Duplicate roots are ignored.",
     )] = None
     output_dir: Annotated[str, Field(
         example="mybucket/out",
@@ -461,9 +470,9 @@ class JobInput(BaseModel):
         max_length=63 + 1 + 1024
     )]
     
-    @field_validator("input_roots", "input_files", mode="before")
+    @field_validator("input_files", mode="before")
     @classmethod
-    def _check_files(cls, v):
+    def _check_input_files(cls, v):
         if v is None:
             return None
         newlist = []
@@ -484,6 +493,27 @@ class JobInput(BaseModel):
             if bool(f.data_id) is not data_ids:
                 raise ValueError("Either all or no files must have data IDs")
         return v
+    
+    @field_validator("input_roots", mode="before")
+    @classmethod
+    def _check_input_roots(cls, v):
+        if v is None:
+            return None
+        newlist = set()
+        for i, ir in enumerate(v):
+            if not isinstance(ir, str):  # before validator so need to check type
+                raise ValueError(f"S3 path must be a string at index {i}")
+            if not ir.strip():
+                newlist.add("")
+            else:
+                parts = ir.split("/")
+                if len(parts) == 1:
+                    newlist.add(_validate_bucket_name(parts[0], index=i))
+                elif len(parts) == 2 and not parts[1].strip():  # like "foo/   "
+                    newlist.add(_validate_bucket_name(parts[0], index=i))
+                else:
+                    newlist.add(_validate_s3_path(ir, index=i))
+        return list(newlist)
     
     @field_validator("output_dir", mode="before")
     @classmethod

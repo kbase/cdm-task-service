@@ -32,8 +32,6 @@ def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
     Generate input for a JAWS run in the form of a WDL file and input.json file contents.
     
     job_input - the input for the job.
-    image - the image to run.
-    entrypoint - the entrypoint list for the container
     file_mapping - a mapping of the input S3 files to their locations at the JAWS site.
         These can be absolute paths or relative to the location of the WDL file.
     """
