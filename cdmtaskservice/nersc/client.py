@@ -4,6 +4,7 @@ credentials periodic expiration from the rest of the system.
 """
 
 import asyncio
+import datetime
 import logging
 from pathlib import Path
 from queue import PriorityQueue
@@ -152,7 +153,7 @@ class NERSCSFAPIClientProvider:
         self._check_destroy()
         return self._client[0]
 
-    def expiration(self) -> int:
+    def expiration(self) -> datetime.datetime:
         """ Get the expiration time of the current set of credentials. """
         self._check_destroy()
         return self._client[2]
@@ -183,12 +184,13 @@ def _get_next_index(index: int, infinite_recovery: bool) -> int | None:
     return index if infinite_recovery else None
 
 
-async def _get_expiration(user: AsyncUser, client_id: str) -> int:
+async def _get_expiration(user: AsyncUser, client_id: str) -> datetime.datetime:
     clients = await user.clients()
     for cli in clients:
         if cli.clientId == client_id:
-            return cli.expiresAt  # TODO CLIEXPIRE check format
-    return None
-    # TODO NERSCFEATURE Go back to throwing an exception when getting the client is possible
-    #       https://nersc.servicenowservices.com/sp?id=ticket&is_new_order=true&table=incident&sys_id=714d75b8971dd210b052daa00153aff0
+            dt = datetime.datetime.fromisoformat(cli.expiresAt)
+            # TODO NERSCFEATURE ensure timezone actually is UTC
+            #      https://nersc.servicenowservices.com/sp?id=ticket&is_new_order=true&table=incident&sys_id=866f532197a51650b052daa00153affe
+            return dt.replace(tzinfo=datetime.timezone.utc)
+    # This should be impossible
     raise ValueError(f"NERSC returned no client matching client ID {client_id}")
