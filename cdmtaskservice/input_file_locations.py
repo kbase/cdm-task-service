@@ -71,7 +71,7 @@ def _setup_trie(job_input: JobInput) -> (marisa_trie.Trie, bidict[str, str]):
     return marisa_trie.Trie(trie_in), pathseg_to_id
 
 
-def _process_path(path: str, id_: int, pathseg_to_id: bidict[str, str]) -> int:
+def _process_path(path: str, id_: int, pathseg_to_id: dict[str, str]) -> int:
     for p in path.split("/"):
         if p not in pathseg_to_id:
             pathseg_to_id[p] = id_
@@ -79,11 +79,11 @@ def _process_path(path: str, id_: int, pathseg_to_id: bidict[str, str]) -> int:
     return id_
 
 
-def _path_to_id_string(path: str, pathseg_to_id: dict[str, int]) -> str:
+def _path_to_id_string(path: str, pathseg_to_id: bidict[str, int]) -> str:
     return "/".join(pathseg_to_id[p] for p in path.split("/"))
 
 
-def _id_string_to_path(id_string: str, pathseg_to_id: dict[str, int]) -> str:
+def _id_string_to_path(id_string: str, pathseg_to_id: bidict[str, int]) -> str:
     return "/".join(pathseg_to_id.inverse[id_] for id_ in id_string.split("/"))
 
 
