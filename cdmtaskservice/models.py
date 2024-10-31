@@ -449,6 +449,11 @@ class JobInput(BaseModel):
             + "Either all or no files must have data IDs associated with them."
             + "When returned from the service, the Etag is always included.",
         min_length=1,
+        # Need to see how well this performs. If we need more files per job,
+        # can test performance & tweak S3 client concurrency. Alternatively, add a file set
+        # endpoint where file sets of size < some reasonable number can be submitted, and then
+        # multiple file sets can be combined in a JobInput
+        max_length=10000,
     )]
     input_roots: Annotated[list[str] | None, Field(
         example=["mybucket/foo/bar"],
@@ -460,7 +465,9 @@ class JobInput(BaseModel):
             + 'files ["otherbucket/foo", "mybucket/bar", "mybucket/foo/bar/baz/bat"] the job '
             + "input directory would include the files foo, bar, and baz/bat. "
             + 'To preserve hierarchies for all files, set input_roots to [""].  '
-            + "If an input file matches more than one root, the longest root is used. "
+            + "If an input file matches more than one root, the longest root that isn't "
+            + "identical to the file path is used. "
+            + "Whitespace on the left side of the path is is ignored."
             + "Duplicate roots are ignored.",
     )] = None
     output_dir: Annotated[str, Field(
