@@ -1,4 +1,4 @@
-FROM python:3.11
+FROM python:3.13
 
 ENV CRANE_VER=v0.20.2
 
