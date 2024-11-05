@@ -42,9 +42,17 @@ def test_init_fail_bad_path():
         "illegal-βucket/foo": charerr + "illegal-βucket",
         "illegal bucket/foo": charerr + "illegal bucket",
         "buckit/foo//bar":
-            "Path 'buckit/foo//bar' at index x contains illegal character string '//' in the key",
+            "Path 'buckit/foo//bar' at index x contains illegal character(s) '//' "
+            + "at key index 3",
         "buckit///  //bar":
-            "Path 'buckit///  //bar' at index x contains illegal character string '//' in the key",
+            "Path 'buckit///  //bar' at index x contains illegal character(s) '//' "
+            + "at key index 2",
+        "buckit/barbaz;foo'x":
+            "Path 'buckit/barbaz;foo'x' at index x contains illegal character(s) ';' "
+            + "at key index 6",
+        "buckit/barbaz:foo'x":
+            "Path 'buckit/barbaz:foo'x' at index x contains illegal character(s) ''' "
+            + "at key index 10",
         "buckit/foo/\nbar":
             "Path buckit/foo/\nbar at index x contains a control character "
             + "in the key at position 4",
