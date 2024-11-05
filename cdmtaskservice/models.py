@@ -365,7 +365,11 @@ class Cluster(str, Enum):
 
 
 FilesPerContainer = NamedTuple("FilesPerContainer", [
-    ("containers", int), ("files_per_container", int), ("last_container", int)])
+    ("containers", int),
+    ("files_per_container", int),
+    ("last_container", int),
+    ("files", list[list[S3File | str]])
+])
 """
 Information about splitting files to be processed among containers.
 
@@ -374,6 +378,7 @@ containers - the number of containers expected to be run; this is the mimimum of
 files_per_container - the number of files to be run per container
 last_container - the remainder of files to be run in the last container. Always less than
     files_per_container.
+files - a list of lists of files, split up per container.
 """
 
 
@@ -535,11 +540,12 @@ class JobInput(BaseModel):
         
     def get_files_per_container(self) -> FilesPerContainer:
         """
-        Returns the number of files to be run per container.
+        Returns the number of files to be run per container and the files, split up by container.
         """
         containers = min(self.num_containers, len(self.input_files))
         fpc = math.ceil(len(self.input_files) / containers)
-        return FilesPerContainer(containers, fpc, len(self.input_files) % fpc)
+        files = [self.input_files[i:i + fpc] for i in range(0, fpc * containers, fpc)]
+        return FilesPerContainer(containers, fpc, len(self.input_files) % fpc, files)
 
 
 class JobState(str, Enum):

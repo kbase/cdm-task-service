@@ -28,6 +28,7 @@ wdl - the WDL file as a string.
 input_json - the input.json file as a dict.
 """
 
+
 def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
     """
     Generate input for a JAWS run in the form of a WDL file and input.json file contents.
@@ -41,22 +42,21 @@ def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
         raise ValueError("input files must be S3 files with the E-tag")
     workflow_name = job.image.normed_name.split("@")[0].translate(_IMAGE_TRANS_CHARS)
     file_to_rel_path = determine_file_locations(job.job_input)
-    ins = []
+    input_files = []
     relpaths = []
-    for f in job.job_input.input_files:
-        if f not in file_mapping:
-            raise ValueError(f"file_mapping missing {f}")
-        ins.append(file_mapping[f])
-        relpaths.append(file_to_rel_path[f])
-    fpc_tuple = job.job_input.get_files_per_container()
-    fpc = fpc_tuple.files_per_container
+    for files in job.job_input.get_files_per_container().files:
+        ins = []
+        rels = []
+        for f in files:
+            if f not in file_mapping:
+                raise ValueError(f"file_mapping missing {f}")
+            ins.append(file_mapping[f])
+            rels.append(shlex.quote(file_to_rel_path[f]))
+        input_files.append(ins)
+        relpaths.append(rels)
     input_json = {
-        f"{workflow_name}.input_files_list": [
-            ins[i:i + fpc] for i in range(0, fpc * fpc_tuple.containers, fpc)
-        ],
-        f"{workflow_name}.file_locs_list": [
-            relpaths[i:i + fpc] for i in range(0, fpc * fpc_tuple.containers, fpc)
-        ]
+        f"{workflow_name}.input_files_list": input_files,
+        f"{workflow_name}.file_locs_list": relpaths,
     }
     # Inserting the job ID into the WDL should not bust the Cromwell cache:
     # https://kbase.slack.com/archives/CGJDCR22D/p1729786486819809
@@ -97,9 +97,9 @@ task run_container {{
   
     # link the input files into the mount points
     files=('~{{sep="' '" input_files}}')
-    locs=('~{{sep="' '" file_locs}}') 
-    for i in "${{!files[@]}}"; do
-        ln "$files[i]" ./__input__/"$locs[i]"
+    locs=(~{{sep=" " file_locs}})
+    for i in ${{!files[@]}}; do
+        ln ${{files[i]}} ./__input__/${{locs[i]}}
     done
       
     # run the command

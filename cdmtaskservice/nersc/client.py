@@ -189,7 +189,7 @@ async def _get_expiration(user: AsyncUser, client_id: str) -> datetime.datetime:
     for cli in clients:
         if cli.clientId == client_id:
             dt = datetime.datetime.fromisoformat(cli.expiresAt)
-            # TODO NERSCFEATURE ensure timezone actually is UTC
+            # TODO NERSCFEATURE remove replace when iso string includes TZ
             #      https://nersc.servicenowservices.com/sp?id=ticket&is_new_order=true&table=incident&sys_id=866f532197a51650b052daa00153affe
             return dt.replace(tzinfo=datetime.timezone.utc)
     # This should be impossible
