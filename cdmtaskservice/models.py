@@ -300,19 +300,27 @@ class Parameters(BaseModel):
                 param = self._check_parameter(param, p)
         if self.environment:
             for key, p in self.environment.items():
-                param = self._check_parameter(param, p, f"Environmental parameter at key {key}")
+                param = self._check_parameter(
+                    # Space separated lists in environment variables don't really make sense.
+                    # Come back to this if needed.
+                    param, p, f"Environmental parameter at key {key}", no_space=True)
         return param
 
-    def _check_parameter(self, param: str | Parameter, p: str | Parameter, loc: str = None):
+    def _check_parameter(
+            self, param: str | Parameter, p: str | Parameter, loc: str = None, no_space=True
+    ):
         if isinstance(p, Parameter):
-            if (loc and
-                p.type is ParameterType.INPUT_FILES and
-                p.input_files_format is InputFilesFormat.REPEAT_PARAMETER
-            ):
-                raise ValueError(
-                    f"{loc} may not have {InputFilesFormat.REPEAT_PARAMETER.value} "
-                    + f" set as a {ParameterType.INPUT_FILES.value} type"
-                )
+            if loc and p.type is ParameterType.INPUT_FILES:
+                if p.input_files_format is InputFilesFormat.REPEAT_PARAMETER:
+                    raise ValueError(
+                        f"{loc} may not have {InputFilesFormat.REPEAT_PARAMETER.value} "
+                        + f" set as a {ParameterType.INPUT_FILES.value} type"
+                    )
+                if no_space and p.input_files_format is InputFilesFormat.SPACE_SEPARATED_LIST:
+                    raise ValueError(
+                        f"{loc} may not have {InputFilesFormat.SPACE_SEPARATED_LIST.value} "
+                        + f" set as a {ParameterType.INPUT_FILES.value} type"
+                    )
             if param is not None:
                 raise ValueError(
                     # This may need to change for all vs all analyses
