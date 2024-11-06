@@ -55,6 +55,7 @@ def generate_wdl(
     input_files = []
     relpaths = []
     environment = []
+    cmdlines = []
     for files in job.job_input.get_files_per_container().files:
         ins = []
         rels = []
@@ -65,11 +66,16 @@ def generate_wdl(
             rels.append(shlex.quote(file_to_rel_path[f]))
         input_files.append(ins)
         relpaths.append(rels)
+        cmd = [shlex.quote(c) for c in job.image.entrypoint]
+        # TODO handle flag args
+        cmd.extend(_process_pos_args(job, files, file_to_rel_path))
+        cmdlines.append(cmd)
         environment.append(_process_environment(job, files, file_to_rel_path))
     input_json = {
         f"{workflow_name}.input_files_list": input_files,
         f"{workflow_name}.file_locs_list": relpaths,
         f"{workflow_name}.environment_list": environment,
+        f"{workflow_name}.cmdline_list": cmdlines
     }
     # Inserting the job ID into the WDL should not bust the Cromwell cache:
     # https://kbase.slack.com/archives/CGJDCR22D/p1729786486819809
@@ -84,13 +90,15 @@ workflow {workflow_name} {{
       Array[Array[File]] input_files_list
       Array[Array[String]] file_locs_list
       Array[Array[String]] environment_list
+      Array[Array[String]] cmdline_list
   }}
   scatter (i in range(length(input_files_list))) {{
     call run_container {{
       input:
         input_files = input_files_list[i],
         file_locs = file_locs_list[i],
-        environ = environment_list[i]
+        environ = environment_list[i],
+        cmdline = cmdline_list[i]
     }}
   }}
   output {{
@@ -105,6 +113,7 @@ task run_container {{
     Array[File] input_files
     Array[String] file_locs
     Array[String] environ
+    Array[string] cmdline
   }}
   command <<<
     # ensure host mount points exist
@@ -126,7 +135,7 @@ task run_container {{
     done
       
     # run the command
-    {" ".join([shlex.quote(e) for e in job.image.entrypoint])}
+    ~{{sep=" " cmdline}}
     EC=$?
     echo "Entrypoint exit code: $EC"
 
@@ -160,6 +169,15 @@ task run_container {{
     return JawsInput(wdl, input_json)
 
 
+def _process_pos_args(job: Job, files: list[S3File], file_to_rel_path: dict[S3File, Path]
+) -> list[str]:
+    cmd = []
+    if job.job_input.params.positional_args:
+        for p in job.job_input.params.positional_args:
+            cmd.extend(_process_parameter(p, job, files, file_to_rel_path, as_list=True))
+    return cmd
+
+
 def _process_environment(job: Job, files: list[S3File], file_to_rel_path: dict[S3File, Path]
 ) -> list[str]:
     env = []
@@ -174,8 +192,9 @@ def _process_parameter(
     param: str | Parameter,
     job: Job,
     files: list[S3File],
-    file_to_rel_path: dict[S3File, Path]
-) -> str:
+    file_to_rel_path: dict[S3File, Path],
+    as_list: bool = False,
+) -> str | list[str]:
     if isinstance(param, Parameter):
         match param.type:
             case ParameterType.INPUT_FILES:
@@ -183,7 +202,7 @@ def _process_parameter(
                     case InputFilesFormat.COMMA_SEPARATED_LIST:
                         param = _join_files(files, ",", job, file_to_rel_path)
                     case InputFilesFormat.SPACE_SEPARATED_LIST:
-                        param = _join_files(files, " ", job, file_to_rel_path)
+                        param = _join_files(files, None, job, file_to_rel_path)
                     case _:
                         # should be impossible but make code future proof
                         raise ValueError(f"Unexpected input files format: {_}")
@@ -192,7 +211,7 @@ def _process_parameter(
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
-    return param
+    return [param] if as_list and not isinstance(param, list) else param
 
 
 def _join_files(
@@ -202,4 +221,5 @@ def _join_files(
     file_to_rel_path: dict[S3File, Path]
 ) -> str:
     imp = job.job_input.params.input_mount_point
-    return sep.join([shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files])
+    files = [shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files]
+    return sep.join(files) if sep else files
