@@ -307,7 +307,7 @@ class Parameters(BaseModel):
         return param
 
     def _check_parameter(
-            self, param: str | Parameter, p: str | Parameter, loc: str = None, no_space=True
+            self, param: str | Parameter, p: str | Parameter, loc: str = None, no_space=False
     ):
         if isinstance(p, Parameter):
             if loc and p.type is ParameterType.INPUT_FILES:
