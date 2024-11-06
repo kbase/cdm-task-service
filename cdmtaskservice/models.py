@@ -293,18 +293,34 @@ class Parameters(BaseModel):
         """
         param = None
         if self.positional_args:
-            for p in self.positional_args:
-                param = self._check_parameter(param, p)
+            for i, p in enumerate(self.positional_args):
+                param = self._check_parameter(param, p, f"Positional parameter at index {i}")
         if self.flag_args:
             for p in self.flag_args.values():
                 param = self._check_parameter(param, p)
         if self.environment:
-            for p in self.environment.values():
-                param = self._check_parameter(param, p)
+            for key, p in self.environment.items():
+                param = self._check_parameter(
+                    # Space separated lists in environment variables don't really make sense.
+                    # Come back to this if needed.
+                    param, p, f"Environmental parameter at key {key}", no_space=True)
         return param
 
-    def _check_parameter(self, param, p):
+    def _check_parameter(
+            self, param: str | Parameter, p: str | Parameter, loc: str = None, no_space=False
+    ):
         if isinstance(p, Parameter):
+            if loc and p.type is ParameterType.INPUT_FILES:
+                if p.input_files_format is InputFilesFormat.REPEAT_PARAMETER:
+                    raise ValueError(
+                        f"{loc} may not have {InputFilesFormat.REPEAT_PARAMETER.value} "
+                        + f" set as a {ParameterType.INPUT_FILES.value} type"
+                    )
+                if no_space and p.input_files_format is InputFilesFormat.SPACE_SEPARATED_LIST:
+                    raise ValueError(
+                        f"{loc} may not have {InputFilesFormat.SPACE_SEPARATED_LIST.value} "
+                        + f" set as a {ParameterType.INPUT_FILES.value} type"
+                    )
             if param is not None:
                 raise ValueError(
                     # This may need to change for all vs all analyses
