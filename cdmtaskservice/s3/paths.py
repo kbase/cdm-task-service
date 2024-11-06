@@ -3,10 +3,17 @@ S3 Path related classes and functions.
 """
 
 from collections.abc import Sequence
+import re
 from typing import Generator
 import unicodedata
 
 from .exceptions import S3PathError
+
+# https://code.jgi.doe.gov/advanced-analysis/jaws-docs/-/issues/86
+# These characters are obnoxious in filenames anyway
+# May need to add more characters as problems are discovered
+# Double forward slash is disallowed by S3
+_DISALLOWED_CHARACTERS = re.compile(r"([';]|[/]{2})")
 
 
 class S3Paths:
@@ -74,10 +81,12 @@ def validate_path(path: str, index: int = None) -> str:
     key = parts[1].lstrip("/")  # Leading /s are ignored by s3, but spaces and trailing /s count
     if len(key.encode("UTF-8")) > 1024:
         raise S3PathError(f"Path '{path}'{i}'s key is longer than 1024 bytes in UTF-8")
-    if "//" in key:
-        raise S3PathError(f"Path '{path}'{i} contains illegal "
-                          + "character string '//' in the key")
+    match_ = _DISALLOWED_CHARACTERS.search(key)
+    if match_:
+        raise S3PathError(f"Path '{path}'{i} contains illegal character(s) '{match_.group(1)}' "
+                          + f"at key index {match_.start()}")
     # See https://stackoverflow.com/questions/4324790/removing-control-characters-from-a-string-in-python
+    # Don't want to put control chars in a returned error
     for ci, c in enumerate(key):
         if unicodedata.category(c)[0] == 'C':
             raise S3PathError(
