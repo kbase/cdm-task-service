@@ -11,7 +11,7 @@ import math
 import shlex
 from typing import NamedTuple, Any
 
-from cdmtaskservice.models import Job, S3File
+from cdmtaskservice.models import Job, S3File, Parameter
 from cdmtaskservice.input_file_locations import determine_file_locations
 
 
@@ -20,13 +20,18 @@ _WDL_VERSION = "1.0"  # Cromwell, and therefore JAWS, only supports 1.0
 _IMAGE_TRANS_CHARS = str.maketrans({".": "_", "-": "_", "/": "_", ":": "_"})
 
 
-JawsInput = NamedTuple("JawsInput", [("wdl", str), ("input_json", dict[str, Any])])
-"""
-Input to the JGI JAWS job runner.
-
-wdl - the WDL file as a string.
-input_json - the input.json file as a dict.
-"""
+class JawsInput(NamedTuple):
+    """ Input to the JGI JAWS job runner. """
+    wdl: str
+    """ The WDL file as a string. """
+    input_json: dict[str, Any]
+    """ The input.json file as a dict. """
+    # TODO handle manifest (does this make sense)?
+    manifest_file_names: list[str] = None
+    """
+    The list of manifest file names, 1 per container. These are expected to
+    be in the same directory as the WDL file.
+    """
 
 
 def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
@@ -44,6 +49,7 @@ def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
     file_to_rel_path = determine_file_locations(job.job_input)
     input_files = []
     relpaths = []
+    environment = []
     for files in job.job_input.get_files_per_container().files:
         ins = []
         rels = []
@@ -54,9 +60,17 @@ def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
             rels.append(shlex.quote(file_to_rel_path[f]))
         input_files.append(ins)
         relpaths.append(rels)
+        env = []
+        for envkey, enval in job.job_input.params.environment.items():
+            if isinstance(enval, Parameter):
+                pass  # TODO Handle parameters
+            else:
+                env.append(shlex.quote(f"{envkey}={enval}"))
+        environment.append(env)
     input_json = {
         f"{workflow_name}.input_files_list": input_files,
         f"{workflow_name}.file_locs_list": relpaths,
+        f"{workflow_name}.environment_list": environment,
     }
     # Inserting the job ID into the WDL should not bust the Cromwell cache:
     # https://kbase.slack.com/archives/CGJDCR22D/p1729786486819809
@@ -70,12 +84,14 @@ workflow {workflow_name} {{
   input {{
       Array[Array[File]] input_files_list
       Array[Array[String]] file_locs_list
+      Array[Array[String]] environment_list
   }}
   scatter (i in range(length(input_files_list))) {{
     call run_container {{
       input:
         input_files = input_files_list[i],
-        file_locs = file_locs_list[i]
+        file_locs = file_locs_list[i],
+        environ = environment_list[i]
     }}
   }}
   output {{
@@ -88,7 +104,8 @@ workflow {workflow_name} {{
 task run_container {{
   input {{
     Array[File] input_files
-    Array[File] file_locs
+    Array[String] file_locs
+    Array[String] environ
   }}
   command <<<
     # ensure host mount points exist
@@ -99,7 +116,14 @@ task run_container {{
     files=('~{{sep="' '" input_files}}')
     locs=(~{{sep=" " file_locs}})
     for i in ${{!files[@]}}; do
+        mkdir -p ./__input__/$(dirname ${{locs[i]}})
         ln ${{files[i]}} ./__input__/${{locs[i]}}
+    done
+    
+    # Set up environment
+    job_env=(~{{sep=" " environ}})
+    for jenv in ${{job_env[@]}}; do
+        export $jenv
     done
       
     # run the command
