@@ -199,7 +199,7 @@ def _join_files(
     files: list[S3File],
     sep: str,
     job: Job,
-    file_to_rel_path: dict[S3File, str]
+    file_to_rel_path: dict[S3File, Path]
 ) -> str:
     imp = job.job_input.params.input_mount_point
     return sep.join([shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files])
