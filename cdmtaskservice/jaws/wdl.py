@@ -7,11 +7,19 @@ A builder of Workflow Definition Language documents for the purposes of running 
 # TODO TEST manually test with JAWS
 # TODO MOUNTING add mounting info when available
 
+import os
+from pathlib import Path
 import math
 import shlex
 from typing import NamedTuple, Any
 
-from cdmtaskservice.models import Job, S3File, Parameter
+from cdmtaskservice.models import (
+    Job,
+    S3File,
+    Parameter,
+    ParameterType,
+    InputFilesFormat,
+)
 from cdmtaskservice.input_file_locations import determine_file_locations
 
 
@@ -26,20 +34,17 @@ class JawsInput(NamedTuple):
     """ The WDL file as a string. """
     input_json: dict[str, Any]
     """ The input.json file as a dict. """
-    # TODO handle manifest (does this make sense)?
-    manifest_file_names: list[str] = None
-    """
-    The list of manifest file names, 1 per container. These are expected to
-    be in the same directory as the WDL file.
-    """
 
 
-def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
+def generate_wdl(
+    job: Job,
+    file_mapping: dict[S3File, Path],
+) -> JawsInput:
     """
     Generate input for a JAWS run in the form of a WDL file and input.json file contents.
     
     job_input - the input for the job.
-    file_mapping - a mapping of the input S3 files to their locations at the JAWS site.
+    file_mapping - a mapping of the input S3 files to their paths at the JAWS site.
         These can be absolute paths or relative to the location of the WDL file.
     """
     # It'd be nice if there were a programmatic WDL writer but I haven't been able to find one
@@ -56,17 +61,11 @@ def generate_wdl(job: Job, file_mapping: dict[S3File, str]) -> JawsInput:
         for f in files:
             if f not in file_mapping:
                 raise ValueError(f"file_mapping missing {f}")
-            ins.append(file_mapping[f])
+            ins.append(str(file_mapping[f]))
             rels.append(shlex.quote(file_to_rel_path[f]))
         input_files.append(ins)
         relpaths.append(rels)
-        env = []
-        for envkey, enval in job.job_input.params.environment.items():
-            if isinstance(enval, Parameter):
-                pass  # TODO Handle parameters
-            else:
-                env.append(shlex.quote(f"{envkey}={enval}"))
-        environment.append(env)
+        environment.append(_process_environment(job, files, file_to_rel_path))
     input_json = {
         f"{workflow_name}.input_files_list": input_files,
         f"{workflow_name}.file_locs_list": relpaths,
@@ -159,3 +158,48 @@ task run_container {{
     # TODO WDL handle file manifests
     # TODO WDL look through the model and design and see what else we're missing
     return JawsInput(wdl, input_json)
+
+
+def _process_environment(job: Job, files: list[S3File], file_to_rel_path: dict[S3File, Path]
+) -> list[str]:
+    env = []
+    if job.job_input.params.environment:
+        for envkey, enval in job.job_input.params.environment.items():
+            enval = _process_parameter(enval, job, files, file_to_rel_path)
+            env.append(f'{envkey}={enval}')
+    return env
+
+
+def _process_parameter(
+    param: str | Parameter,
+    job: Job,
+    files: list[S3File],
+    file_to_rel_path: dict[S3File, Path]
+) -> str:
+    if isinstance(param, Parameter):
+        match param.type:
+            case ParameterType.INPUT_FILES:
+                match param.input_files_format:
+                    case InputFilesFormat.COMMA_SEPARATED_LIST:
+                        param = _join_files(files, ",", job, file_to_rel_path)
+                    case InputFilesFormat.SPACE_SEPARATED_LIST:
+                        param = _join_files(files, " ", job, file_to_rel_path)
+                    case _:
+                        # should be impossible but make code future proof
+                        raise ValueError(f"Unexpected input files format: {_}")
+            case ParameterType.MANIFEST_FILE:
+                pass # TODO manifest files
+            case _:
+                # should be impossible but make code future proof
+                raise ValueError(f"Unexpected parameter type: {_}")
+    return param
+
+
+def _join_files(
+    files: list[S3File],
+    sep: str,
+    job: Job,
+    file_to_rel_path: dict[S3File, Path]
+) -> str:
+    imp = job.job_input.params.input_mount_point
+    return sep.join([shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files])
