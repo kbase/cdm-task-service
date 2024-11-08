@@ -234,7 +234,6 @@ class Parameters(BaseModel):
         description="A list of positional parameters to be inserted at the end of the container "
             + "entrypoint command. Strings are treated as literals and can each be no more than "
             + "1000 characters."
-        # TODO SECURITY be sure to quote the strings https://docs.python.org/dev/library/shlex.html#shlex.quote
     )] = None
     flag_args: Annotated[dict[Flag, ArgumentString | Parameter] | None, Field(
         example={
@@ -247,7 +246,6 @@ class Parameters(BaseModel):
         description="A dictionary of flag parameters to be inserted into the container "
             + "entrypoint command line. Strings are treated as literals. Keys and strings "
             + "can each be no more than 1000 characters."
-        # TODO SECURITY be sure to quote the keys and strings https://docs.python.org/dev/library/shlex.html#shlex.quote
     )] = None
     environment: Annotated[dict[EnvironmentVariable, ArgumentString | Parameter] | None, Field(
         example={
@@ -261,7 +259,6 @@ class Parameters(BaseModel):
         description="A dictionary of environment variables to be inserted into the container. "
             + "Strings are treated as literals. Keys and strings "
             + "can each be no more than 1000 characters."
-        # TODO SECURITY be sure to quote the keys and strings https://docs.python.org/dev/library/shlex.html#shlex.quote
     )] = None
     
     @field_validator(
@@ -454,7 +451,9 @@ class JobInput(BaseModel):
         description="The runtime required for each container as the number of seconds or an "
             + "ISO8601 duration string.",
         ge=1,
-        le=3 * 24 * 60 * 60,  # max JAWS runtime
+        # https://jaws-docs.readthedocs.io/en/latest/Resources/compute_resources.html#table-of-available-resources
+        # TODO LAWRENCIUM can handle 3 days, need to check per site. same for CPU
+        le=2 * 24 * 60 * 60 - (15 * 60),  # max JAWS runtime
     )] = datetime.timedelta(seconds=60)
     input_files: Annotated[list[str] | list[S3File], Field(
         example=[  # TODO EXAMPLES add a string example if examples works
