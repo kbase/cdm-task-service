@@ -2,10 +2,9 @@
 A builder of Workflow Definition Language documents for the purposes of running CTS jobs with JAWS.
 '''
 
-# TODO TEST
+# TODO TEST automated tests
 # TODO TEST parse output with miniwdl or something for syntax checking
 # TODO TEST manually test with JAWS
-# TODO MOUNTING add mounting info when available
 
 import os
 from pathlib import Path
@@ -39,6 +38,7 @@ class JawsInput(NamedTuple):
 def generate_wdl(
     job: Job,
     file_mapping: dict[S3File, Path],
+    manifest_file_list: list[Path] = None,
 ) -> JawsInput:
     """
     Generate input for a JAWS run in the form of a WDL file and input.json file contents.
@@ -46,17 +46,35 @@ def generate_wdl(
     job_input - the input for the job.
     file_mapping - a mapping of the input S3 files to their paths at the JAWS site.
         These can be absolute paths or relative to the location of the WDL file.
+    manifest_file_list - A list of manifest paths at the JAWS site.
+        These can be absolute paths or relative to the location of the WDL file.
+        Required if manifest files are specified in the job input.
+        The manifest files will be mounted directly into the input mount point for the job,
+        regardless of the path, and so must not collide with any other files in the input root.
     """
     # It'd be nice if there were a programmatic WDL writer but I haven't been able to find one
+    # This fn is a little long but not too hard to read yet I think
+    # If the manifest file name / path changes that'll break the JAWS cache, need to think about that
+    # How often will jobs run with identical manifest files though? Maybe MD5 based caching?
     if not job.job_input.inputs_are_S3File():
         raise ValueError("input files must be S3 files with the E-tag")
+    job_files = job.job_input.get_files_per_container()
+    param = job.job_input.params.get_parameter()
+    if param and param.type is ParameterType.MANIFEST_FILE and (
+        not manifest_file_list or job_files.containers != len(manifest_file_list)
+    ):
+        raise ValueError(
+            "If a manifest file is specified in the job parameters manifest_file_list "
+            + "is required and its length must match the number of containers for the job"
+        )
     workflow_name = job.image.normed_name.split("@")[0].translate(_IMAGE_TRANS_CHARS)
     file_to_rel_path = determine_file_locations(job.job_input)
     input_files = []
     relpaths = []
     environment = []
     cmdlines = []
-    for files in job.job_input.get_files_per_container().files:
+    mfl = [None] * job_files.containers if not manifest_file_list else manifest_file_list
+    for files, manifest in zip(job_files.files, mfl):
         ins = []
         rels = []
         for f in files:
@@ -67,20 +85,39 @@ def generate_wdl(
         input_files.append(ins)
         relpaths.append(rels)
         cmd = [shlex.quote(c) for c in job.image.entrypoint]
-        cmd.extend(_process_flag_args(job, files, file_to_rel_path))
-        cmd.extend(_process_pos_args(job, files, file_to_rel_path))
+        cmd.extend(_process_flag_args(job, files, file_to_rel_path, manifest))
+        cmd.extend(_process_pos_args(job, files, file_to_rel_path, manifest))
         cmdlines.append(cmd)
-        environment.append(_process_environment(job, files, file_to_rel_path))
+        environment.append(_process_environment(job, files, file_to_rel_path, manifest))
     input_json = {
         f"{workflow_name}.input_files_list": input_files,
         f"{workflow_name}.file_locs_list": relpaths,
         f"{workflow_name}.environment_list": environment,
         f"{workflow_name}.cmdline_list": cmdlines
     }
+    if manifest_file_list:
+        input_json[f"{workflow_name}.manifest_list"] = [str(m) for m in manifest_file_list]
+
+    wdl = _generate_wdl(job, workflow_name, bool(manifest_file_list))
+    return JawsInput(wdl, input_json)
+
+
+def _generate_wdl(job: Job, workflow_name: str, manifests: bool):
     # Inserting the job ID into the WDL should not bust the Cromwell cache:
     # https://kbase.slack.com/archives/CGJDCR22D/p1729786486819809
     # https://cromwell.readthedocs.io/en/stable/cromwell_features/CallCaching/
-    wdl = f"""
+    mani_wf_input = ""
+    mani_call_input = ""
+    mani_task_input = ""
+    if manifests:
+        mani_wf_input = """
+      Array[File] manifest_list"""
+        mani_call_input = """,
+        manifest = manifest_list[i]"""
+        mani_task_input = """
+    File manifest"""
+
+    return f"""
 version {_WDL_VERSION}
 
 # CTS_JOB_ID: {job.id}
@@ -90,7 +127,7 @@ workflow {workflow_name} {{
       Array[Array[File]] input_files_list
       Array[Array[String]] file_locs_list
       Array[Array[String]] environment_list
-      Array[Array[String]] cmdline_list
+      Array[Array[String]] cmdline_list{mani_wf_input}
   }}
   scatter (i in range(length(input_files_list))) {{
     call run_container {{
@@ -98,7 +135,7 @@ workflow {workflow_name} {{
         input_files = input_files_list[i],
         file_locs = file_locs_list[i],
         environ = environment_list[i],
-        cmdline = cmdline_list[i]
+        cmdline = cmdline_list[i]{mani_call_input}
     }}
   }}
   output {{
@@ -113,14 +150,19 @@ task run_container {{
     Array[File] input_files
     Array[String] file_locs
     Array[String] environ
-    Array[string] cmdline
+    Array[string] cmdline{mani_task_input}
   }}
   command <<<
     # ensure host mount points exist
     mkdir -p ./__input__
     mkdir -p ./__output__
-  
-    # link the input files into the mount points
+    
+    # link any manifest file into the mount point
+    if [[ -n "${{manifest}}" ]]; then
+        ln ${{manifest}} ./__input__/$(basename ${{manifest}})
+    fi
+    
+    # link the input files into the mount point
     files=('~{{sep="' '" input_files}}')
     locs=(~{{sep=" " file_locs}})
     for i in ${{!files[@]}}; do
@@ -159,42 +201,48 @@ task run_container {{
   }}
 }}
 """
-    # TODO WDL handle pos args
-    # TODO WDL handle flag args
-    # TODO WDL handle env args
     # TODO WDL handle mounting
     # TODO WDL handle refdata
-    # TODO WDL handle file manifests
-    # TODO WDL look through the model and design and see what else we're missing
-    return JawsInput(wdl, input_json)
 
 
-def _process_flag_args(job: Job, files: list[S3File], file_to_rel_path: dict[S3File, Path]
+def _process_flag_args(
+    job: Job,
+    files: list[S3File],
+    file_to_rel_path: dict[S3File, Path],
+    manifest: Path | None,
 ) -> list[str]:
     cmd = []
     if job.job_input.params.flag_args:
         for flag, p in job.job_input.params.flag_args.items():
             cmd.extend(_process_parameter(
-                p, job, files, file_to_rel_path, as_list=True, flag=flag
+                p, job, files, file_to_rel_path, manifest, as_list=True, flag=flag
             ))
     return cmd
 
 
-def _process_pos_args(job: Job, files: list[S3File], file_to_rel_path: dict[S3File, Path]
+def _process_pos_args(
+    job: Job,
+    files: list[S3File],
+    file_to_rel_path: dict[S3File, Path],
+    manifest: Path | None,
 ) -> list[str]:
     cmd = []
     if job.job_input.params.positional_args:
         for p in job.job_input.params.positional_args:
-            cmd.extend(_process_parameter(p, job, files, file_to_rel_path, as_list=True))
+            cmd.extend(_process_parameter(p, job, files, file_to_rel_path, manifest, as_list=True))
     return cmd
 
 
-def _process_environment(job: Job, files: list[S3File], file_to_rel_path: dict[S3File, Path]
+def _process_environment(
+    job: Job,
+    files: list[S3File],
+    file_to_rel_path: dict[S3File, Path],
+    manifest: Path | None,
 ) -> list[str]:
     env = []
     if job.job_input.params.environment:
         for envkey, enval in job.job_input.params.environment.items():
-            enval = _process_parameter(enval, job, files, file_to_rel_path)
+            enval = _process_parameter(enval, job, files, file_to_rel_path, manifest)
             env.append(f'{envkey}={enval}')
     return env
 
@@ -204,6 +252,7 @@ def _process_parameter(
     job: Job,
     files: list[S3File],
     file_to_rel_path: dict[S3File, Path],
+    manifest: Path | None,
     as_list: bool = False,  # flag space separated files imply as list
     flag: str = None,
 ) -> str | list[str]:
@@ -211,8 +260,8 @@ def _process_parameter(
         match param.type:
             case ParameterType.INPUT_FILES:
                 param = _join_files(files, param.input_files_format, job, file_to_rel_path, flag)
-            case ParameterType.MANIFEST_FILE:
-                pass # TODO manifest files
+            case ParameterType.MANIFEST_FILE:  # implies manifest file is not None
+                param = _handle_manifest(job, manifest, flag)
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
@@ -224,6 +273,20 @@ def _process_parameter(
     else:
         shlex.quote(param)
     return [param] if as_list and not isinstance(param, list) else param
+
+
+def _handle_manifest(job: Job, manifest: Path, flag: str) -> str | list[str]:
+    pth = os.path.join(job.job_input.params.input_mount_point, manifest.name)
+    # This is the same as the command separated list case below... not sure if using a common fn
+    # makes sense
+    if flag:
+        if flag.endswith("="):
+            param = shlex.quote(flag + pth)
+        else:
+            param = [shlex.quote(flag), shlex.quote(pth)]
+    else:
+        param = shlex.quote(pth)
+    return param
 
 
 # this is a bit on the complex side...
