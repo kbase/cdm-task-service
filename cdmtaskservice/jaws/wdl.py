@@ -210,15 +210,7 @@ def _process_parameter(
     if isinstance(param, Parameter):
         match param.type:
             case ParameterType.INPUT_FILES:
-                match param.input_files_format:
-                    case InputFilesFormat.COMMA_SEPARATED_LIST:
-                        param = _join_files(files, ",", job, file_to_rel_path, flag)
-                    case InputFilesFormat.SPACE_SEPARATED_LIST:
-                        param = _join_files(files, None, job, file_to_rel_path, flag)
-                    # TODO Repeated parameter
-                    case _:
-                        # should be impossible but make code future proof
-                        raise ValueError(f"Unexpected input files format: {_}")
+                param = _join_files(files, param.input_files_format, job, file_to_rel_path, flag)
             case ParameterType.MANIFEST_FILE:
                 pass # TODO manifest files
             case _:
@@ -234,34 +226,54 @@ def _process_parameter(
     return [param] if as_list and not isinstance(param, list) else param
 
 
+# this is a bit on the complex side...
 def _join_files(
     files: list[S3File],
-    sep: str,
+    format_: InputFilesFormat,
     job: Job,
     file_to_rel_path: dict[S3File, Path],
     flag: str,
 ) -> str | list[str]:
     imp = job.job_input.params.input_mount_point
-    if sep:
-        fileret = sep.join([os.path.join(imp, file_to_rel_path[f]) for f in files])
-        if flag:
-            if flag.endswith("="):
-                fileret = shlex.quote(flag + fileret)
+    match format_:
+        case InputFilesFormat.COMMA_SEPARATED_LIST:
+            fileret = ",".join([_join_path(imp, file_to_rel_path, f) for f in files])
+            if flag:
+                if flag.endswith("="):
+                    fileret = shlex.quote(flag + fileret)
+                else:
+                    fileret = [shlex.quote(flag), shlex.quote(fileret)]
             else:
-                fileret = [shlex.quote(flag), shlex.quote(fileret)]
-        else:
-            fileret = shlex.quote(fileret)
-    else:
-        if flag:
+                fileret = shlex.quote(fileret)
+        case InputFilesFormat.SPACE_SEPARATED_LIST:
+            if flag:
+                if flag.endswith("="):
+                    # this case is a little weird
+                    fileret = [
+                        shlex.quote(flag + _join_path(imp, file_to_rel_path, files[0]))
+                    ] + [_join_path(imp, file_to_rel_path, f, quote=True) for f in files[1:]]
+                else: 
+                    fileret = [shlex.quote(flag)] + [
+                        _join_path(imp, file_to_rel_path, f, quote=True) for f in files
+                    ]
+            else:
+                fileret = [_join_path(imp, file_to_rel_path, f, quote=True) for f in files]
+        case InputFilesFormat.REPEAT_PARAMETER:  # implies flag
+            fileret = []
             if flag.endswith("="):
-                # this case is a little weird
-                fileret = [
-                    shlex.quote(flag + os.path.join(imp, file_to_rel_path[files[0]]))
-                ] + [shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files[1:]]
-            else: 
-                fileret = [shlex.quote(flag)] + [
-                    shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files
-                ]
-        else:
-            fileret = [shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files]
+                for f in files:
+                    fileret.append(shlex.quote(flag + _join_path(imp, file_to_rel_path, f)))
+            else:
+                flag = shlex.quote(flag)
+                for f in files:
+                    fileret.extend((flag, _join_path(imp, file_to_rel_path, f, quote=True)))
+        case _:
+            # should be impossible but make code future proof
+            raise ValueError(f"Unexpected input files format: {_}")
     return fileret
+
+
+def _join_path(imp: str, file_to_rel_path: dict[S3File, Path], f: S3File, quote: bool = False
+) -> str:
+    p = os.path.join(imp, file_to_rel_path[f])
+    return shlex.quote(p) if quote else p
