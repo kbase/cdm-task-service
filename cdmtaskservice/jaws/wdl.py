@@ -81,7 +81,7 @@ def generate_wdl(
             if f not in file_mapping:
                 raise ValueError(f"file_mapping missing {f}")
             ins.append(str(file_mapping[f]))
-            rels.append(shlex.quote(file_to_rel_path[f]))
+            rels.append(shlex.quote(str(file_to_rel_path[f])))
         input_files.append(ins)
         relpaths.append(rels)
         cmd = [shlex.quote(c) for c in job.image.entrypoint]

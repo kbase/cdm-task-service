@@ -6,11 +6,12 @@ from bidict import bidict
 import marisa_trie
 import math
 import os
+from pathlib import Path
 
 from cdmtaskservice.models import JobInput, S3File
 
 
-def determine_file_locations(job_input: JobInput) -> dict[S3File | str, str]:
+def determine_file_locations(job_input: JobInput) -> dict[S3File | str, Path]:
     """
     Given job input, determine where files should be placed given a set of input roots.
     
@@ -38,7 +39,7 @@ def determine_file_locations(job_input: JobInput) -> dict[S3File | str, str]:
                 f"Input files '{fstr}' at index {i} and '{seen[loc][0]}' "
                 + f"at index {seen[loc][1]} collide at path "
                 + f"'{job_input.params.input_mount_point}/{loc}'")
-        ret[f] = loc
+        ret[f] = Path(loc)
         seen[loc] = (fstr, i)
     return ret
 
