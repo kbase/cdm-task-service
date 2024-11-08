@@ -67,7 +67,7 @@ def generate_wdl(
         input_files.append(ins)
         relpaths.append(rels)
         cmd = [shlex.quote(c) for c in job.image.entrypoint]
-        # TODO handle flag args
+        cmd.extend(_process_flag_args(job, files, file_to_rel_path))
         cmd.extend(_process_pos_args(job, files, file_to_rel_path))
         cmdlines.append(cmd)
         environment.append(_process_environment(job, files, file_to_rel_path))
@@ -169,6 +169,17 @@ task run_container {{
     return JawsInput(wdl, input_json)
 
 
+def _process_flag_args(job: Job, files: list[S3File], file_to_rel_path: dict[S3File, Path]
+) -> list[str]:
+    cmd = []
+    if job.job_input.params.flag_args:
+        for flag, p in job.job_input.params.flag_args.items():
+            cmd.extend(_process_parameter(
+                p, job, files, file_to_rel_path, as_list=True, flag=flag
+            ))
+    return cmd
+
+
 def _process_pos_args(job: Job, files: list[S3File], file_to_rel_path: dict[S3File, Path]
 ) -> list[str]:
     cmd = []
@@ -193,16 +204,18 @@ def _process_parameter(
     job: Job,
     files: list[S3File],
     file_to_rel_path: dict[S3File, Path],
-    as_list: bool = False,
+    as_list: bool = False,  # flag space separated files imply as list
+    flag: str = None,
 ) -> str | list[str]:
     if isinstance(param, Parameter):
         match param.type:
             case ParameterType.INPUT_FILES:
                 match param.input_files_format:
                     case InputFilesFormat.COMMA_SEPARATED_LIST:
-                        param = _join_files(files, ",", job, file_to_rel_path)
+                        param = _join_files(files, ",", job, file_to_rel_path, flag)
                     case InputFilesFormat.SPACE_SEPARATED_LIST:
-                        param = _join_files(files, None, job, file_to_rel_path)
+                        param = _join_files(files, None, job, file_to_rel_path, flag)
+                    # TODO Repeated parameter
                     case _:
                         # should be impossible but make code future proof
                         raise ValueError(f"Unexpected input files format: {_}")
@@ -211,6 +224,13 @@ def _process_parameter(
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
+    elif flag:
+        if flag.endswith("="):
+            param = shlex.quote(flag + param)
+        else:
+            param = [shlex.quote(flag), shlex.quote(param)]
+    else:
+        shlex.quote(param)
     return [param] if as_list and not isinstance(param, list) else param
 
 
@@ -218,8 +238,30 @@ def _join_files(
     files: list[S3File],
     sep: str,
     job: Job,
-    file_to_rel_path: dict[S3File, Path]
-) -> str:
+    file_to_rel_path: dict[S3File, Path],
+    flag: str,
+) -> str | list[str]:
     imp = job.job_input.params.input_mount_point
-    files = [shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files]
-    return sep.join(files) if sep else files
+    if sep:
+        fileret = sep.join([os.path.join(imp, file_to_rel_path[f]) for f in files])
+        if flag:
+            if flag.endswith("="):
+                fileret = shlex.quote(flag + fileret)
+            else:
+                fileret = [shlex.quote(flag), shlex.quote(fileret)]
+        else:
+            fileret = shlex.quote(fileret)
+    else:
+        if flag:
+            if flag.endswith("="):
+                # this case is a little weird
+                fileret = [
+                    shlex.quote(flag + os.path.join(imp, file_to_rel_path[files[0]]))
+                ] + [shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files[1:]]
+            else: 
+                fileret = [shlex.quote(flag)] + [
+                    shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files
+                ]
+        else:
+            fileret = [shlex.quote(os.path.join(imp, file_to_rel_path[f])) for f in files]
+    return fileret
