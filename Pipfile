@@ -9,11 +9,12 @@ aiohttp = "==3.10.10"
 sfapi-client = "==0.3.1"
 requests = "==2.32.3"
 docker-image-py = "==0.1.13"
-fastapi = "==0.115.4"
+fastapi = {extras = ["standard"], version = "==0.115.4"}
 marisa-trie = "==1.2.1"
 bidict = "==0.23.1"
 uvicorn = {extras = ["standard"], version = "==0.32.0"}
 jinja-cli = "==1.2.2"
+cacheout = "==0.16.0"
 
 [dev-packages]
 pytest = "==8.3.3"

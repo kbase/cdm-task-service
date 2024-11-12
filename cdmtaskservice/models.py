@@ -23,6 +23,8 @@ from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathE
 
 # TODO TEST
 # TODO EXAMPLES try using examples instead of the deprecated example. Last time I tried no joy
+#               still doesn't seem to work as of 24/11/11
+#               https://github.com/fastapi/fastapi/discussions/11137
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
 # POSiX fully portable filenames and /
