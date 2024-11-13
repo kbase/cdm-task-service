@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from cdmtaskservice import app_state
 from cdmtaskservice import errors
+from cdmtaskservice.error_mapping import map_error
 from cdmtaskservice import models_errors
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.git_commit import GIT_COMMIT
@@ -84,13 +85,16 @@ def _handle_starlette_exception(r: Request, exc: StarletteHTTPException):
 
 
 def _handle_general_exception(r: Request, exc: Exception):
-    # TODO ERRORHANDLING may want to only return error message if service admin, owise generic msg
-    # TODO ERRORHANDLING map exception class to error type and status_code
-    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-    if len(exc.args) == 1 and type(exc.args[0]) == str:
-        return _format_error(status_code, exc.args[0])
+    errmap = map_error(exc)
+    if errmap.http_code < 500:
+        return _format_error(errmap.http_code, str(exc), errmap.err_type)
     else:
-        return _format_error(status_code)
+        # TODO ERRORHANDLING may want to only return error message for 500s if user is a
+        #      service admin, otherwise return a generic message
+        if len(exc.args) == 1 and type(exc.args[0]) == str:
+            return _format_error(errmap.http_code, exc.args[0])
+        else:
+            return _format_error(errmap.http_code)
         
 
 def _format_error(
