@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from http.client import responses
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from cdmtaskservice import app_state
 from cdmtaskservice import errors
 from cdmtaskservice import models_errors
 from cdmtaskservice.config import CDMTaskServiceConfig
@@ -59,7 +60,13 @@ def create_app():
     app.add_middleware(GZipMiddleware)
     app.include_router(ROUTER_GENERAL)
 
-    # TODO APPSTATE handle starup and shudown of app state
+    async def build_app_wrapper():
+        await app_state.build_app(app, cfg)
+    app.add_event_handler("startup", build_app_wrapper)
+
+    async def clean_app_wrapper():
+        await app_state.destroy_app_state(app)
+    app.add_event_handler("shutdown", clean_app_wrapper)
     
     return app
 
