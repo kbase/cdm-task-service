@@ -32,8 +32,11 @@ async def build_app(
     cfg - the CDM task service config.
     """
     print("Connecting to KBase auth service... ", end="", flush=True)
-    # TODO AUTH enforce kbase staff and Nersc account roles
-    auth = await KBaseAuth.create(cfg.auth_url, full_admin_roles=cfg.auth_full_admin_roles)
+    auth = await KBaseAuth.create(
+        cfg.auth_url,
+        required_roles=[cfg.kbase_staff_role, cfg.has_nersc_account_role],
+        full_admin_roles=cfg.auth_full_admin_roles
+    )
     print("Done")
     app.state._cdmstate = AppState(auth)
 

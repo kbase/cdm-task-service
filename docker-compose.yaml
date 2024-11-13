@@ -16,6 +16,8 @@ services:
     environment:
       - KBCOLL_KBASE_AUTH2_URL=https://ci.kbase.us/services/auth
       - KBCOLL_KBASE_AUTH2_ADMIN_ROLES=CDM_TASK_SERVICE_ADMIN
+      - KBCOLL_KBASE_STAFF_ROLE=KBASE_STAFF
+      - KBCOLL_HAS_NERSC_ACCOUNT_ROLE=HAS_NERSC_ACCOUNT
 
 # TODO MINIO add minio
 
