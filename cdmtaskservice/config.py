@@ -4,7 +4,7 @@ A configuration parser for the CDM task service. The configuration is expected t
 """
 
 import tomllib
-from typing import Optional, BinaryIO, TextIO
+from typing import BinaryIO, TextIO
 
 _SEC_AUTH = "Authentication"
 _SEC_SERVICE = "Service"
@@ -41,6 +41,10 @@ class CDMTaskServiceConfig:
         _check_missing_section(config, _SEC_SERVICE)
         self.auth_url = _get_string_required(config, _SEC_AUTH, "url")
         self.auth_full_admin_roles = _get_list_string(config, _SEC_AUTH, "admin_roles_full")
+        self.kbase_staff_role = _get_string_required(config, _SEC_AUTH, "kbase_staff_role")
+        self.has_nersc_account_role = _get_string_required(
+            config, _SEC_AUTH, "has_nersc_account_role"
+        )
 
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
 
@@ -55,6 +59,8 @@ class CDMTaskServiceConfig:
         output.writelines([
             f"Authentication URL: {self.auth_url}\n",
             f"Authentication full admin roles: {self.auth_full_admin_roles}\n",
+            f"Authentication KBase staff role: {self.kbase_staff_role}\n",
+            f"Authentication has NERSC account role: {self.has_nersc_account_role}\n"
             f"Service root path: {self.service_root_path}\n",
             "*** End Service Configuration ***\n\n"
         ])
@@ -73,7 +79,7 @@ def _get_string_required(config, section, key) -> str:
 
 
 # assumes section exists
-def _get_string_optional(config, section, key) -> Optional[str]:
+def _get_string_optional(config, section, key) -> str | None:
     putative = config[section].get(key)
     if putative is None:
         return None

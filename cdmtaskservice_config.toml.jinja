@@ -7,6 +7,14 @@ url = "{{ KBCOLL_KBASE_AUTH2_URL or "https://ci.kbase.us/services/auth" }}"
 # This is a comma delimited list, e.g. "KBASE_ADMIN, CDM_TASK_SERVICE_ADMIN"
 admin_roles_full = "{{ KBCOLL_KBASE_AUTH2_ADMIN_ROLES or ""}}"
 
+# KBase auth2 custom role that signifies a user is a KBase staff member.
+# This role is required to use the CDM task service.
+kbase_staff_role = "{{ KBCOLL_KBASE_STAFF_ROLE or "KBASE_STAFF"}}"
+
+# KBase auth2 custom role that signifies a user possesses a NERSC account.
+# This role is required to use the CDM task service.
+has_nersc_account_role = "{{ KBCOLL_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"}}"
+
 [Service]
 
 # If the service is behind a reverse proxy that rewrites the service path, that path needs
