@@ -153,6 +153,11 @@ class NERSCSFAPIClientProvider:
         self._check_destroy()
         return self._client[0]
 
+    def get_client_id(self) -> str:
+        """ Get ID of the client, an opaque string. """
+        self._check_destroy()
+        return self._client[1]
+
     def expiration(self) -> datetime.datetime:
         """ Get the expiration time of the current set of credentials. """
         self._check_destroy()
@@ -188,9 +193,6 @@ async def _get_expiration(user: AsyncUser, client_id: str) -> datetime.datetime:
     clients = await user.clients()
     for cli in clients:
         if cli.clientId == client_id:
-            dt = datetime.datetime.fromisoformat(cli.expiresAt)
-            # TODO NERSCFEATURE remove replace when iso string includes TZ
-            #      https://nersc.servicenowservices.com/sp?id=ticket&is_new_order=true&table=incident&sys_id=866f532197a51650b052daa00153affe
-            return dt.replace(tzinfo=datetime.timezone.utc)
+            return datetime.datetime.fromisoformat(cli.expiresAt)
     # This should be impossible
     raise ValueError(f"NERSC returned no client matching client ID {client_id}")

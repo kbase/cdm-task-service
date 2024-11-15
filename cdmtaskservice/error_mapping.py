@@ -8,6 +8,7 @@ from typing import NamedTuple
 from cdmtaskservice.errors import ErrorType
 from cdmtaskservice.http_bearer import MissingTokenError, InvalidAuthHeaderError
 from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError
+from cdmtaskservice.routes import UnauthorizedError
 
 
 class ErrorMapping(NamedTuple):
@@ -25,6 +26,7 @@ _ERR_MAP = {
     InvalidAuthHeaderError: ErrorMapping(
         ErrorType.INVALID_AUTH_HEADER, status.HTTP_401_UNAUTHORIZED
     ),
+    UnauthorizedError: ErrorMapping(ErrorType.UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
 }
 
 def map_error(err: Exception) -> tuple[ErrorType, int]:
