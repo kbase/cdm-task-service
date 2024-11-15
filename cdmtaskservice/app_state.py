@@ -6,11 +6,13 @@ calling the build_app() method
 """
 
 import asyncio
+from pathlib import Path
 from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.kb_auth import KBaseAuth
+from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 
 # The main point of this module is to handle all the application state in one place
 # to keep it consistent and allow for refactoring without breaking other code
@@ -19,6 +21,7 @@ from cdmtaskservice.kb_auth import KBaseAuth
 class AppState(NamedTuple):
     """ Holds application state. """
     auth: KBaseAuth
+    sfapi_client: NERSCSFAPIClientProvider
 
 
 async def build_app(
@@ -31,6 +34,7 @@ async def build_app(
     app - the FastAPI app.
     cfg - the CDM task service config.
     """
+    # May want to parallelize some of this for faster startups. would need to rework prints
     print("Connecting to KBase auth service... ", end="", flush=True)
     auth = await KBaseAuth.create(
         cfg.auth_url,
@@ -38,7 +42,10 @@ async def build_app(
         full_admin_roles=cfg.auth_full_admin_roles
     )
     print("Done")
-    app.state._cdmstate = AppState(auth)
+    print("Initializing NERSC SFAPI client... ", end="", flush=True)
+    nersc = await NERSCSFAPIClientProvider.create(Path(cfg.sfapi_cred_path), cfg.sfapi_user)
+    print("Done")
+    app.state._cdmstate = AppState(auth, nersc)
 
 
 def get_app_state(r: Request) -> AppState:

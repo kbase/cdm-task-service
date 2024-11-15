@@ -7,6 +7,7 @@ import tomllib
 from typing import BinaryIO, TextIO
 
 _SEC_AUTH = "Authentication"
+_SEC_NERSC = "NERSC"
 _SEC_SERVICE = "Service"
 
 
@@ -18,7 +19,12 @@ class CDMTaskServiceConfig:
     auth_url: str - the URL of the KBase Auth2 service.
     auth_full_admin_roles: list[str] - the list of Auth2 custom roles that signify that a user is
         a full admin for the CDM task service
-    
+    kbase_staff_role: str - the Auth2 custom role indicating a user is a member of KBase staff.
+    has_nersc_account_role: str - the Auth2 custom role indicating a user has a NERSC account.
+    sfapi_cred_path: str - the path to a NERSC Superfacility API credential file. The file is
+        expected to have the client ID as the first line and the client private key in PEM format
+        as the remaining lines.
+    sfapi_user: str - the user name of the user accociated with the credentials.
     service_root_path: str  | None - if the service is behind a reverse proxy that rewrites the
         service path, the path to the service. The path is required in order for the OpenAPI
         documentation to function.
@@ -38,6 +44,7 @@ class CDMTaskServiceConfig:
         # I feel like there ought to be a lib to do this kind of stuff... jsonschema doesn't
         # quite do what I want
         _check_missing_section(config, _SEC_AUTH)
+        _check_missing_section(config, _SEC_NERSC)
         _check_missing_section(config, _SEC_SERVICE)
         self.auth_url = _get_string_required(config, _SEC_AUTH, "url")
         self.auth_full_admin_roles = _get_list_string(config, _SEC_AUTH, "admin_roles_full")
@@ -45,7 +52,8 @@ class CDMTaskServiceConfig:
         self.has_nersc_account_role = _get_string_required(
             config, _SEC_AUTH, "has_nersc_account_role"
         )
-
+        self.sfapi_cred_path = _get_string_required(config, _SEC_NERSC, "sfapi_cred_path")
+        self.sfapi_user = _get_string_required(config, _SEC_NERSC, "sfapi_user")
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
 
     def print_config(self, output: TextIO):
@@ -60,7 +68,9 @@ class CDMTaskServiceConfig:
             f"Authentication URL: {self.auth_url}\n",
             f"Authentication full admin roles: {self.auth_full_admin_roles}\n",
             f"Authentication KBase staff role: {self.kbase_staff_role}\n",
-            f"Authentication has NERSC account role: {self.has_nersc_account_role}\n"
+            f"Authentication has NERSC account role: {self.has_nersc_account_role}\n",
+            f"NERSC client credential path: {self.sfapi_cred_path}\n",
+            f"NERSC client user: {self.sfapi_user}\n",
             f"Service root path: {self.service_root_path}\n",
             "*** End Service Configuration ***\n\n"
         ])

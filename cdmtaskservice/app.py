@@ -19,7 +19,7 @@ from cdmtaskservice.error_mapping import map_error
 from cdmtaskservice import models_errors
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.git_commit import GIT_COMMIT
-from cdmtaskservice.routes import SERVICE_NAME, ROUTER_GENERAL
+from cdmtaskservice.routes import SERVICE_NAME, ROUTER_GENERAL, ROUTER_ADMIN
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import timestamp
 
@@ -60,6 +60,7 @@ def create_app():
     )
     app.add_middleware(GZipMiddleware)
     app.include_router(ROUTER_GENERAL)
+    app.include_router(ROUTER_ADMIN)
 
     async def build_app_wrapper():
         await app_state.build_app(app, cfg)

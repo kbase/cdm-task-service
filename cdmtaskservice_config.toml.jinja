@@ -15,6 +15,22 @@ kbase_staff_role = "{{ KBCOLL_KBASE_STAFF_ROLE or "KBASE_STAFF"}}"
 # This role is required to use the CDM task service.
 has_nersc_account_role = "{{ KBCOLL_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"}}"
 
+[NERSC]
+
+# The path to a NERSC Superfacility API (SFAPI) credential file. The file is expected to have
+# the client ID as the first line and the client private key in PEM format as the remaining lines.
+# Client credentials can be obtained from
+# https://iris.nersc.gov -> Profile -> Superfacility API Clients
+# Clients must have "red" level permissions.
+# Since clients expire every 2 or 30 days, depending on whether extended lifetime clients have
+# been approved for the user, the service periodically checks for updates to this file and
+# reloads the contents if changed.
+sfapi_cred_path = "{{ KBCOLL_SFAPI_CRED_PATH or "" }}"
+
+# The user associated with the client credentials. If the client credentials are updated but
+# the user doesn't match they will not be accepted.
+sfapi_user = "{{ KBCOLL_SFAPI_USER or "" }}"
+
 [Service]
 
 # If the service is behind a reverse proxy that rewrites the service path, that path needs
