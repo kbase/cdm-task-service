@@ -3,7 +3,7 @@ CDM task service endpoints.
 """
 
 import datetime
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Query
 from pydantic import BaseModel, Field
 from typing import Annotated
 from cdmtaskservice import app_state
@@ -91,6 +91,7 @@ class NERSCClientInfo(BaseModel):
         description="The time duration until the client expires as an ISO8601 duration string."
     )]
 
+
 @ROUTER_ADMIN.get(
     "/clients/nersc",
     response_model=NERSCClientInfo,
@@ -99,17 +100,33 @@ class NERSCClientInfo(BaseModel):
         + "including the expiration time,\n"
         + "Administrator credentials are required."
 )
-async def get_nersc_client_info(r: Request, user: kb_auth.KBaseUser=Depends(_AUTH)):
-    # TODO CLIENTEXP add query param to throw error if expiration time is < param time in the future
+async def get_nersc_client_info(
+    r: Request,
+    require_lifetime: Annotated[datetime.timedelta, Query(
+        example="P30DT12H30M5S",
+        description="The required remaining lifetime of the client as an "
+            + "ISO8601 duration string. If the lifetime is shorter than this value, an error "
+            + "will be returned.",
+        ge=1
+    )] = None,
+    user: kb_auth.KBaseUser=Depends(_AUTH)):
     _ensure_admin(user, "Only service administrators may view NERSC client information.")
     nersc_cli = app_state.get_app_state(r).sfapi_client
     expires = nersc_cli.expiration()
+    expires_in = expires - datetime.datetime.now(datetime.timezone.utc)
+    if require_lifetime and expires_in < require_lifetime:
+        raise ClientLifeTimeError(f"The client lifetime, {expires_in}, is less than the "
+                                  + f"required lifetime, {require_lifetime}")
     return NERSCClientInfo(
         id=nersc_cli.get_client_id(),
         expires_at=expires,
-        expires_in=expires - datetime.datetime.now(datetime.timezone.utc)
+        expires_in=expires_in,
     )
 
 
 class UnauthorizedError(Exception):
     """ An error thrown when a user is not authorized to perform an action."""
+
+
+class ClientLifeTimeError(Exception):
+    """ An error thrown when a client's lifetime is less than required. """
