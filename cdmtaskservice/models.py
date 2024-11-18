@@ -56,79 +56,79 @@ def _err_on_control_chars(s: str, allowed_chars: list[str] = None):
     return s
 
 
+# Note: doc strings on the individual enums don't show up in OpenAPI docs.
 class ParameterType(str, Enum):
-    """ The type of a parameter if not a string literal. """
-
-    INPUT_FILES = "input_files"
     """
-    This parameter type will cause the list of input files for the container to be inserted
-    into the entrypoint command line.
-    """
+    The type of a parameter if not a string literal.
     
-    MANIFEST_FILE = "manifest_file"
-    """
-    This parameter type will cause the list of input files for the container to be placed in a
+    input_files will cause the list of input files for the container to be inserted
+    into the entrypoint command line.
+    
+    manifest_file will cause the list of input files for the container to be placed in a
     manifest file and will insert the file location into the entrypoint command line. 
     """
 
+    INPUT_FILES = "input_files"
+    MANIFEST_FILE = "manifest_file"
+
 
 class InputFilesFormat(str, Enum):
-    """ The format of an input files type parameter. """
+    """
+    The format of an input files type parameter.
+    
+    Comma and space separated lists format the list of files as one would expect.
+    
+    Repeat parameter causes the input files to be inserted as a space separated list,
+    with each file preceded by the parameter flag. Only valid for CLI flag based arguments.
+    If the flag ends with an equals sign, there is no space left between the flag and the
+    parameter.
+    
+    Examples:  
+    `-i`: `-i file1 -i file2 ... -i fileN`  
+    `--input_file=`: `--input_file=file1 --input_file=file2 ... --input_file=fileN`  
+    """
 
     COMMA_SEPARATED_LIST = "comma_separated_list"
-    """ The input files will be inserted as a comma separated list. """
-    
     SPACE_SEPARATED_LIST = "space_separated_list"
-    """ The input files will be inserted as a space separated list. """
-    
     REPEAT_PARAMETER = "repeat_parameter"
-    """
-    The input files will be inserted as a space separated list, with each file preceded
-    by the parameter flag. Only valid for CLI flag based arguments. If the flag ends with an
-    equals sign, there is no space left between the flag and the parameter.
-    
-    Examples:
-    -i: -i file1 -i file2 ... -i fileN
-    --input_file=: --input_file=file1 --input_file=file2 ... --input_file=fileN
-    """
 
 
 class ManifestFileFormat(str, Enum):
-    """ The format of a manifest file. """
+    """
+    The format of a manifest file.
+    
+    files will cause the manifest file to consist of a list of the input files, one per line.
+    
+    data_ids will cause the manifest file to consist of a list of the data IDs associated with
+    the input files, one per line.
+    """
 
     FILES = "files"
-    """ The manifest file will consist of a list of the input files, one per line. """
-    
     DATA_IDS = "data_ids"
-    """
-    The manifest file will consist of a list of the data IDs associated with the input files,
-    one per line.
-    """
 
 
 class Parameter(BaseModel):
-    """ Represents the value of a parameter passed to a container. """
+    """
+    Represents a special parameter passed to a container.
+    
+    Can represent a set of input file names formatted in various ways or a manifest file
+    containing file paths or data IDs.
+    
+    input_files_format is required when the type is input_files, but ignored otherwise.  
+    manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
+    manifest_file_header is optional and only taken into account when the type is manifest_file.  
+    """
 
-    type: Annotated[ParameterType, Field(
-        example=ParameterType.INPUT_FILES, description="The type of the parameter",
-    )]
+    type: Annotated[ParameterType, Field(example=ParameterType.INPUT_FILES)]
     input_files_format: Annotated[InputFilesFormat | None, Field(
         example=InputFilesFormat.COMMA_SEPARATED_LIST,
-        description="The format of the input files when inserted into the container entrypoint "
-            + f"command line. Required for {ParameterType.INPUT_FILES.value} parameters. "
-            + f"Ignored for {ParameterType.MANIFEST_FILE.value} parameters.",
     )] = None
     manifest_file_format: Annotated[ManifestFileFormat | None, Field(
         example=ManifestFileFormat.FILES,
-        description="The format for the manifest file. Required for "
-            + f"{ParameterType.MANIFEST_FILE.value} parameters. "
-            + f"Ignored for {ParameterType.MANIFEST_FILE.value} parameters.",
     )] = None
     manifest_file_header: Annotated[str | None, Field(
         example="genome_id",
-        description="The header for the manifest file, if any. Only valid for, "
-            + f"{ParameterType.MANIFEST_FILE.value} parameters. "
-            + f"Ignored for {ParameterType.MANIFEST_FILE.value} parameters.",
+        description="The header for the manifest file, if any.",
         min_length=1,
         max_length=1000,
     )] = None
@@ -180,19 +180,20 @@ EnvironmentVariable = Annotated[str, StringConstraints(
 
 
 class Parameters(BaseModel):
-    # TODO OPENAPI check f strings work with the open api docs
-    f"""
+    """
     A set of parameters for a container in a job.
     
-    Specifying files as part of arguments to a job can be done in two ways:
+    Specifying files as part of arguments to a job can be done in three ways:
     
     * If the entrypoint command takes a glob or a directory as an argument, that glob or
       directory can be specified literally in an argument. All files will be available in the
       input mount point, with paths resulting from the path in S3 as well as the input_roots
       parameter from the job input.
-    * If individual filenames need to be specified, use a {Parameter.__name__} instance in
-      the positional, flag, or environmental arguments. At most one {Parameter.__name__} can
+    * If individual filenames need to be specified, use a Parameter instance in
+      the positional, flag, or environmental arguments. At most one Parameter can
       be specified per parameter set.
+    * A Parameter instance can also be used to specify a manifest of file names or
+      file IDs to be passed to the container.
     """
     
     input_mount_point: Annotated[str, Field(
@@ -234,8 +235,7 @@ class Parameters(BaseModel):
             }
         ],
         description="A list of positional parameters to be inserted at the end of the container "
-            + "entrypoint command. Strings are treated as literals and can each be no more than "
-            + "1000 characters."
+            + "entrypoint command. Strings are treated as literals."
     )] = None
     flag_args: Annotated[dict[Flag, ArgumentString | Parameter] | None, Field(
         example={
@@ -246,8 +246,7 @@ class Parameters(BaseModel):
             },
         },
         description="A dictionary of flag parameters to be inserted into the container "
-            + "entrypoint command line. Strings are treated as literals. Keys and strings "
-            + "can each be no more than 1000 characters."
+            + "entrypoint command line. String values are treated as literals."
     )] = None
     environment: Annotated[dict[EnvironmentVariable, ArgumentString | Parameter] | None, Field(
         example={
@@ -259,8 +258,7 @@ class Parameters(BaseModel):
             },
         },
         description="A dictionary of environment variables to be inserted into the container. "
-            + "Strings are treated as literals. Keys and strings "
-            + "can each be no more than 1000 characters."
+            + "String values are treated as literals."
     )] = None
     
     @field_validator(
@@ -371,11 +369,13 @@ class S3File(BaseModel):
 
 
 class Cluster(str, Enum):
-    """ The location where a job should run. """
+    """
+    The location where a job should run.
+    
+    perlmutter-jaws: The Perlmutter cluster at NESRC run via JAWS.
+    """
 
     PERLMUTTER_JAWS = "perlmutter-jaws"
-    """ The Perlmutter cluster at NESRC run via JAWS. """
-
     # TODO LAWRENCIUM add when available
 
 
@@ -406,10 +406,7 @@ class JobInput(BaseModel):
     # Similarly, the design allows for multiple S3 instances. We'll implement with a default
     # when actually needed.
     
-    cluster: Annotated[Cluster, Field(
-        example=Cluster.PERLMUTTER_JAWS.value,
-        description="The compute location where a job should run."
-    )]
+    cluster: Annotated[Cluster, Field(example=Cluster.PERLMUTTER_JAWS.value)]
     image: Annotated[str, Field(
         example="ghcr.io/kbase/collections:checkm2_0.1.6"
             + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
@@ -420,13 +417,13 @@ class JobInput(BaseModel):
         min_length=1,
         max_length=1000
     )]
-    params: Annotated[Parameters, Field(description="The job parameters.")]
+    params: Parameters
     num_containers: Annotated[int, Field(
         example=1,
         default=1,
         description="The number of containers to run in parallel. Input files will be split "
             + "between the containers. If there are more containers than input files the "
-            + "container count will be reduced appropriately",
+            + "container count will be reduced appropriately.",
         ge=1,
         # TODO LIMITS whats a reasonable max number of containers per job? 1k seems ok for now 
         le=1000,
@@ -442,7 +439,8 @@ class JobInput(BaseModel):
     memory: Annotated[ByteSize, Field(
         example="10MB",
         default="10MB",
-        description="The amount of memory to allocate per container.",
+        description="The amount of memory to allocate per container either as the number of "
+            + "bytes or a specification string such as 100MB, 2GB, etc.",
         # https://jaws-docs.readthedocs.io/en/latest/Resources/compute_resources.html#table-of-available-resources
         ge=1 * 1000 * 1000,
         le=492 * 1000 * 1000 * 1000
@@ -468,8 +466,8 @@ class JobInput(BaseModel):
         description="The S3 input files for the job, either a list of file paths as strings or a "
             + "list of data structures including the file path and optionally a data ID and / or "
             + "ETag. The file paths always start with the bucket. "
-            + "Either all or no files must have data IDs associated with them."
-            + "When returned from the service, the Etag is always included.",
+            + "Either all or no files must have data IDs associated with them. "
+            + "When returned from the service, the ETag is always included.",
         min_length=1,
         # Need to see how well this performs. If we need more files per job,
         # can test performance & tweak S3 client concurrency. Alternatively, add a file set
@@ -489,7 +487,7 @@ class JobInput(BaseModel):
             + 'To preserve hierarchies for all files, set input_roots to [""].  '
             + "If an input file matches more than one root, the longest root that isn't "
             + "identical to the file path is used. "
-            + "Whitespace on the left side of the path is is ignored."
+            + "Whitespace on the left side of the path is is ignored. "
             + "Duplicate roots are ignored.",
     )] = None
     output_dir: Annotated[str, Field(
@@ -550,8 +548,8 @@ class JobInput(BaseModel):
         return _validate_s3_path(v)
 
     def inputs_are_S3File(self) -> bool:
-        f"""
-        Returns True if the inputfiles are of type {S3File.__name__}, False otherwise.
+        """
+        Returns True if the inputfiles are of type S3File, False otherwise.
         """
         return isinstance(self.input_files[0], S3File)
         
@@ -569,7 +567,6 @@ class JobState(str, Enum):
     """
     The state of a job.
     """
-    # TODO OPENAPI add documentation when the server is running & it's clear how enum docs work
     CREATED = "created"
     UPLOAD_SUBMITTED = "upload_submitted"
     JOB_SUBMITTING = "job_submitting"
@@ -611,13 +608,10 @@ class Job(BaseModel):
     id: Annotated[str, Field(
         description="An opaque, unique string that serves as the job's ID.",
     )]
-    job_input: Annotated[JobInput, Field(description="The job input.")]
+    job_input: JobInput
     user: Annotated[str, Field(example="myuserid", description="The user that ran the job.")]
-    image: Annotated[Image, Field(description="The image to be run in the job.")]
-    state: Annotated[JobState, Field(
-        example=JobState.COMPLETE.value,
-        description="The state of the job."
-    )]
+    image: Image
+    state: Annotated[JobState, Field(example=JobState.COMPLETE.value)]
     # hmm, should this be a dict vs a list of tuples?
     transition_times: Annotated[list[tuple[JobState, datetime.datetime]], Field(
         example=[

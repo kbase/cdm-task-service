@@ -17,9 +17,9 @@ from cdmtaskservice import app_state
 from cdmtaskservice import errors
 from cdmtaskservice.error_mapping import map_error
 from cdmtaskservice import models_errors
+from cdmtaskservice import routes
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.git_commit import GIT_COMMIT
-from cdmtaskservice.routes import SERVICE_NAME, ROUTER_GENERAL, ROUTER_ADMIN
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import timestamp
 
@@ -44,7 +44,7 @@ def create_app():
     sys.stdout.flush()
 
     app = FastAPI(
-        title = SERVICE_NAME,
+        title = routes.SERVICE_NAME,
         description = SERVICE_DESCRIPTION,
         version = VERSION,
         root_path = cfg.service_root_path or "",
@@ -59,8 +59,9 @@ def create_app():
         }
     )
     app.add_middleware(GZipMiddleware)
-    app.include_router(ROUTER_GENERAL)
-    app.include_router(ROUTER_ADMIN)
+    app.include_router(routes.ROUTER_GENERAL)
+    app.include_router(routes.ROUTER_JOBS)
+    app.include_router(routes.ROUTER_ADMIN)
 
     async def build_app_wrapper():
         await app_state.build_app(app, cfg)

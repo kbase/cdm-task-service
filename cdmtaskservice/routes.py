@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from typing import Annotated
 from cdmtaskservice import app_state
 from cdmtaskservice import kb_auth
+from cdmtaskservice import models
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.version import VERSION
@@ -17,6 +18,7 @@ SERVICE_NAME = "CDM Task Service Prototype"
 
 ROUTER_GENERAL = APIRouter(tags=["General"])
 ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
+ROUTER_JOBS = APIRouter(tags=["Jobs"], prefix="/jobs")
 
 _AUTH = KBaseHTTPBearer()
 
@@ -109,7 +111,8 @@ async def get_nersc_client_info(
             + "will be returned.",
         ge=1
     )] = None,
-    user: kb_auth.KBaseUser=Depends(_AUTH)):
+    user: kb_auth.KBaseUser=Depends(_AUTH)
+):
     _ensure_admin(user, "Only service administrators may view NERSC client information.")
     nersc_cli = app_state.get_app_state(r).sfapi_client
     expires = nersc_cli.expiration()
@@ -122,6 +125,31 @@ async def get_nersc_client_info(
         expires_at=expires,
         expires_in=expires_in,
     )
+
+
+class SubmitJobResponse(BaseModel):
+    """ The response to a successful job submission request. """
+    job_id: Annotated[str, Field(description="An opaque job ID.")]
+
+
+@ROUTER_JOBS.post(
+    "/submit",
+    response_model=SubmitJobResponse,
+    summary="Submit a job",
+    description="Submit a job to the system."
+)
+async def submit_job(
+    r: Request,
+    job_input: models.JobInput,
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+):
+    # TODO JOBSUBMIT check container is allowed
+    # TODO JOBSUBMIT integrate Minio
+    # TDDO JOBSUBMIT do the input files exist in Minio?
+    # TDDO JOBSUBMIT does the output bucket exist in Minio?
+    # TDDO JOBSUBMIT if reference data is required, is it staged?
+    # TODO JOBSUBMIT save Job model in Mongo
+    return SubmitJobResponse(job_id="fake_job_id")
 
 
 class UnauthorizedError(Exception):
