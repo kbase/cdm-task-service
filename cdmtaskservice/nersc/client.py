@@ -74,6 +74,8 @@ class NERSCSFAPIClientProvider:
             if self._credfile_last_mod != modtime:
                 self._credfile_last_mod = modtime
                 # TODO LOGGING figure out how this is going to work and test
+                # TODO LOGGING info logs aren't showing up in rancher2
+                #              exceptions do
                 logging.getLogger(__name__).info(
                     f"Detected SFAPI credential at {self._credpath} "
                     + f"changed at {time.time()}, reloading")

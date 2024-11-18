@@ -33,6 +33,9 @@ class ErrorType(Enum):
     ILLEGAL_PARAMETER =          (30001, "Illegal input parameter")  # noqa: E222 @IgnorePep8
     """ An input parameter had an illegal value. """
 
+    CLIENT_LIFETIME =            (30050, "Client lifetime too short")  # noqa: E222 @IgnorePep8
+    """ The client life time is shorter than requested. """
+
     REQUEST_VALIDATION_FAILED =  (30010, "Request validation failed")  # noqa: E222 @IgnorePep8
     """ A request to a service failed validation of the request. """
 
