@@ -36,6 +36,9 @@ class ErrorType(Enum):
     CLIENT_LIFETIME =            (30050, "Client lifetime too short")  # noqa: E222 @IgnorePep8
     """ The client life time is shorter than requested. """
 
+    NOT_FOUND =                  (40000, "Not Found")  # noqa: E222 @IgnorePep8
+    """ The requested resource was not found. """
+
     REQUEST_VALIDATION_FAILED =  (30010, "Request validation failed")  # noqa: E222 @IgnorePep8
     """ A request to a service failed validation of the request. """
 

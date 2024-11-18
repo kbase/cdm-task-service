@@ -81,8 +81,11 @@ def _handle_fastapi_validation_exception(r: Request, exc: RequestValidationError
     )
 
 def _handle_starlette_exception(r: Request, exc: StarletteHTTPException):
-    # may need to expand this in the future, mainly handles 404s
-    return _format_error(exc.status_code, message=str(exc.detail))
+    # may need to expand this in the future if we find other error types
+    error_type=None
+    if exc.status_code == status.HTTP_404_NOT_FOUND:
+        error_type = errors.ErrorType.NOT_FOUND
+    return _format_error(exc.status_code, message=str(exc.detail), error_type=error_type)
 
 
 def _handle_general_exception(r: Request, exc: Exception):
