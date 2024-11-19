@@ -8,6 +8,7 @@ from typing import BinaryIO, TextIO
 
 _SEC_AUTH = "Authentication"
 _SEC_NERSC = "NERSC"
+_SEC_S3 = "S3"
 _SEC_SERVICE = "Service"
 
 
@@ -25,6 +26,11 @@ class CDMTaskServiceConfig:
         expected to have the client ID as the first line and the client private key in PEM format
         as the remaining lines.
     sfapi_user: str - the user name of the user accociated with the credentials.
+    s3_url: str - the url of the S3 instance to use for data storage.
+    s3_access_key: str - the S3 access key.
+    s3_access_secret: str - the S3 access secret.
+    s3_allow_insecure: bool - whether to skip SSL cert validation, leaving the service vulnerable
+        to MITM attacks.
     service_root_path: str  | None - if the service is behind a reverse proxy that rewrites the
         service path, the path to the service. The path is required in order for the OpenAPI
         documentation to function.
@@ -45,6 +51,7 @@ class CDMTaskServiceConfig:
         # quite do what I want
         _check_missing_section(config, _SEC_AUTH)
         _check_missing_section(config, _SEC_NERSC)
+        _check_missing_section(config, _SEC_S3)
         _check_missing_section(config, _SEC_SERVICE)
         self.auth_url = _get_string_required(config, _SEC_AUTH, "url")
         self.auth_full_admin_roles = _get_list_string(config, _SEC_AUTH, "admin_roles_full")
@@ -54,6 +61,12 @@ class CDMTaskServiceConfig:
         )
         self.sfapi_cred_path = _get_string_required(config, _SEC_NERSC, "sfapi_cred_path")
         self.sfapi_user = _get_string_required(config, _SEC_NERSC, "sfapi_user")
+        self.s3_url = _get_string_required(config, _SEC_S3, "url")
+        self.s3_access_key = _get_string_required(config, _SEC_S3, "access_key")
+        self.s3_access_secret = _get_string_required(config, _SEC_S3, "access_secret")
+        self.s3_allow_insecure = _get_string_optional(config, _SEC_S3, "allow_insecure") == "true"
+        # If needed, we could add an S3 region parameter. YAGNI
+        # If needed we could add sub sections to support > 1 S3 instance per service. YAGNI
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
 
     def print_config(self, output: TextIO):
@@ -71,6 +84,10 @@ class CDMTaskServiceConfig:
             f"Authentication has NERSC account role: {self.has_nersc_account_role}\n",
             f"NERSC client credential path: {self.sfapi_cred_path}\n",
             f"NERSC client user: {self.sfapi_user}\n",
+            f"S3 url: {self.s3_url}\n",
+            f"S3 access key: {self.s3_access_key}\n",
+            f"S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT\n",
+            f"S3 allow insecure: {self.s3_allow_insecure}\n",
             f"Service root path: {self.service_root_path}\n",
             "*** End Service Configuration ***\n\n"
         ])

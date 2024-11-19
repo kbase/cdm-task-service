@@ -31,6 +31,18 @@ sfapi_cred_path = "{{ KBCOLL_SFAPI_CRED_PATH or "" }}"
 # the user doesn't match they will not be accepted.
 sfapi_user = "{{ KBCOLL_SFAPI_USER or "" }}"
 
+[S3]
+
+# The connection parameters for the S3 instance to use for data source and storage.
+# See S3 requirements in the README.
+# allow_insecure = true (and only the exact string "true") skips checking the validity of the
+# SSL certificate, leaving the service vulnerable to Man in the Middle attacks.
+
+url = "{{ KBCOLL_S3_URL or "" }}"
+access_key = "{{ KBCOLL_S3_ACCESS_KEY or "" }}"
+access_secret = "{{ KBCOLL_S3_ACCESS_SECRET or "" }}"
+allow_insecure = "{{ KBCOLL_S3_ALLOW_INSECURE or "false"}}"
+
 [Service]
 
 # If the service is behind a reverse proxy that rewrites the service path, that path needs
