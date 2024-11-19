@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
+from cdmtaskservice.s3.client import S3Client
 
 # The main point of this module is to handle all the application state in one place
 # to keep it consistent and allow for refactoring without breaking other code
@@ -22,6 +23,7 @@ class AppState(NamedTuple):
     """ Holds application state. """
     auth: KBaseAuth
     sfapi_client: NERSCSFAPIClientProvider
+    s3_client: S3Client
 
 
 async def build_app(
@@ -45,7 +47,13 @@ async def build_app(
     print("Initializing NERSC SFAPI client... ", end="", flush=True)
     nersc = await NERSCSFAPIClientProvider.create(Path(cfg.sfapi_cred_path), cfg.sfapi_user)
     print("Done")
-    app.state._cdmstate = AppState(auth, nersc)
+    print("Initializing S3 client... ", end="", flush=True)
+    s3 = await S3Client.create(
+        cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
+    )
+    print("Done")
+    app.state._cdmstate = AppState(auth, nersc, s3)
+    print(flush=True)
 
 
 def get_app_state(r: Request) -> AppState:

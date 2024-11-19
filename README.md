@@ -18,6 +18,7 @@ Enables running jobs on remote compute from the KBase CDM cluster.
 
 ### S3 requirements
 
+* Path style access is required.
 * Any objects provided to the servcie that were created with multipart uploads **must** use the
   same part size for all parts except the last.
 * The service does not support objects encrypted with customer supplied keys or with the
