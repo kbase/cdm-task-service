@@ -5,9 +5,13 @@ Also look in test_manual for more tests.
 import random
 import pytest
 
-from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.s3.client import (
+    S3Client,
+    S3PathInaccessibleError,
+    S3ClientConnectError,
+    S3PathNotFoundError
+)
 from cdmtaskservice.s3.paths import S3Paths
-from cdmtaskservice.s3.exceptions import S3ClientConnectError, S3PathError
 from conftest import (
     minio,  # @UnusedImport
     minio_unauthed_user,  # @UnusedImport
@@ -166,7 +170,7 @@ async def test_get_object_meta_fail_no_object(minio):
         "fail-bucket/foo/baz": "The path 'fail-bucket/foo/baz' was not found on the s3 system",
     }
     for k, v in testset.items():
-        await _get_object_meta_fail(await _client(minio), S3Paths([k]), S3PathError(v))
+        await _get_object_meta_fail(await _client(minio), S3Paths([k]), S3PathNotFoundError(v))
 
 
 @pytest.mark.asyncio
@@ -181,7 +185,7 @@ async def test_get_object_meta_fail_unauthed(minio, minio_unauthed_user):
     s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
     await _get_object_meta_fail(
         s3c, S3Paths(["fail-bucket/foo/bar"]),
-        S3PathError("Access denied to path 'fail-bucket/foo/bar' on the s3 system")
+        S3PathInaccessibleError("Access denied to path 'fail-bucket/foo/bar' on the s3 system")
     )
 
 
@@ -203,7 +207,7 @@ async def test_get_object_meta_fail_concurrent_paths(minio):
         await _get_object_meta_fail(
             await _client(minio),
             S3Paths(paths),
-            S3PathError(
+            S3PathNotFoundError(
                 f"The path 'fail-bucket/f1000{fails_on}fail' was not found on the s3 system"),
             concurrency=con
         )

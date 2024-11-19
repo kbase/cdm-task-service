@@ -1,8 +1,7 @@
 import random
 from pytest import raises
 
-from cdmtaskservice.s3.paths import S3Paths
-from cdmtaskservice.s3.exceptions import S3PathError
+from cdmtaskservice.s3.paths import S3Paths, S3PathSyntaxError
 
 from conftest import  assert_exception_correct
 
@@ -74,7 +73,7 @@ def _init_fail(path: str, expected: str):
     expected = expected.replace("index x", f"index {len(paths) - 1}")
     with raises(Exception) as got:
         S3Paths(paths)
-    assert_exception_correct(got.value, S3PathError(expected))
+    assert_exception_correct(got.value, S3PathSyntaxError(expected))
 
 
 def test_init():

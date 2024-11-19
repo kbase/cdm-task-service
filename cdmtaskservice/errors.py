@@ -26,18 +26,30 @@ class ErrorType(Enum):
 
     UNAUTHORIZED =               (20000, "Unauthorized")  # noqa: E222 @IgnorePep8
     """ The user is not authorized to perform the requested action. """
+    
+    S3_PATH_INACCESSIBLE =       (20010, "S3 path inaccesisble")  # noqa: E222 @IgnorePep8
+    """ The user is not authorized to access the S3 path. """
 
     MISSING_PARAMETER =          (30000, "Missing input parameter")  # noqa: E222 @IgnorePep8
     """ A required input parameter was not provided. """
 
     ILLEGAL_PARAMETER =          (30001, "Illegal input parameter")  # noqa: E222 @IgnorePep8
     """ An input parameter had an illegal value. """
+    
+    S3_PATH_SYNTAX =             (30010, "Illegal S3 path")  # noqa: E222 @IgnorePep8
+    """ The S3 path was invalid. """
+    
+    S3_ETAG_MISMATCH =           (30020, "S3 ETag mismatch")  # noqa: E222 @IgnorePep8
+    """ The expected S3 ETag did not match the actual ETag. """
 
     CLIENT_LIFETIME =            (30050, "Client lifetime too short")  # noqa: E222 @IgnorePep8
     """ The client life time is shorter than requested. """
 
     NOT_FOUND =                  (40000, "Not Found")  # noqa: E222 @IgnorePep8
     """ The requested resource was not found. """
+    
+    S3_PATH_NOT_FOUND =          (40010, "S3 path not Found")  # noqa: E222 @IgnorePep8
+    """ The S3 path was not found. """
 
     REQUEST_VALIDATION_FAILED =  (30010, "Request validation failed")  # noqa: E222 @IgnorePep8
     """ A request to a service failed validation of the request. """

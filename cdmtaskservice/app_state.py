@@ -11,6 +11,7 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 from cdmtaskservice.config import CDMTaskServiceConfig
+from cdmtaskservice.job_state import JobState
 from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.s3.client import S3Client
@@ -24,6 +25,7 @@ class AppState(NamedTuple):
     auth: KBaseAuth
     sfapi_client: NERSCSFAPIClientProvider
     s3_client: S3Client
+    job_state: JobState
 
 
 async def build_app(
@@ -52,7 +54,8 @@ async def build_app(
         cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
     )
     print("Done")
-    app.state._cdmstate = AppState(auth, nersc, s3)
+    job_state = JobState(s3)
+    app.state._cdmstate = AppState(auth, nersc, s3, job_state)
     print(flush=True)
 
 

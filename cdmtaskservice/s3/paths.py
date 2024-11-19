@@ -7,8 +7,6 @@ import re
 from typing import Generator
 import unicodedata
 
-from .exceptions import S3PathError
-
 # https://code.jgi.doe.gov/advanced-analysis/jaws-docs/-/issues/86
 # These characters are obnoxious in filenames anyway
 # May need to add more characters as problems are discovered
@@ -72,24 +70,26 @@ def validate_path(path: str, index: int = None) -> str:
     # keys can have spaces and / but not //, except for the first characters
     i = f" at index {index}" if index is not None else ""
     if not path or not path.strip():
-        raise S3PathError(f"The s3 path{i} cannot be null or a whitespace string")
+        raise S3PathSyntaxError(f"The s3 path{i} cannot be null or a whitespace string")
     parts = path.lstrip().lstrip("/").split("/", 1)  # ignore leading /s in the bucket, be nice
     if len(parts) != 2:
-        raise S3PathError(
+        raise S3PathSyntaxError(
             f"Path '{path}'{i} must start with the s3 bucket and include a key")
     bucket = validate_bucket_name(parts[0], index=index)
     key = parts[1].lstrip("/")  # Leading /s are ignored by s3, but spaces and trailing /s count
     if len(key.encode("UTF-8")) > 1024:
-        raise S3PathError(f"Path '{path}'{i}'s key is longer than 1024 bytes in UTF-8")
+        raise S3PathSyntaxError(f"Path '{path}'{i}'s key is longer than 1024 bytes in UTF-8")
     match_ = _DISALLOWED_CHARACTERS.search(key)
     if match_:
-        raise S3PathError(f"Path '{path}'{i} contains illegal character(s) '{match_.group(1)}' "
-                          + f"at key index {match_.start()}")
+        raise S3PathSyntaxError(
+            f"Path '{path}'{i} contains illegal character(s) '{match_.group(1)}' "
+            + f"at key index {match_.start()}"
+        )
     # See https://stackoverflow.com/questions/4324790/removing-control-characters-from-a-string-in-python
     # Don't want to put control chars in a returned error
     for ci, c in enumerate(key):
         if unicodedata.category(c)[0] == 'C':
-            raise S3PathError(
+            raise S3PathSyntaxError(
                 f"Path {path}{i} contains a control character in the key at position {ci}")
     return f"{bucket}/{key}"
 
@@ -109,14 +109,18 @@ def validate_bucket_name(bucket_name: str, index: int = None):
     i = f" at index {index}" if index is not None else ""
     bn = bucket_name.strip()
     if not bn:
-        raise S3PathError(f"Bucket name{i} cannot be whitespace only")
+        raise S3PathSyntaxError(f"Bucket name{i} cannot be whitespace only")
     if len(bn) < 3 or len(bn) > 63:
-        raise S3PathError(f"Bucket name{i} must be > 2 and < 64 characters: {bn}")
+        raise S3PathSyntaxError(f"Bucket name{i} must be > 2 and < 64 characters: {bn}")
     if "." in bn:
-        raise S3PathError(f"Bucket{i} has `.` in the name which is unsupported: {bn}")
+        raise S3PathSyntaxError(f"Bucket{i} has `.` in the name which is unsupported: {bn}")
     if bn.startswith("-") or bn.endswith("-"):
-        raise S3PathError(f"Bucket name{i} cannot start or end with '-': {bn}")
+        raise S3PathSyntaxError(f"Bucket name{i} cannot start or end with '-': {bn}")
     if not bn.replace("-", "").isalnum() or not bn.isascii() or not bn.islower():
-        raise S3PathError(
+        raise S3PathSyntaxError(
             f"Bucket name{i} may only contain '-' and lowercase ascii alphanumerics: {bn}")
     return bn
+
+
+class S3PathSyntaxError(Exception):
+    """ Error thrown when an S3 path is incorrectly specified. """

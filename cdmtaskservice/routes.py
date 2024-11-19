@@ -143,13 +143,8 @@ async def submit_job(
     job_input: models.JobInput,
     user: kb_auth.KBaseUser=Depends(_AUTH),
 ):
-    # TODO JOBSUBMIT check container is allowed
-    # TODO JOBSUBMIT integrate Minio
-    # TDDO JOBSUBMIT do the input files exist in Minio?
-    # TDDO JOBSUBMIT does the output bucket exist in Minio?
-    # TDDO JOBSUBMIT if reference data is required, is it staged?
-    # TODO JOBSUBMIT save Job model in Mongo
-    return SubmitJobResponse(job_id="fake_job_id")
+    job_state = app_state.get_app_state(r).job_state
+    return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
 
 
 class UnauthorizedError(Exception):
