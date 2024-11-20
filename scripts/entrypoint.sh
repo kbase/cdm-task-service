@@ -2,7 +2,7 @@
 
 export KB_DEPLOYMENT_CONFIG=cdmtaskservice_config.toml
 
-jinja $KB_DEPLOYMENT_CONFIG.jinja -X "^KBCOLL_" > $KB_DEPLOYMENT_CONFIG
+jinja $KB_DEPLOYMENT_CONFIG.jinja -X "^KBCTS_" > $KB_DEPLOYMENT_CONFIG
 
 # FastAPI recommends running a single process service per docker container instance as below,
 # and scaling via adding more containers. If we need to run multiple processes, use guvicorn as

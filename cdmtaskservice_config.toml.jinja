@@ -1,19 +1,19 @@
 [Authentication]
 
 # The URL of a KBase auth2 service
-url = "{{ KBCOLL_KBASE_AUTH2_URL or "https://ci.kbase.us/services/auth" }}"
+url = "{{ KBCTS_KBASE_AUTH2_URL or "https://ci.kbase.us/services/auth" }}"
 
 # KBase auth2 custom roles that signify that a user is an admin for the CDM task service
 # This is a comma delimited list, e.g. "KBASE_ADMIN, CDM_TASK_SERVICE_ADMIN"
-admin_roles_full = "{{ KBCOLL_KBASE_AUTH2_ADMIN_ROLES or ""}}"
+admin_roles_full = "{{ KBCTS_KBASE_AUTH2_ADMIN_ROLES or ""}}"
 
 # KBase auth2 custom role that signifies a user is a KBase staff member.
 # This role is required to use the CDM task service.
-kbase_staff_role = "{{ KBCOLL_KBASE_STAFF_ROLE or "KBASE_STAFF"}}"
+kbase_staff_role = "{{ KBCTS_KBASE_STAFF_ROLE or "KBASE_STAFF"}}"
 
 # KBase auth2 custom role that signifies a user possesses a NERSC account.
 # This role is required to use the CDM task service.
-has_nersc_account_role = "{{ KBCOLL_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"}}"
+has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"}}"
 
 [NERSC]
 
@@ -25,11 +25,11 @@ has_nersc_account_role = "{{ KBCOLL_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT
 # Since clients expire every 2 or 30 days, depending on whether extended lifetime clients have
 # been approved for the user, the service periodically checks for updates to this file and
 # reloads the contents if changed.
-sfapi_cred_path = "{{ KBCOLL_SFAPI_CRED_PATH or "" }}"
+sfapi_cred_path = "{{ KBCTS_SFAPI_CRED_PATH or "" }}"
 
 # The user associated with the client credentials. If the client credentials are updated but
 # the user doesn't match they will not be accepted.
-sfapi_user = "{{ KBCOLL_SFAPI_USER or "" }}"
+sfapi_user = "{{ KBCTS_SFAPI_USER or "" }}"
 
 [S3]
 
@@ -38,13 +38,13 @@ sfapi_user = "{{ KBCOLL_SFAPI_USER or "" }}"
 # allow_insecure = true (and only the exact string "true") skips checking the validity of the
 # SSL certificate, leaving the service vulnerable to Man in the Middle attacks.
 
-url = "{{ KBCOLL_S3_URL or "" }}"
-access_key = "{{ KBCOLL_S3_ACCESS_KEY or "" }}"
-access_secret = "{{ KBCOLL_S3_ACCESS_SECRET or "" }}"
-allow_insecure = "{{ KBCOLL_S3_ALLOW_INSECURE or "false"}}"
+url = "{{ KBCTS_S3_URL or "" }}"
+access_key = "{{ KBCTS_S3_ACCESS_KEY or "" }}"
+access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
+allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
 
 [Service]
 
 # If the service is behind a reverse proxy that rewrites the service path, that path needs
 # to be defined here in order for the OpenAPI documentation to function.
-root_path = "{{ KBCOLL_SERVICE_ROOT_PATH or "" }}"
+root_path = "{{ KBCTS_SERVICE_ROOT_PATH or "" }}"
