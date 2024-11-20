@@ -16,6 +16,7 @@ from cdmtaskservice.timestamp import timestamp
 
 SERVICE_NAME = "CDM Task Service Prototype"
 
+# may need to split these into different files if this file gets too big
 ROUTER_GENERAL = APIRouter(tags=["General"])
 ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
 ROUTER_JOBS = APIRouter(tags=["Jobs"], prefix="/jobs")
@@ -81,6 +82,26 @@ async def whoami(user: kb_auth.KBaseUser=Depends(_AUTH)):
     }
 
 
+class SubmitJobResponse(BaseModel):
+    """ The response to a successful job submission request. """
+    job_id: Annotated[str, Field(description="An opaque job ID.")]
+
+
+@ROUTER_JOBS.post(
+    "/submit",
+    response_model=SubmitJobResponse,
+    summary="Submit a job",
+    description="Submit a job to the system."
+)
+async def submit_job(
+    r: Request,
+    job_input: models.JobInput,
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+):
+    job_state = app_state.get_app_state(r).job_state
+    return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
+
+
 class NERSCClientInfo(BaseModel):
     """ Provides information about the NERSC SFAPI client. """
     id: Annotated[str, Field(description="The opaque ID of the client.")]
@@ -125,26 +146,6 @@ async def get_nersc_client_info(
         expires_at=expires,
         expires_in=expires_in,
     )
-
-
-class SubmitJobResponse(BaseModel):
-    """ The response to a successful job submission request. """
-    job_id: Annotated[str, Field(description="An opaque job ID.")]
-
-
-@ROUTER_JOBS.post(
-    "/submit",
-    response_model=SubmitJobResponse,
-    summary="Submit a job",
-    description="Submit a job to the system."
-)
-async def submit_job(
-    r: Request,
-    job_input: models.JobInput,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
-):
-    job_state = app_state.get_app_state(r).job_state
-    return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
 
 
 class UnauthorizedError(Exception):

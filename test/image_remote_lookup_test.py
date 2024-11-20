@@ -2,7 +2,7 @@ import pytest
 import os
 from pathlib import Path
 
-from cdmtaskservice.dockerimages import (
+from cdmtaskservice.image_remote_lookup import (
     DockerImageInfo,
     NormedImageName,
     ImageNameParseError,
