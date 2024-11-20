@@ -32,6 +32,8 @@ class JobState:
         """
         _not_falsy(job_input, "job_input")
         _not_falsy(user, "user")
+        # Could parallelize these ops but probably not worth it
+        await self._s3.has_bucket(job_input.output_dir.split("/", 1)[0])
         paths = [f.file if isinstance(f, models.S3File) else f for f in job_input.input_files]
         # TODO PERF may wan to make concurrency configurable here
         # TODO PERF this checks the file path syntax again, consider some way to avoid
@@ -55,7 +57,6 @@ class JobState:
         print(ji)  # TODO JOBSUBMIT remove
         # TODO JOBSUBMIT check image
         # TODO JOBSUBMIT check container is allowed
-        # TDDO JOBSUBMIT does the output bucket exist in Minio?
         # TDDO JOBSUBMIT if reference data is required, is it staged?
         # TODO JOBSUBMIT save Job model in Mongo
         

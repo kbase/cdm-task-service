@@ -11,10 +11,17 @@ from cdmtaskservice.job_state import ETagMismatchError
 from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError
 from cdmtaskservice.routes import UnauthorizedError, ClientLifeTimeError
 from cdmtaskservice.s3.client import (
+    S3BucketInaccessibleError,
+    S3BucketNotFoundError,
     S3PathInaccessibleError,
     S3PathNotFoundError,
 )
 from cdmtaskservice.s3.paths import S3PathSyntaxError
+
+_H400 = status.HTTP_400_BAD_REQUEST
+_H401 = status.HTTP_401_UNAUTHORIZED
+_H403 = status.HTTP_403_FORBIDDEN
+_H404 = status.HTTP_404_NOT_FOUND
 
 
 class ErrorMapping(NamedTuple):
@@ -26,20 +33,18 @@ class ErrorMapping(NamedTuple):
 
 
 _ERR_MAP = {
-    InvalidTokenError: ErrorMapping(ErrorType.INVALID_TOKEN, status.HTTP_401_UNAUTHORIZED),
-    MissingRoleError: ErrorMapping(ErrorType.UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
-    MissingTokenError: ErrorMapping(ErrorType.NO_TOKEN, status.HTTP_401_UNAUTHORIZED),
-    InvalidAuthHeaderError: ErrorMapping(
-        ErrorType.INVALID_AUTH_HEADER, status.HTTP_401_UNAUTHORIZED
-    ),
-    UnauthorizedError: ErrorMapping(ErrorType.UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
-    ClientLifeTimeError: ErrorMapping(ErrorType.CLIENT_LIFETIME, status.HTTP_400_BAD_REQUEST),
-    S3PathInaccessibleError: ErrorMapping(
-        ErrorType.S3_PATH_INACCESSIBLE, status.HTTP_403_FORBIDDEN
-    ),
-    S3PathNotFoundError: ErrorMapping(ErrorType.S3_PATH_NOT_FOUND, status.HTTP_404_NOT_FOUND),
-    S3PathSyntaxError: ErrorMapping(ErrorType.S3_PATH_SYNTAX, status.HTTP_400_BAD_REQUEST),
-    ETagMismatchError: ErrorMapping(ErrorType.S3_ETAG_MISMATCH, status.HTTP_400_BAD_REQUEST),
+    MissingTokenError: ErrorMapping(ErrorType.NO_TOKEN, _H401),
+    InvalidAuthHeaderError: ErrorMapping(ErrorType.INVALID_AUTH_HEADER, _H401),
+    InvalidTokenError: ErrorMapping(ErrorType.INVALID_TOKEN, _H401),
+    MissingRoleError: ErrorMapping(ErrorType.UNAUTHORIZED, _H403),
+    UnauthorizedError: ErrorMapping(ErrorType.UNAUTHORIZED, _H403),
+    ClientLifeTimeError: ErrorMapping(ErrorType.CLIENT_LIFETIME, _H400),
+    S3BucketInaccessibleError: ErrorMapping(ErrorType.S3_BUCKET_INACCESSIBLE, _H403),
+    S3BucketNotFoundError: ErrorMapping(ErrorType.S3_BUCKET_NOT_FOUND, _H404),
+    S3PathInaccessibleError: ErrorMapping(ErrorType.S3_PATH_INACCESSIBLE, _H403),
+    S3PathNotFoundError: ErrorMapping(ErrorType.S3_PATH_NOT_FOUND, _H404),
+    S3PathSyntaxError: ErrorMapping(ErrorType.S3_PATH_SYNTAX, _H400),
+    ETagMismatchError: ErrorMapping(ErrorType.S3_ETAG_MISMATCH, _H400),
 }
 
 def map_error(err: Exception) -> tuple[ErrorType, int]:
