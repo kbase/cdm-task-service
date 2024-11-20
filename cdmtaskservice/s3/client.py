@@ -12,8 +12,8 @@ from botocore.parsers import ResponseParserError
 import logging
 from typing import Any, Self
 
-from .paths import S3Paths
 from cdmtaskservice.arg_checkers import not_falsy, check_int, require_string
+from cdmtaskservice.s3.paths import S3Paths, validate_bucket_name
 
 
 class S3ObjectMeta:
@@ -160,23 +160,33 @@ class S3Client:
                 + "See logs for details"
             ) from e
         except ClientError as e:
+            bucket = getattr(func, "bucket", None)
             path = getattr(func, "path", None)
             code = e.response["Error"]["Code"]
             if code == "SignatureDoesNotMatch":
                 raise S3ClientConnectError("s3 access credentials are invalid")
             if code == "404":
+                if bucket:
+                    raise S3BucketNotFoundError(
+                        f"The bucket '{bucket}' was not found on the s3 system"
+                    )
                 raise S3PathNotFoundError(
                     f"The path '{path}' was not found on the s3 system"
                 ) from e
             if code == "AccessDenied" or code == "403":  # why both? Both 403s
-                if not path:
+                # may need to add other cases here
+                if bucket:
+                    raise S3BucketInaccessibleError(
+                        f"Access denied to bucket '{bucket}' on the s3 system"
+                    )
+                elif path:
+                    raise S3PathInaccessibleError(
+                        f"Access denied to path '{path}' on the s3 system"
+                    ) from e
+                else:
                     raise S3ClientConnectError(
                         "Access denied to list buckets on the s3 system"
                     ) from e
-                # may need to add other cases here
-                raise S3PathInaccessibleError(
-                    f"Access denied to path '{path}' on the s3 system"
-                ) from e
             # no way to test this since we're trying to cover all possible errors in tests
             logging.getLogger(__name__).error(
                 f"Unexpected response from S3. Response data:\n{e.response}\nTraceback:\n{e}\n")
@@ -206,6 +216,19 @@ class S3Client:
             for c in coros:
                 c.close()
         return [r.result() for r in results]
+
+    async def has_bucket(self, bucket: str):
+        """
+        Confirm a bucket exists and is accessible on the S3 system or throw an error otherwise.
+        
+        bucket - the name of the bucket.
+        """
+        # TODO TEST add tests around invalid bucket names
+        bucket = validate_bucket_name(require_string(bucket, "bucket"))
+        async def head(client, buk=bucket):
+            await client.head_bucket(Bucket=buk)
+        head.bucket = bucket
+        await self._run_commands([head], 1)
 
     async def get_object_meta(self, paths: S3Paths, concurrency: int = 10) -> list[S3ObjectMeta]:
         """
@@ -283,6 +306,14 @@ class S3Client:
 
 class S3ClientConnectError(Exception):
     """ Error thrown when the S3 client could not connect to the server. """ 
+
+
+class S3BucketNotFoundError(Exception):
+    """ Error thrown when an S3 bucket does not exist on the server. """
+
+
+class S3BucketInaccessibleError(Exception):
+    """ Error thrown when an S3 bucket is not accessible to the user. """
 
 
 class S3PathNotFoundError(Exception):

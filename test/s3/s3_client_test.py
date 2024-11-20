@@ -7,9 +7,11 @@ import pytest
 
 from cdmtaskservice.s3.client import (
     S3Client,
-    S3PathInaccessibleError,
     S3ClientConnectError,
-    S3PathNotFoundError
+    S3BucketInaccessibleError,
+    S3BucketNotFoundError,
+    S3PathInaccessibleError,
+    S3PathNotFoundError,
 )
 from cdmtaskservice.s3.paths import S3Paths
 from conftest import (
@@ -64,6 +66,43 @@ async def test_create_fail_bad_args(minio, minio_unauthed_user):
 async def _create_fail(host, akey, skey, expected, config=None, print_stacktrace=False):
     with pytest.raises(Exception) as got:
         await S3Client.create(host, akey, skey, config)
+    assert_exception_correct(got.value, expected, print_stacktrace)
+
+
+@pytest.mark.asyncio
+async def test_has_bucket(minio):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    s3c = await _client(minio)
+    # should pass without excption
+    await s3c.has_bucket("test-bucket")
+
+# TODO TEST add tests for checking bucket format (None input etc.). For now just test functionality
+
+
+@pytest.mark.asyncio
+async def test_has_bucket_fail_no_bucket(minio):
+    await minio.clean()
+    await minio.create_bucket("fail-bucket")
+    s3c = await _client(minio)
+    await _has_bucket_fail(s3c, "succeed-bucket", S3BucketNotFoundError(
+        "The bucket 'succeed-bucket' was not found on the s3 system"))
+
+
+@pytest.mark.asyncio
+async def test_has_bucket_fail_unauthed(minio, minio_unauthed_user):
+    await minio.clean()
+    await minio.create_bucket("fail-bucket")
+    
+    user, pwd = minio_unauthed_user
+    s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
+    await _has_bucket_fail(s3c, "fail-bucket", S3BucketInaccessibleError(
+        "Access denied to bucket 'fail-bucket' on the s3 system"))
+
+
+async def _has_bucket_fail(s3c, bucket, expected, print_stacktrace=False):
+    with pytest.raises(Exception) as got:
+        await s3c.has_bucket(bucket)
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
