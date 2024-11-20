@@ -12,7 +12,6 @@ from botocore.parsers import ResponseParserError
 import logging
 from typing import Any, Self
 
-from .exceptions import S3ClientConnectError, S3PathError, S3UnexpectedError
 from .paths import S3Paths
 from cdmtaskservice.arg_checkers import not_falsy, check_int, require_string
 
@@ -166,13 +165,18 @@ class S3Client:
             if code == "SignatureDoesNotMatch":
                 raise S3ClientConnectError("s3 access credentials are invalid")
             if code == "404":
-                raise S3PathError(f"The path '{path}' was not found on the s3 system") from e
+                raise S3PathNotFoundError(
+                    f"The path '{path}' was not found on the s3 system"
+                ) from e
             if code == "AccessDenied" or code == "403":  # why both? Both 403s
                 if not path:
                     raise S3ClientConnectError(
-                        "Access denied to list buckets on the s3 system") from e
+                        "Access denied to list buckets on the s3 system"
+                    ) from e
                 # may need to add other cases here
-                raise S3PathError(f"Access denied to path '{path}' on the s3 system") from e
+                raise S3PathInaccessibleError(
+                    f"Access denied to path '{path}' on the s3 system"
+                ) from e
             # no way to test this since we're trying to cover all possible errors in tests
             logging.getLogger(__name__).error(
                 f"Unexpected response from S3. Response data:\n{e.response}\nTraceback:\n{e}\n")
@@ -275,3 +279,19 @@ class S3Client:
                     Bucket=buk, Key=key, ExpiresIn=expiration_sec)
                 results.append(S3PresignedPost(ret["url"], ret["fields"]))
         return results
+
+
+class S3ClientConnectError(Exception):
+    """ Error thrown when the S3 client could not connect to the server. """ 
+
+
+class S3PathNotFoundError(Exception):
+    """ Error thrown when an S3 path does not exist on the server. """
+
+
+class S3PathInaccessibleError(Exception):
+    """ Error thrown when an S3 path is not accessible to the user. """
+
+
+class S3UnexpectedError(Exception):
+    """ Error thrown an unexpected error occurs. """

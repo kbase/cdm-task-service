@@ -18,7 +18,7 @@ from pydantic import (
 from typing import Annotated, Self, NamedTuple
 
 from cdmtaskservice.arg_checkers import contains_control_characters
-from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathError
+from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathSyntaxError
 
 
 # TODO TEST
@@ -34,7 +34,7 @@ _PATH_REGEX=r"^[\w.-/]+$"
 def _validate_bucket_name(bucket: str, index: int = None) -> str:
     try:
         return validate_bucket_name(bucket, index=index)
-    except S3PathError as e:
+    except S3PathSyntaxError as e:
         raise ValueError(str(e)) from e
 
 
@@ -43,7 +43,7 @@ def _validate_s3_path(s3path: str, index: int = None) -> str:
         raise ValueError("S3 paths must be a string")
     try:
         return validate_path(s3path, index=index)
-    except S3PathError as e:
+    except S3PathSyntaxError as e:
         raise ValueError(str(e)) from e
 
 

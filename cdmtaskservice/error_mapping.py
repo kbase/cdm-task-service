@@ -7,8 +7,14 @@ from typing import NamedTuple
 
 from cdmtaskservice.errors import ErrorType
 from cdmtaskservice.http_bearer import MissingTokenError, InvalidAuthHeaderError
+from cdmtaskservice.job_state import ETagMismatchError
 from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError
 from cdmtaskservice.routes import UnauthorizedError, ClientLifeTimeError
+from cdmtaskservice.s3.client import (
+    S3PathInaccessibleError,
+    S3PathNotFoundError,
+)
+from cdmtaskservice.s3.paths import S3PathSyntaxError
 
 
 class ErrorMapping(NamedTuple):
@@ -27,7 +33,13 @@ _ERR_MAP = {
         ErrorType.INVALID_AUTH_HEADER, status.HTTP_401_UNAUTHORIZED
     ),
     UnauthorizedError: ErrorMapping(ErrorType.UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
-    ClientLifeTimeError: ErrorMapping(ErrorType.CLIENT_LIFETIME, status.HTTP_400_BAD_REQUEST)
+    ClientLifeTimeError: ErrorMapping(ErrorType.CLIENT_LIFETIME, status.HTTP_400_BAD_REQUEST),
+    S3PathInaccessibleError: ErrorMapping(
+        ErrorType.S3_PATH_INACCESSIBLE, status.HTTP_403_FORBIDDEN
+    ),
+    S3PathNotFoundError: ErrorMapping(ErrorType.S3_PATH_NOT_FOUND, status.HTTP_404_NOT_FOUND),
+    S3PathSyntaxError: ErrorMapping(ErrorType.S3_PATH_SYNTAX, status.HTTP_400_BAD_REQUEST),
+    ETagMismatchError: ErrorMapping(ErrorType.S3_ETAG_MISMATCH, status.HTTP_400_BAD_REQUEST),
 }
 
 def map_error(err: Exception) -> tuple[ErrorType, int]:
