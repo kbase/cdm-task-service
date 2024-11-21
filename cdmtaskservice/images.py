@@ -14,7 +14,7 @@ class Images:
     
     def __init__(self, imageinfo: DockerImageInfo):
         """
-        Craete the docker image manager.
+        Create the docker image manager.
         
         imageinfo = an image information instance.
         """
