@@ -593,7 +593,7 @@ class Image(BaseModel):
         description="The entrypoint command extracted from the image."
     )]
     tag: Annotated[str | None, Field(
-        example="checkm2_0.1.6 ",
+        example="checkm2_0.1.6",
         description="The image tag at registration time. "
             + "The tag may no longer point to the same image."
     )] = None

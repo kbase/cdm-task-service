@@ -11,6 +11,8 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 from cdmtaskservice.config import CDMTaskServiceConfig
+from cdmtaskservice.image_remote_lookup import DockerImageInfo
+from cdmtaskservice.images import Images
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
@@ -26,6 +28,7 @@ class AppState(NamedTuple):
     sfapi_client: NERSCSFAPIClientProvider
     s3_client: S3Client
     job_state: JobState
+    images: Images
 
 
 async def build_app(
@@ -55,7 +58,9 @@ async def build_app(
     )
     print("Done")
     job_state = JobState(s3)
-    app.state._cdmstate = AppState(auth, nersc, s3, job_state)
+    imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
+    images = Images(imginfo)
+    app.state._cdmstate = AppState(auth, nersc, s3, job_state, images)
     print(flush=True)
 
 

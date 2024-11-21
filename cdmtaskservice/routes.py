@@ -3,7 +3,13 @@ CDM task service endpoints.
 """
 
 import datetime
-from fastapi import APIRouter, Depends, Request, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    Request,
+    Query,
+    Path as FastPath
+)
 from pydantic import BaseModel, Field
 from typing import Annotated
 from cdmtaskservice import app_state
@@ -146,6 +152,34 @@ async def get_nersc_client_info(
         expires_at=expires,
         expires_in=expires_in,
     )
+
+
+@ROUTER_ADMIN.post(
+    "/image/register/{image_id:path}",
+    response_model=models.Image,
+    summary="Approve an image",
+    description="Approve a Docker image for use with this service. "
+        + "The image must be publicly acessible and have an entrypoint. "
+        + "The image may not already exist in the system."
+        
+)
+async def approve_image(
+    r: Request,
+    image_id: Annotated[str, FastPath(
+        example="ghcr.io/kbase/collections:checkm2_0.1.6"
+            + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+        description="The Docker image to run for the job. Include the SHA to ensure the "
+            + "exact code requested is run.",
+        # Don't bother validating other than some basic checks, validation will occur when
+        # checking / getting the image SHA from the remote repository
+        min_length=1,
+        max_length=1000,
+    )],
+    user: kb_auth.KBaseUser=Depends(_AUTH)
+):
+    _ensure_admin(user, "Only service administrators can approve images.")
+    images = app_state.get_app_state(r).images
+    return await images.register(image_id)
 
 
 class UnauthorizedError(Exception):

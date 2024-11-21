@@ -7,6 +7,8 @@ from typing import NamedTuple
 
 from cdmtaskservice.errors import ErrorType
 from cdmtaskservice.http_bearer import MissingTokenError, InvalidAuthHeaderError
+from cdmtaskservice.images import NoEntrypointError
+from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
 from cdmtaskservice.job_state import ETagMismatchError
 from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError
 from cdmtaskservice.routes import UnauthorizedError, ClientLifeTimeError
@@ -45,6 +47,9 @@ _ERR_MAP = {
     S3PathNotFoundError: ErrorMapping(ErrorType.S3_PATH_NOT_FOUND, _H404),
     S3PathSyntaxError: ErrorMapping(ErrorType.S3_PATH_SYNTAX, _H400),
     ETagMismatchError: ErrorMapping(ErrorType.S3_ETAG_MISMATCH, _H400),
+    NoEntrypointError: ErrorMapping(ErrorType.MISSING_ENTRYPOINT, _H400),
+    ImageInfoFetchError: ErrorMapping(ErrorType.IMAGE_FETCH, _H400),
+    ImageNameParseError: ErrorMapping(ErrorType.IMAGE_NAME_PARSE, _H400),
 }
 
 def map_error(err: Exception) -> tuple[ErrorType, int]:

@@ -9,6 +9,7 @@ from typing import BinaryIO, TextIO
 _SEC_AUTH = "Authentication"
 _SEC_NERSC = "NERSC"
 _SEC_S3 = "S3"
+_SEC_IMAGE = "Images"
 _SEC_SERVICE = "Service"
 
 
@@ -31,6 +32,7 @@ class CDMTaskServiceConfig:
     s3_access_secret: str - the S3 access secret.
     s3_allow_insecure: bool - whether to skip SSL cert validation, leaving the service vulnerable
         to MITM attacks.
+    crane_path: str - the path to a `crane` executable.
     service_root_path: str  | None - if the service is behind a reverse proxy that rewrites the
         service path, the path to the service. The path is required in order for the OpenAPI
         documentation to function.
@@ -52,6 +54,7 @@ class CDMTaskServiceConfig:
         _check_missing_section(config, _SEC_AUTH)
         _check_missing_section(config, _SEC_NERSC)
         _check_missing_section(config, _SEC_S3)
+        _check_missing_section(config, _SEC_IMAGE)
         _check_missing_section(config, _SEC_SERVICE)
         self.auth_url = _get_string_required(config, _SEC_AUTH, "url")
         self.auth_full_admin_roles = _get_list_string(config, _SEC_AUTH, "admin_roles_full")
@@ -67,6 +70,7 @@ class CDMTaskServiceConfig:
         self.s3_allow_insecure = _get_string_optional(config, _SEC_S3, "allow_insecure") == "true"
         # If needed, we could add an S3 region parameter. YAGNI
         # If needed we could add sub sections to support > 1 S3 instance per service. YAGNI
+        self.crane_path = _get_string_required(config, _SEC_IMAGE, "crane_path")
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
 
     def print_config(self, output: TextIO):
@@ -75,9 +79,6 @@ class CDMTaskServiceConfig:
         """
         output.writelines([
             "\n*** Service Configuration ***\n",
-        ])
-        # TODO MONGO MINIO settings will go here and above, optionally print mongo user /pwd
-        output.writelines([
             f"Authentication URL: {self.auth_url}\n",
             f"Authentication full admin roles: {self.auth_full_admin_roles}\n",
             f"Authentication KBase staff role: {self.kbase_staff_role}\n",
@@ -88,6 +89,7 @@ class CDMTaskServiceConfig:
             f"S3 access key: {self.s3_access_key}\n",
             f"S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT\n",
             f"S3 allow insecure: {self.s3_allow_insecure}\n",
+            f"crane executable path: {self.crane_path}\n",
             f"Service root path: {self.service_root_path}\n",
             "*** End Service Configuration ***\n\n"
         ])
