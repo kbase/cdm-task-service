@@ -15,6 +15,7 @@ bidict = "==0.23.1"
 uvicorn = {extras = ["standard"], version = "==0.32.0"}
 jinja-cli = "==1.2.2"
 cacheout = "==0.16.0"
+motor = "==3.6.0"
 
 [dev-packages]
 pytest = "==8.3.3"

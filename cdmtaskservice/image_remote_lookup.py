@@ -71,6 +71,7 @@ class DockerImageInfo:
         The SHA is sourced from the remote repository digest; if a sha is provided in the input
         image name it is included in the returned tuple.
         """
+        # TODO BUG if a tag and a hash are submitted, the tag is ignored for the lookup
         ref = _parse_image_name(image_name)
         digest = await self._run_crane_command(_assemble_name(ref), "digest")
         return NormedImageName(

@@ -43,6 +43,18 @@ access_key = "{{ KBCTS_S3_ACCESS_KEY or "" }}"
 access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
 allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
 
+[MongoDB]
+
+# The connection parameters for MongoDB. User and password are optional. Retry writes
+# sets the Mongo DB retrywrites parameter on only if the value of the key is the exact string
+# "true". See https://www.mongodb.com/docs/manual/core/retryable-writes/
+
+mongo_host = "{{ KBCTS_MONGO_HOST or "mongodb://localhost:27017" }}"
+mongo_db = "{{ KBCTS_MONGO_DB or "cdmtaskservice" }}"
+mongo_user = "{{ KBCTS_MONGO_USER or "" }}"
+mongo_pwd = "{{ KBCTS_MONGO_PWD or "" }}"
+mongo_retrywrites = "{{ KBCTS_MONGO_RETRYWRITES or "" }}"
+
 [Images]
 
 # The path to a crane executable. See the read me for details.
