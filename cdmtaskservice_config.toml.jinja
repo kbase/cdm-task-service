@@ -43,6 +43,11 @@ access_key = "{{ KBCTS_S3_ACCESS_KEY or "" }}"
 access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
 allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
 
+[Images]
+
+# The path to a crane executable. See the read me for details.
+crane_path = "{{ KBCTS_CRANE_PATH or "" }}"
+
 [Service]
 
 # If the service is behind a reverse proxy that rewrites the service path, that path needs

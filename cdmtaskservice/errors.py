@@ -47,6 +47,15 @@ class ErrorType(Enum):
     
     S3_ETAG_MISMATCH =           (30030, "S3 ETag mismatch")  # noqa: E222 @IgnorePep8
     """ The expected S3 ETag did not match the actual ETag. """
+    
+    IMAGE_NAME_PARSE =           (30040, "Image name parse error")  # noqa: E222 @IgnorePep8
+    """ The provided image name could not be parsed. """
+
+    IMAGE_FETCH =                (30050, "Image fetch error")  # noqa: E222 @IgnorePep8
+    """ Information about the image could not be fetched. """
+    
+    MISSING_ENTRYPOINT =         (30060, "Image has no entrypoint")  # noqa: E222 @IgnorePep8
+    """ The provided image does not have an entrypoint. """
 
     CLIENT_LIFETIME =            (30200, "Client lifetime too short")  # noqa: E222 @IgnorePep8
     """ The client life time is shorter than requested. """

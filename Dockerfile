@@ -16,7 +16,7 @@ RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$C
     && mv ./crane /cdmtaskservice \
     && rm -r /craneinstall
 
-ENV CDM_TASK_SERVICE_CRANE_EXE=/cdmtaskservice/crane
+ENV KBCTS_CRANE_PATH=/cdmtaskservice/crane
 
 # install pipenv
 RUN pip install --upgrade pip && \
