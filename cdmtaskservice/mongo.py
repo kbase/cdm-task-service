@@ -45,5 +45,9 @@ class MongoDAO:
         await self._col_images.create_indexes([
             IndexModel([(_FLD_IMAGE_NAME, ASCENDING), (_FLD_IMAGE_HASH, ASCENDING)], unique=True),
             # Only allow one instance of a tag per image name to avoid confusion
-            IndexModel([(_FLD_IMAGE_NAME, ASCENDING), (_FLD_IMAGE_TAG, ASCENDING)], unique=True),
+            IndexModel(
+                [(_FLD_IMAGE_NAME, ASCENDING), (_FLD_IMAGE_TAG, ASCENDING)],
+                unique=True,
+                sparse=True  # tags are optional
+            ),
         ])
