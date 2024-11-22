@@ -10,13 +10,12 @@ Contains code for querying container information without access to a docker serv
 # I didn't find it.
 
 import asyncio
-from collections import namedtuple
 import json
 import logging
 import os
 from pathlib import Path
 import re
-from typing import Self
+from typing import Self, NamedTuple
 
 from docker_image import reference
 
@@ -24,11 +23,25 @@ from docker_image import reference
 _DISALLOWED_CHARS=re.compile(r"([^a-zA-Z0-9@:_.\-\/])")
 
 
-NormedImageName = namedtuple(
-    "NormedImageName",
-    ("normedname", "tag", "olddigest"),
-    defaults=(None, None)
-)
+class NormedImageName(NamedTuple):
+    """ A normalized image name. """
+    
+    name: str
+    """ The image name including the host and path, normalized. """
+    digest: str
+    """ The image digest. """
+    tag: str | None = None
+    """ The image tag, if any. This information is immediately stale. """
+    
+    @property
+    def name_with_digest(self):
+        """
+        Returns the normalized name with the digest, e.g. name@digest.
+        
+        This form always refers to the same image and is compatible
+        with Docker, Shifter, and Apptainer.
+        """ 
+        return f"{self.name}@{self.digest}"
 
 
 class DockerImageInfo:
@@ -61,23 +74,27 @@ class DockerImageInfo:
 
     async def normalize_image_name(self, image_name: str) -> NormedImageName:
         """
-        Given an image name, returns a normalized version of the name in the form
-        `host/namespace/path@sha`. This form always refers to the same image and is compatible
-        with Docker, Shifter, and Apptainer. 
+        Given an image name, returns a normalized version of the name with the digest.
         
-        If the input image name contains a tag, it is provided in the returned tuple. Note that
+        If the input image name contains a tag, it is provided in the returned class. Note that
         the tag may or may not refer to the image referenced by the SHA in the future.
         
-        The SHA is sourced from the remote repository digest; if a sha is provided in the input
-        image name it is included in the returned tuple.
+        The SHA is sourced from the remote repository digest; if a different sha is provided in the
+        input image name an error will be thrown.
         """
-        # TODO BUG if a tag and a hash are submitted, the tag is ignored for the lookup
         ref = _parse_image_name(image_name)
         digest = await self._run_crane_command(_assemble_name(ref), "digest")
+        if ref["digest"] and ref["digest"] != digest:
+            # It seems unlikely to have a sha mismatch without a tag but just in case
+            tag = f":{ref['tag']}" if ref["tag"] else ""
+            raise ImageInfoFetchError(
+                f"The digest for image {ref['name']}{tag}, {digest}, does not equal the "
+                + f"expected digest, {ref['digest']}")
         return NormedImageName(
-            normedname=f'{ref["name"]}@{digest}',
+            name=ref["name"],
+            digest=digest,
             tag=ref["tag"],
-            olddigest=ref["digest"])
+        )
     
     async def _run_crane_command(self, image_name: str, command: str) -> str:
         retcode, stdo, stde = await self._run_crane(command, image_name)
@@ -89,7 +106,8 @@ class DockerImageInfo:
             logging.getLogger(__name__).error(
                 f"crane lookup of image {image_name} failed, retcode: {retcode}, stderr:\n{stde}")
             stdel = stde.lower()
-            # special cases when crane spits out html and the regular error parsing doesn't work
+            # special cases when crane spits out html or a different format than usual
+            # and the regular error parsing doesn't work
             if "unauthorized" in stdel:  # config command doesn't include 401
                 raise ImageInfoFetchError(
                     f"Failed to access information for image {image_name}. "
@@ -98,6 +116,10 @@ class DockerImageInfo:
                 raise ImageInfoFetchError(
                     f"Failed to access information for image {image_name}. "
                     + "Image was not found on the host")
+            if "manifest unknown" in stdel:
+                raise ImageInfoFetchError(
+                    f"Failed to access information for image {image_name}. "
+                    + "Manifest is unknown")
             # This is pretty fragile for non-docker repository hosts.
             # Not really sure what else to do here
             # Allowlist for hosts?
@@ -108,10 +130,8 @@ class DockerImageInfo:
 
     async def get_entrypoint_from_name(self, image_name: str) -> list[str] | None:
         """
-        Get the image entrypoint given the image name.
-        
-        Assumes that a namespace is always present (so names like `image:tag` will be rejected)
-        and the path always has 2 components, the namespace and the image name.
+        Get the image entrypoint given the image name. If both a tag and a digest are provided
+        in the image name the tag takes precedence.
         
         Returns None if there is no entrypoint.
         """
@@ -165,9 +185,11 @@ def _parse_image_name(image_name: str) -> reference.Reference:
 
 def _assemble_name(ref: reference.Reference) -> str:
     name = ref["name"]
+    # Always look up an image by the tag preferentially, as if a digest is included
+    # the tag is ignored, which can mean non-existent tags
     if ref["tag"]:
         name += f':{ref["tag"]}'
-    if ref["digest"]:
+    elif ref["digest"]:
         name += f'@{ref["digest"]}'
     return name
 

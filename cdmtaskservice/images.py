@@ -24,14 +24,9 @@ class Images:
         self._iminfo = _not_falsy(imageinfo, "imageinfo")
         
     async def register(self, imagename: str):
-        # TODO PERF use a task group to get the name and entrypoint simultaneously
         normedname = await self._iminfo.normalize_image_name(imagename)
-        od = normedname.olddigest
-        if od and od != normedname.normedname.split("@")[-1]:
-            # Not sure how this could happen, unless it's a sha256 vs 512 or something?
-            # leave it just to be safe
-            raise ValueError("somehow the provided digest doesn't match with the returned digest")
-        entrypoint = await self._iminfo.get_entrypoint_from_name(normedname.normedname)
+        # Just use the sha for entrypoint lookup to ensure we get the right image
+        entrypoint = await self._iminfo.get_entrypoint_from_name(normedname.name_with_digest)
         if not entrypoint:
             raise NoEntrypointError(f"Image {imagename} does not have an entrypoint")
         # TODO IMAGEREG save image to mongo
@@ -40,7 +35,10 @@ class Images:
         # TODO DATAINTEG add username and date created
         # TODO REFDATA allow specifying refdata for image
         return models.Image(
-            normed_name=normedname.normedname, tag=normedname.tag, entrypoint=entrypoint
+            name=normedname.name,
+            digest = normedname.digest,
+            tag=normedname.tag,
+            entrypoint=entrypoint
         )
 
 

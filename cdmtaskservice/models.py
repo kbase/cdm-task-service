@@ -582,11 +582,14 @@ class Image(BaseModel):
     Information about a Docker image.
     """
     # This is an outgoing data structure only so we don't add validators
-    normed_name: Annotated[str, Field(
-        example="ghcr.io/kbase/collections"
-            +"@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+    name: Annotated[str, Field(
+        example="ghcr.io/kbase/collections",
         description="The normalized name of the a docker image, consisting of the "
-            + "host, path, and digest.",
+            + "host and path.",
+    )]
+    digest: Annotated[str, Field(
+        example="@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+        description="The image digest.",
     )]
     entrypoint: Annotated[list[str], Field(
         example=["checkm2", "predict"],
