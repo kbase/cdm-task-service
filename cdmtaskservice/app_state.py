@@ -6,6 +6,7 @@ calling the build_app() method
 """
 
 import asyncio
+from motor.motor_asyncio import AsyncIOMotorClient
 from pathlib import Path
 from typing import NamedTuple
 
@@ -15,6 +16,7 @@ from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.kb_auth import KBaseAuth
+from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.s3.client import S3Client
 
@@ -57,11 +59,20 @@ async def build_app(
         cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
     )
     print("Done")
-    job_state = JobState(s3)
-    imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
-    images = Images(imginfo)
-    app.state._cdmstate = AppState(auth, nersc, s3, job_state, images)
-    print(flush=True)
+    print("Initializing MongoDB client...", end="", flush=True)
+    mongocli = await get_mongo_client(cfg)
+    print("Done")
+    try:
+        job_state = JobState(s3)
+        mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
+        imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
+        images = Images(mongodao, imginfo)
+        app.state._mongo = mongocli
+        app.state._cdmstate = AppState(auth, nersc, s3, job_state, images)
+        print(flush=True)
+    except:
+        mongocli.close()
+        raise
 
 
 def get_app_state(r: Request) -> AppState:
@@ -75,9 +86,8 @@ async def destroy_app_state(app: FastAPI):
     """
     Destroy the application state, shutting down services and releasing resources.
     """
-    appstate = _get_app_state_from_app(app)  # first to check state was set up
-    # TODO APPSTATE handle shutdown routines, primarily mongo client
-    appstate = appstate  # get rid of unused var warning for now
+    _get_app_state_from_app(app)  # first to check state was set up
+    app.state._mongo.close()
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)
 
@@ -86,3 +96,22 @@ def _get_app_state_from_app(app: FastAPI) -> AppState:
     if not app.state._cdmstate:
         raise ValueError("App state has not been initialized")
     return app.state._cdmstate
+
+
+async def get_mongo_client(cfg: CDMTaskServiceConfig) -> AsyncIOMotorClient:
+    client = AsyncIOMotorClient(
+        cfg.mongo_host,
+        # Note auth is only currently tested manually
+        authSource=cfg.mongo_db,
+        username=cfg.mongo_user,
+        password=cfg.mongo_pwd,
+        retryWrites=cfg.mongo_retrywrites,
+    )
+    # Test connnection cheaply, doesn't need auth.
+    # Just throw the exception as is
+    try:
+        await client.admin.command("ismaster")
+        return client
+    except:
+        client.close()
+        raise

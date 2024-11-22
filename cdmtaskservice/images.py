@@ -5,6 +5,7 @@ Methods for registering, deleting, and listing images.
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
+from cdmtaskservice.mongo import MongoDAO
 
 
 class Images:
@@ -12,12 +13,14 @@ class Images:
     Registers, deletes, and lists images.
     """
     
-    def __init__(self, imageinfo: DockerImageInfo):
+    def __init__(self, mongo: MongoDAO, imageinfo: DockerImageInfo):
         """
         Create the docker image manager.
         
-        imageinfo = an image information instance.
+        mongo - the Mongo DAO.
+        imageinfo - an image information instance.
         """
+        self._mongo = _not_falsy(mongo, "mongo")
         self._iminfo = _not_falsy(imageinfo, "imageinfo")
         
     async def register(self, imagename: str):
