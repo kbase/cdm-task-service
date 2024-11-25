@@ -6,11 +6,14 @@ DAO for MongoDB.
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import IndexModel, ASCENDING, DESCENDING
+from pymongo.errors import DuplicateKeyError
 
-_FLD_IMAGE_NAME = "name"
-_FLD_IMAGE_HASH = "hash"
-_FLD_IMAGE_TAG = "tag"
-_FLD_IMAGE_ENTRYPOINT = "entrypoint"
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+from cdmtaskservice import models
+
+
+_INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
+_INDEX_DIGEST = "UNIQUE_IMAGE_DIGEST_INDEX"
 
 
 class MongoDAO:
@@ -42,12 +45,47 @@ class MongoDAO:
         #                    https://www.mongodb.com/docs/manual/core/index-creation/#constraint-violations-during-index-build
         #                    Otherwise, create a polling loop to wait until indexes exist
         
+        # NOTE that since there's two unique indexes means this collection can't be sharded
+        # but it's likely to be very small so shouldn't be an issue
         await self._col_images.create_indexes([
-            IndexModel([(_FLD_IMAGE_NAME, ASCENDING), (_FLD_IMAGE_HASH, ASCENDING)], unique=True),
+            IndexModel(
+                [(models.FLD_IMAGE_NAME, ASCENDING), (models.FLD_IMAGE_DIGEST, ASCENDING)],
+                 unique=True,
+                 name=_INDEX_DIGEST
+            ),
             # Only allow one instance of a tag per image name to avoid confusion
             IndexModel(
-                [(_FLD_IMAGE_NAME, ASCENDING), (_FLD_IMAGE_TAG, ASCENDING)],
+                [(models.FLD_IMAGE_NAME, ASCENDING), (models.FLD_IMAGE_TAG, ASCENDING)],
                 unique=True,
-                sparse=True  # tags are optional
+                sparse=True,  # tags are optional
+                name=_INDEX_TAG
             ),
         ])
+
+    async def save_image(self, image: models.Image):
+        """
+        Save details about a Docker image.
+        
+        Only one record per digest or tag is allowed per image
+        """
+        _not_falsy(image, "image")
+        try:
+            await self._col_images.insert_one(image.model_dump())
+        except DuplicateKeyError as e:
+            if _INDEX_TAG in e.args[0]:
+                raise ImageTagExistsError(f"The tag {image.tag} for image {image.name} "
+                                          + "already exists in the system")
+            elif _INDEX_DIGEST in e.args[0]:
+                raise ImageDigestExistsError(f"The digest {image.digest} for image {image.name} "
+                                             + "already exists in the system")
+            else:
+                # no way to test this, but just in case
+                raise ValueError(f"Unexpected duplicate key collision for image {image}") from e
+
+
+class ImageTagExistsError(Exception):
+    """ The tag for the image already exists in the system. """
+
+
+class ImageDigestExistsError(Exception):
+    """ The digest for the image already exists in the system. """

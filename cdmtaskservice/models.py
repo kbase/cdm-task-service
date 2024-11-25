@@ -26,6 +26,17 @@ from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathS
 #               still doesn't seem to work as of 24/11/11
 #               https://github.com/fastapi/fastapi/discussions/11137
 
+# WARNNING: Model field names also define field names in the MOngo database.
+# As such, field names cannot change without creating a mapping for field names in the mongo
+# layer, or data will not be returned correclty and corruption of old datq may occur.
+# The strings below are used in the mongo interface to define fields and indexes.
+# They must match with the field names in the models.
+
+FLD_IMAGE_NAME = "name"
+FLD_IMAGE_DIGEST = "digest"
+FLD_IMAGE_TAG = "tag"
+
+
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
 # POSiX fully portable filenames and /
 _PATH_REGEX=r"^[\w.-/]+$"

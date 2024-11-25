@@ -69,6 +69,12 @@ class ErrorType(Enum):
     S3_BUCKET_NOT_FOUND =        (40020, "S3 bucket not Found")  # noqa: E222 @IgnorePep8
     """ The S3 bucket was not found. """
 
+    IMAGE_TAG_EXISTS =           (50000, "Image tag exists")  # noqa: E222 @IgnorePep
+    """ The tag for the image already exists in the system. """
+
+    IMAGE_DIGEST_EXISTS =        (50010, "Image digest exists")  # noqa: E222 @IgnorePep
+    """ The digest for the image already exists in the system. """
+
     UNSUPPORTED_OP =             (100000, "Unsupported operation")  # noqa: E222 @IgnorePep8
     """ The requested operation is not supported. """
 
