@@ -29,17 +29,16 @@ class Images:
         entrypoint = await self._iminfo.get_entrypoint_from_name(normedname.name_with_digest)
         if not entrypoint:
             raise NoEntrypointError(f"Image {imagename} does not have an entrypoint")
-        # TODO IMAGEREG save image to mongo
-        #       need unique index on image name + tag for lookups and uniqueness
-        #       need unique index on image name + sha for the same
         # TODO DATAINTEG add username and date created
         # TODO REFDATA allow specifying refdata for image
-        return models.Image(
+        img = models.Image(
             name=normedname.name,
             digest = normedname.digest,
             tag=normedname.tag,
             entrypoint=entrypoint
         )
+        await self._mongo.save_image(img)
+        return img
 
 
 class NoEntrypointError(Exception):

@@ -11,6 +11,7 @@ from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
 from cdmtaskservice.job_state import ETagMismatchError
 from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError
+from cdmtaskservice.mongo import ImageTagExistsError, ImageDigestExistsError
 from cdmtaskservice.routes import UnauthorizedError, ClientLifeTimeError
 from cdmtaskservice.s3.client import (
     S3BucketInaccessibleError,
@@ -50,7 +51,10 @@ _ERR_MAP = {
     NoEntrypointError: ErrorMapping(ErrorType.MISSING_ENTRYPOINT, _H400),
     ImageInfoFetchError: ErrorMapping(ErrorType.IMAGE_FETCH, _H400),
     ImageNameParseError: ErrorMapping(ErrorType.IMAGE_NAME_PARSE, _H400),
+    ImageTagExistsError: ErrorMapping(ErrorType.IMAGE_TAG_EXISTS, _H400),
+    ImageDigestExistsError: ErrorMapping(ErrorType.IMAGE_DIGEST_EXISTS, _H400),
 }
+
 
 def map_error(err: Exception) -> tuple[ErrorType, int]:
     """
