@@ -602,7 +602,7 @@ class Image(BaseModel):
             + "host and path.",
     )]
     digest: Annotated[str, Field(
-        example="@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+        example="sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
         description="The image digest.",
     )]
     entrypoint: Annotated[list[str], Field(

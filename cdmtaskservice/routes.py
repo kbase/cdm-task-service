@@ -15,6 +15,7 @@ from typing import Annotated
 from cdmtaskservice import app_state
 from cdmtaskservice import kb_auth
 from cdmtaskservice import models
+from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.version import VERSION
@@ -94,7 +95,7 @@ class SubmitJobResponse(BaseModel):
 
 
 @ROUTER_JOBS.post(
-    "/submit",
+    "/",
     response_model=SubmitJobResponse,
     summary="Submit a job",
     description="Submit a job to the system."
@@ -106,6 +107,27 @@ async def submit_job(
 ):
     job_state = app_state.get_app_state(r).job_state
     return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
+
+
+@ROUTER_JOBS.get(
+    "/{job_id}",
+    response_model=models.Job,
+    summary="Get a job",
+    description="Get a job. Only the submitting user may view the job."
+)
+async def get_job(
+    r: Request,
+    job_id: Annotated[str, Field(
+        example="f0c24820-d792-4efa-a38b-2458ed8ec88f",
+        description="The job ID.",
+        pattern=r"^[\w-]+$",
+        min_length=1,
+        max_length=50,
+    )],
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+):
+    job_state = app_state.get_app_state(r).job_state
+    return await job_state.get_job(job_id, user)
 
 
 class NERSCClientInfo(BaseModel):
@@ -180,10 +202,6 @@ async def approve_image(
     _ensure_admin(user, "Only service administrators can approve images.")
     images = app_state.get_app_state(r).images
     return await images.register(image_id)
-
-
-class UnauthorizedError(Exception):
-    """ An error thrown when a user is not authorized to perform an action."""
 
 
 class ClientLifeTimeError(Exception):
