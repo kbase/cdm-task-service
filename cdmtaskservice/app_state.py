@@ -6,6 +6,7 @@ calling the build_app() method
 """
 
 import asyncio
+import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 from pathlib import Path
 from typing import NamedTuple
@@ -44,24 +45,25 @@ async def build_app(
     cfg - the CDM task service config.
     """
     # May want to parallelize some of this for faster startups. would need to rework prints
-    print("Connecting to KBase auth service... ", end="", flush=True)
+    logr = logging.getLogger(__name__)
+    logr.info("Connecting to KBase auth service... ")
     auth = await KBaseAuth.create(
         cfg.auth_url,
         required_roles=[cfg.kbase_staff_role, cfg.has_nersc_account_role],
         full_admin_roles=cfg.auth_full_admin_roles
     )
-    print("Done")
-    print("Initializing NERSC SFAPI client... ", end="", flush=True)
+    logr.info("Done")
+    logr.info("Initializing NERSC SFAPI client... ")
     nersc = await NERSCSFAPIClientProvider.create(Path(cfg.sfapi_cred_path), cfg.sfapi_user)
-    print("Done")
-    print("Initializing S3 client... ", end="", flush=True)
+    logr.info("Done")
+    logr.info("Initializing S3 client... ")
     s3 = await S3Client.create(
         cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
     )
-    print("Done")
-    print("Initializing MongoDB client...", end="", flush=True)
+    logr.info("Done")
+    logr.info("Initializing MongoDB client...")
     mongocli = await get_mongo_client(cfg)
-    print("Done")
+    logr.info("Done")
     try:
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
         job_state = JobState(mongodao, s3)
@@ -69,7 +71,6 @@ async def build_app(
         images = Images(mongodao, imginfo)
         app.state._mongo = mongocli
         app.state._cdmstate = AppState(auth, nersc, s3, job_state, images)
-        print(flush=True)
     except:
         mongocli.close()
         raise
@@ -86,8 +87,9 @@ async def destroy_app_state(app: FastAPI):
     """
     Destroy the application state, shutting down services and releasing resources.
     """
-    _get_app_state_from_app(app)  # first to check state was set up
+    appstate = _get_app_state_from_app(app)  # first to check state was set up
     app.state._mongo.close()
+    await appstate.sfapi_client.destroy()
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)
 
