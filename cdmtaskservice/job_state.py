@@ -73,9 +73,8 @@ class JobState:
                 (models.JobState.CREATED, utcdatetime())
             ]
         )
-        print(job)  # TODO JOBSUBMIT remove
+        await self._mongo.save_job(job)
         # TDDO JOBSUBMIT if reference data is required, is it staged?
-        # TODO JOBSUBMIT save Job model in Mongo
         return job_id
 
 

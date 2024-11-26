@@ -37,6 +37,7 @@ class MongoDAO:
             raise ValueError("db is required")
         self._db = db
         self._col_images = self._db.images
+        self._col_jobs = self._db.jobs
         
     async def _create_indexes(self):
         # TODO DATAINTEGRITY test unique index builds throw an error if there are non-unique
@@ -60,6 +61,10 @@ class MongoDAO:
                 sparse=True,  # tags are optional
                 name=_INDEX_TAG
             ),
+        ])
+        # Only need and want a single unique index for jobs so they can be sharded
+        await self._col_jobs.create_indexes([
+            IndexModel([(models.FLD_JOB_ID, ASCENDING)], unique=True)
         ])
 
     async def save_image(self, image: models.Image):
@@ -104,6 +109,17 @@ class MongoDAO:
         if not doc:
             raise NoSuchImageError(f"No image {name} {err} exists in the system.")
         return models.Image.model_construct(**doc)
+
+    async def save_job(self, job: models.Job):
+        """ Save a job. Job IDs are expected to be unique."""
+        _not_falsy(job, "job")
+        jobd = job.model_dump()
+        jobi = jobd[models.FLD_JOB_JOB_INPUT]
+        jobi[models.FLD_JOB_INPUT_RUNTIME] = jobi[models.FLD_JOB_INPUT_RUNTIME].total_seconds()
+        # don't bother checking for duplicate key exceptions since the service is supposed
+        # to ensure unique IDs
+        # TODO test that the timedelta is correctly reinstantiated in a get_job method
+        await self._col_jobs.insert_one(jobd)
 
 
 class NoSuchImageError(Exception):
