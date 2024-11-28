@@ -25,6 +25,7 @@ from cdmtaskservice.input_file_locations import determine_file_locations
 _WDL_VERSION = "1.0"  # Cromwell, and therefore JAWS, only supports 1.0
 
 _IMAGE_TRANS_CHARS = str.maketrans({".": "_", "-": "_", "/": "_", ":": "_"})
+_CONTAINER_NUM = "container_num"
 
 
 class JawsInput(NamedTuple):
@@ -59,7 +60,7 @@ def generate_wdl(
     if not job.job_input.inputs_are_S3File():
         raise ValueError("input files must be S3 files with the E-tag")
     job_files = job.job_input.get_files_per_container()
-    param = job.job_input.params.get_parameter()
+    param = job.job_input.params.get_file_parameter()
     if param and param.type is ParameterType.MANIFEST_FILE and (
         not manifest_file_list or job_files.containers != len(manifest_file_list)
     ):
@@ -67,7 +68,7 @@ def generate_wdl(
             "If a manifest file is specified in the job parameters manifest_file_list "
             + "is required and its length must match the number of containers for the job"
         )
-    workflow_name = job.image.normed_name.split("@")[0].translate(_IMAGE_TRANS_CHARS)
+    workflow_name = job.image.name.translate(_IMAGE_TRANS_CHARS)
     file_to_rel_path = determine_file_locations(job.job_input)
     input_files = []
     relpaths = []
@@ -132,6 +133,7 @@ workflow {workflow_name} {{
   scatter (i in range(length(input_files_list))) {{
     call run_container {{
       input:
+        {_CONTAINER_NUM} = i,
         input_files = input_files_list[i],
         file_locs = file_locs_list[i],
         environ = environment_list[i],
@@ -147,10 +149,11 @@ workflow {workflow_name} {{
 
 task run_container {{
   input {{
+    Int {_CONTAINER_NUM}
     Array[File] input_files
     Array[String] file_locs
     Array[String] environ
-    Array[string] cmdline{mani_task_input}
+    Array[String] cmdline{mani_task_input}
   }}
   command <<<
     # ensure host mount points exist
@@ -194,7 +197,7 @@ task run_container {{
   }}
   
   runtime {{
-    docker: "{job.image.normed_name}"
+    docker: "{job.image.name_with_digest}"
     runtime_minutes: {math.ceil(job.job_input.runtime.total_seconds() / 60)}
     memory: "{job.job_input.memory} B"
     cpu: {job.job_input.cpus}
@@ -262,6 +265,8 @@ def _process_parameter(
                 param = _join_files(files, param.input_files_format, job, file_to_rel_path, flag)
             case ParameterType.MANIFEST_FILE:  # implies manifest file is not None
                 param = _handle_manifest(job, manifest, flag)
+            case ParameterType.CONTAINTER_NUMBER:
+                param = _handle_container_num(flag)
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
@@ -273,6 +278,20 @@ def _process_parameter(
     else:
         shlex.quote(param)
     return [param] if as_list and not isinstance(param, list) else param
+
+
+def _handle_container_num(flag: str) -> str | list[str]:
+    # similar to the function below
+    cn = f"${_CONTAINER_NUM}"
+    if flag:
+        if flag.endswith("="):
+            # TODO TEST not sure if this will work
+            param = shlex.quote(flag) + cn
+        else:
+            param = [shlex.quote(flag), cn]
+    else:
+        param = cn
+    return param
 
 
 def _handle_manifest(job: Job, manifest: Path, flag: str) -> str | list[str]:

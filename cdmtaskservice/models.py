@@ -76,14 +76,20 @@ class ParameterType(str, Enum):
     The type of a parameter if not a string literal.
     
     input_files will cause the list of input files for the container to be inserted
-    into the entrypoint command line.
+    into the entrypoint command line or an environment variable.
     
     manifest_file will cause the list of input files for the container to be placed in a
-    manifest file and will insert the file location into the entrypoint command line. 
+    manifest file and will insert the file location into the entrypoint command line
+    or an environment variable.
+    
+    container_number will insert the integer number of the container into the
+    entrypoint command line or an environment variable. This can be used so prevent file path
+    collisions if multiple containers write to the same file paths.
     """
 
     INPUT_FILES = "input_files"
     MANIFEST_FILE = "manifest_file"
+    CONTAINTER_NUMBER = "container_number"
 
 
 class InputFilesFormat(str, Enum):
@@ -125,8 +131,8 @@ class Parameter(BaseModel):
     """
     Represents a special parameter passed to a container.
     
-    Can represent a set of input file names formatted in various ways or a manifest file
-    containing file paths or data IDs.
+    Can represent a set of input file names formatted in various ways, a manifest file
+    containing file paths or data IDs, or a container number.
     
     input_files_format is required when the type is input_files, but ignored otherwise.  
     manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
@@ -164,6 +170,8 @@ class Parameter(BaseModel):
                 if not self.manifest_file_format:
                     raise ValueError("The manifest_file_format field is required for "
                                      + f"{ParameterType.MANIFEST_FILE.value} parameter types")
+                return self
+            case ParameterType.CONTAINTER_NUMBER:
                 return self
             case _:
                 # Impossible to test but here for safety if new types are added
@@ -294,10 +302,10 @@ class Parameters(BaseModel):
     
     @model_validator(mode="after")
     def _check_parameters(self) -> Self:
-        self.get_parameter()
+        self.get_file_parameter()
         return self
     
-    def get_parameter(self) -> Parameter | None:
+    def get_file_parameter(self) -> Parameter | None:
         """
         If a file specification parameter is present in the arguments, get it.
         Returns None otherwise.
@@ -321,6 +329,8 @@ class Parameters(BaseModel):
             self, param: str | Parameter, p: str | Parameter, loc: str = None, no_space=False
     ):
         if isinstance(p, Parameter):
+            if p.type is ParameterType.CONTAINTER_NUMBER:
+                return param
             if loc and p.type is ParameterType.INPUT_FILES:
                 if p.input_files_format is InputFilesFormat.REPEAT_PARAMETER:
                     raise ValueError(
@@ -335,7 +345,8 @@ class Parameters(BaseModel):
             if param is not None:
                 raise ValueError(
                     # This may need to change for all vs all analyses
-                    f"At most one {Parameter.__name__} instance is allowed per parameter set")
+                    f"At most one {Parameter.__name__} instance "
+                    + "with file input is allowed per parameter set")
             return p
         return param
 
@@ -615,6 +626,16 @@ class Image(BaseModel):
             + "The tag may no longer point to the same image."
     )] = None
     # TODO REFERENCEDATA add reference data ID
+    
+    @property
+    def name_with_digest(self):
+        """
+        Returns the normalized name with the digest, e.g. name@digest.
+        
+        This form always refers to the same image and is compatible
+        with Docker, Shifter, and Apptainer.
+        """ 
+        return f"{self.name}@{self.digest}"
 
 
 class Job(BaseModel):
