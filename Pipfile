@@ -9,7 +9,7 @@ aiohttp = "==3.10.10"
 sfapi-client = "==0.3.1"
 requests = "==2.32.3"
 docker-image-py = "==0.1.13"
-fastapi = {extras = ["standard"], version = "==0.115.4"}
+fastapi = {extras = ["standard"], version = "==0.115.5"}
 marisa-trie = "==1.2.1"
 bidict = "==0.23.1"
 uvicorn = {extras = ["standard"], version = "==0.32.0"}
