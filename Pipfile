@@ -20,7 +20,7 @@ motor = "==3.6.0"
 [dev-packages]
 pytest = "==8.3.3"
 coverage = "==7.6.4"
-ipython = "==8.29.0"
+ipython = "==8.30.0"
 pytest-asyncio = "==0.24.0"
 pytest-cov = "==6.0.0"
 
