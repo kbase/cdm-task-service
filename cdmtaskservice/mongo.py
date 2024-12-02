@@ -118,12 +118,24 @@ class MongoDAO:
         jobi[models.FLD_JOB_INPUT_RUNTIME] = jobi[models.FLD_JOB_INPUT_RUNTIME].total_seconds()
         # don't bother checking for duplicate key exceptions since the service is supposed
         # to ensure unique IDs
-        # TODO test that the timedelta is correctly reinstantiated in a get_job method
         await self._col_jobs.insert_one(jobd)
+
+    async def get_job(self, job_id: str):
+        """ Get a job by its ID. """
+        job_id = _require_string(job_id, "job_id")
+        doc = await self._col_jobs.find_one({models.FLD_JOB_ID: job_id})
+        if not doc:
+            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+        # TODO PERF build up the job piece by piece to skip S3 path validation
+        return models.Job(**doc)
 
 
 class NoSuchImageError(Exception):
     """ The image does not exist in the system. """
+
+
+class NoSuchJobError(Exception):
+    """ The job does not exist in the system. """
 
 
 class ImageTagExistsError(Exception):

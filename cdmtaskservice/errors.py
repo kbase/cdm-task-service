@@ -70,7 +70,10 @@ class ErrorType(Enum):
     """ The S3 bucket was not found. """
     
     NO_SUCH_IMAGE =              (40030, "No such image")  # noqa: E222 @IgnorePep8
-    """ The Docker image was not found on the system. """
+    """ The Docker image was not found in the system. """
+
+    NO_SUCH_JOB =                (40040, "No such job")  # noqa: E222 @IgnorePep8
+    """ The job was not found in the system. """
 
     IMAGE_TAG_EXISTS =           (50000, "Image tag exists")  # noqa: E222 @IgnorePep
     """ The tag for the image already exists in the system. """
