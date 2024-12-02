@@ -23,15 +23,22 @@ from docker_image import reference
 _DISALLOWED_CHARS=re.compile(r"([^a-zA-Z0-9@:_.\-\/])")
 
 
-class NormedImageName(NamedTuple):
-    """ A normalized image name. """
+class ParsedImageName(NamedTuple):
+    """ An image name parsed into parts with a normalized name. """
     
     name: str
     """ The image name including the host and path, normalized. """
-    digest: str
-    """ The image digest. """
+    digest: str | None = None
+    """ The image digest, if provided. """
     tag: str | None = None
     """ The image tag, if any. This information is immediately stale. """
+
+
+class CompleteImageName(ParsedImageName):
+    """ An image name including the digest. """
+    
+    digest: str
+    """ The image digest. """
     
     @property
     def name_with_digest(self):
@@ -72,7 +79,7 @@ class DockerImageInfo:
             raise CranePathError("crane_absolute_path must be absolute")
         self._crane = crane_absolute_path
 
-    async def normalize_image_name(self, image_name: str) -> NormedImageName:
+    async def normalize_image_name(self, image_name: str) -> CompleteImageName:
         """
         Given an image name, returns a normalized version of the name with the digest.
         
@@ -82,18 +89,18 @@ class DockerImageInfo:
         The SHA is sourced from the remote repository digest; if a different sha is provided in the
         input image name an error will be thrown.
         """
-        ref = _parse_image_name(image_name)
-        digest = await self._run_crane_command(_assemble_name(ref), "digest")
-        if ref["digest"] and ref["digest"] != digest:
+        parsed = parse_image_name(image_name)
+        digest = await self._run_crane_command(_assemble_name(parsed), "digest")
+        if parsed.digest and parsed.digest != digest:
             # It seems unlikely to have a sha mismatch without a tag but just in case
-            tag = f":{ref['tag']}" if ref["tag"] else ""
+            tag = f":{parsed.tag}" if parsed.tag else ""
             raise ImageInfoFetchError(
-                f"The digest for image {ref['name']}{tag}, {digest}, does not equal the "
-                + f"expected digest, {ref['digest']}")
-        return NormedImageName(
-            name=ref["name"],
+                f"The digest for image {parsed.name}{tag}, {digest}, does not equal the "
+                + f"expected digest, {parsed.digest}")
+        return CompleteImageName(
+            name=parsed.name,
             digest=digest,
-            tag=ref["tag"],
+            tag=parsed.tag,
         )
     
     async def _run_crane_command(self, image_name: str, command: str) -> str:
@@ -136,7 +143,7 @@ class DockerImageInfo:
         Returns None if there is no entrypoint.
         """
         ret = await self._run_crane_command(
-            _assemble_name(_parse_image_name(image_name)),
+            _assemble_name(parse_image_name(image_name)),
            "config")
         try:
             cfg = json.loads(ret)
@@ -161,7 +168,8 @@ class DockerImageInfo:
         return proc.returncode, stdo.decode().strip(), stde.decode().strip()
 
 
-def _parse_image_name(image_name: str) -> reference.Reference:
+# TODO TEST add tests calling this method specifically
+def parse_image_name(image_name: str) -> reference.Reference:
     image_name = image_name.strip() if image_name is not None else None
     # Image name rules: https://docs.docker.com/reference/cli/docker/image/tag/
     # Don't do an exhaustive check here, but enough that we're reasonably confident
@@ -175,22 +183,27 @@ def _parse_image_name(image_name: str) -> reference.Reference:
         raise ImageNameParseError(
             f"Illegal character in image name '{image_name}': '{match.group(1)}'")
     try:
-        return reference.Reference.parse_normalized_named(image_name)
+        ref = reference.Reference.parse_normalized_named(image_name)
     except reference.InvalidReference as e:
         # error messages aren't super great but it's a good chunk of code to make it better,
         # and a user should be able to figure out the error by examination or trying to pull the
         # image themselves
         raise ImageNameParseError(f"Unable to parse image name '{image_name}': {e}") from e
+    return ParsedImageName(
+        name=ref["name"],
+        digest=ref["digest"],
+        tag=ref["tag"]
+    )
 
 
-def _assemble_name(ref: reference.Reference) -> str:
-    name = ref["name"]
+def _assemble_name(parsed: ParsedImageName) -> str:
+    name = parsed.name
     # Always look up an image by the tag preferentially, as if a digest is included
     # the tag is ignored, which can mean non-existent tags
-    if ref["tag"]:
-        name += f':{ref["tag"]}'
-    elif ref["digest"]:
-        name += f'@{ref["digest"]}'
+    if parsed.tag:
+        name += f':{parsed.tag}'
+    elif parsed.digest:
+        name += f'@{parsed.digest}'
     return name
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from cdmtaskservice.image_remote_lookup import (
     DockerImageInfo,
-    NormedImageName,
+    CompleteImageName,
     ImageNameParseError,
     CranePathError,
     ImageInfoFetchError,
@@ -21,8 +21,8 @@ _SHA_WS_0_14_2 = "sha256:e3d1db28c88f08cfbe632f0184da0a03e2016d8d11f1e800ea0ec98
 _SHA_WS_0_15_0 = "sha256:7e41821daf50abcd511654ddd9bdf66ed6374a30a1d62547631e79dcbe4ad92e"
 
 
-def test_NormedImageName():
-    nim = NormedImageName(name="foo", tag="bar", digest="sha256:stuff")
+def test_CompleteImageName():
+    nim = CompleteImageName(name="foo", tag="bar", digest="sha256:stuff")
     assert nim.name == "foo"
     assert nim.tag == "bar"
     assert nim.digest == "sha256:stuff"
@@ -49,32 +49,34 @@ async def test_create_fail_invalid_crane_path():
 async def test_narmalize_image_name():
     testset = {
         "ghcr.io/kbase/workspace_deluxe:0.15.0":
-            NormedImageName(
+            CompleteImageName(
                 name="ghcr.io/kbase/workspace_deluxe", digest=_SHA_WS_0_15_0, tag="0.15.0"
             ),
         "ghcr.io/kbase/workspace_deluxe@" + _SHA_WS_0_15_0:
-            NormedImageName(name="ghcr.io/kbase/workspace_deluxe", digest=_SHA_WS_0_15_0),
+            CompleteImageName(name="ghcr.io/kbase/workspace_deluxe", digest=_SHA_WS_0_15_0),
         "ghcr.io/kbase/workspace_deluxe:0.15.0@" + _SHA_WS_0_15_0:
-            NormedImageName(
+            CompleteImageName(
                 name="ghcr.io/kbase/workspace_deluxe",
                 digest=_SHA_WS_0_15_0,
                 tag="0.15.0",
             ),
         # this tests all non alphanum chars other than @ and uppercase
         "kbase/workspace_deluxe:0.10.2-hotfix":
-            NormedImageName(
+            CompleteImageName(
                 name="docker.io/kbase/workspace_deluxe",
                 digest=_SHA_WS_DOCkER_0_10_2,
                 tag="0.10.2-hotfix"
             ),
         "kbase/workspace_deluxe": 
-            NormedImageName(name="docker.io/kbase/workspace_deluxe", digest=_SHA_WS_DOCKER_LATEST),
+            CompleteImageName(
+                name="docker.io/kbase/workspace_deluxe", digest=_SHA_WS_DOCKER_LATEST
+            ),
         "kbase/workspace_deluxe:latest":
-            NormedImageName(
+            CompleteImageName(
                 name="docker.io/kbase/workspace_deluxe", digest=_SHA_WS_DOCKER_LATEST, tag="latest"
             ),
         "ubuntu:noble-20240827.1":
-            NormedImageName(
+            CompleteImageName(
                 name="docker.io/library/ubuntu",
                 digest="sha256:dfc10878be8d8fc9c61cbff33166cb1d1fe44391539243703c72766894fa834a",
                 tag="noble-20240827.1"

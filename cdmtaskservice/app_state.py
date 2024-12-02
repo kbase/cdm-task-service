@@ -63,8 +63,8 @@ async def build_app(
     mongocli = await get_mongo_client(cfg)
     print("Done")
     try:
-        job_state = JobState(s3)
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
+        job_state = JobState(mongodao, s3)
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         images = Images(mongodao, imginfo)
         app.state._mongo = mongocli

@@ -18,7 +18,7 @@ from cdmtaskservice import models
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.version import VERSION
-from cdmtaskservice.timestamp import timestamp
+from cdmtaskservice.timestamp import timestamp, utcdatetime
 
 SERVICE_NAME = "CDM Task Service Prototype"
 
@@ -143,7 +143,7 @@ async def get_nersc_client_info(
     _ensure_admin(user, "Only service administrators may view NERSC client information.")
     nersc_cli = app_state.get_app_state(r).sfapi_client
     expires = nersc_cli.expiration()
-    expires_in = expires - datetime.datetime.now(datetime.timezone.utc)
+    expires_in = expires - utcdatetime()
     if require_lifetime and expires_in < require_lifetime:
         raise ClientLifeTimeError(f"The client lifetime, {expires_in}, is less than the "
                                   + f"required lifetime, {require_lifetime}")

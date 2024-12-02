@@ -7,19 +7,23 @@ import uuid
 from cdmtaskservice import kb_auth
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+from cdmtaskservice.image_remote_lookup import parse_image_name
+from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
+from cdmtaskservice.timestamp import utcdatetime
 
 class JobState:
     """
     A manager for CDM job state.
     """
     
-    def __init__(self, s3client: S3Client):  # TODO MONOGO client
+    def __init__(self, mongo: MongoDAO, s3client: S3Client):  # TODO MONOGO client
         """
         s3Client - an S3Client pointed at the S3 storage system to use.
         """
         self._s3 = _not_falsy(s3client, "s3client")
+        self._mongo = _not_falsy(mongo, "mongo")
         
     async def submit(self, job_input: models.JobInput, user: kb_auth.KBaseUser) -> str:
         """
@@ -33,6 +37,11 @@ class JobState:
         _not_falsy(job_input, "job_input")
         _not_falsy(user, "user")
         # Could parallelize these ops but probably not worth it
+        parsedimage = parse_image_name(job_input.image)
+        tag = parsedimage.tag
+        if not parsedimage.tag and not parsedimage.digest:
+            tag = "latest"
+        image = await self._mongo.get_image(parsedimage.name, digest=parsedimage.digest, tag=tag)
         await self._s3.has_bucket(job_input.output_dir.split("/", 1)[0])
         paths = [f.file if isinstance(f, models.S3File) else f for f in job_input.input_files]
         # TODO PERF may wan to make concurrency configurable here
@@ -54,12 +63,19 @@ class JobState:
             )
         ji = job_input.model_copy(update={"input_files": new_input})
         job_id = str(uuid.uuid4())  # TODO TEST for testing we'll need to set up a mock for this
-        print(ji)  # TODO JOBSUBMIT remove
-        # TODO JOBSUBMIT check image
-        # TODO JOBSUBMIT check container is allowed
+        job = models.Job(
+            id=job_id,
+            job_input=ji,
+            user=user.user,
+            image=image,
+            state=models.JobState.CREATED,
+            transition_times=[
+                (models.JobState.CREATED, utcdatetime())
+            ]
+        )
+        print(job)  # TODO JOBSUBMIT remove
         # TDDO JOBSUBMIT if reference data is required, is it staged?
         # TODO JOBSUBMIT save Job model in Mongo
-        
         return job_id
 
 

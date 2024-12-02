@@ -63,11 +63,14 @@ class ErrorType(Enum):
     NOT_FOUND =                  (40000, "Not Found")  # noqa: E222 @IgnorePep8
     """ The requested resource was not found. """
     
-    S3_PATH_NOT_FOUND =          (40010, "S3 path not Found")  # noqa: E222 @IgnorePep8
+    S3_PATH_NOT_FOUND =          (40010, "S3 path not found")  # noqa: E222 @IgnorePep8
     """ The S3 path was not found. """
     
-    S3_BUCKET_NOT_FOUND =        (40020, "S3 bucket not Found")  # noqa: E222 @IgnorePep8
+    S3_BUCKET_NOT_FOUND =        (40020, "S3 bucket not found")  # noqa: E222 @IgnorePep8
     """ The S3 bucket was not found. """
+    
+    NO_SUCH_IMAGE =              (40030, "No such image")  # noqa: E222 @IgnorePep8
+    """ The Docker image was not found on the system. """
 
     IMAGE_TAG_EXISTS =           (50000, "Image tag exists")  # noqa: E222 @IgnorePep
     """ The tag for the image already exists in the system. """
