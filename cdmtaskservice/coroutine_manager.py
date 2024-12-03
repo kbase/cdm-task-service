@@ -31,6 +31,8 @@ class CoroutineWrangler:
         self._coros = []
         self._destroy = False
 
+    # TODO CODE There's a simpler say to deal with this. Write tests and then implement
+    #      https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
     async def _reaper(self):
         logr = logging.getLogger(__name__)
         while not self._destroy:
