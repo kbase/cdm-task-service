@@ -36,12 +36,7 @@ class CoroutineWrangler:
         while not self._destroy:
             await asyncio.sleep(self._closedelay)
             logr.info(f"Reaper processing {len(self._coros)} coroutines")
-            i = 0
-            while i < len(self._coros):
-                if self._coros[i].done():
-                    del self._coros[i]
-                    i = i - 1
-                i = i + 1
+            self._coros = [coro for coro in self._coros if not coro.done()]
             logr.info(f"Reaper: {len(self._coros)} coroutines remaining")
 
     async def run_coroutine(self, coro: Awaitable):
