@@ -2,6 +2,7 @@
 API for the CDM task service.
 '''
 
+import logging
 import os
 import sys
 
@@ -31,6 +32,11 @@ _KB_DEPLOYMENT_CONFIG = "KB_DEPLOYMENT_CONFIG"
 SERVICE_DESCRIPTION = (
     "A service for running arbitrary binaries on remote compute for the KBase CDM"
 )
+
+# httpx is super chatty if the root logger is set to INFO
+logging.basicConfig(level=logging.WARNING)
+logging.getLogger("cdmtaskservice").setLevel(logging.INFO)
+
 
 def create_app():
     """
