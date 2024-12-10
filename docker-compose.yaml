@@ -21,6 +21,7 @@ services:
       - KBCTS_HAS_NERSC_ACCOUNT_ROLE=HAS_NERSC_ACCOUNT
       - KBCTS_SFAPI_CRED_PATH=/creds/sfapi_creds
       - KBCTS_SFAPI_USER=cdm_ts
+      - KBCTS_NERSC_REMOTE_CODE_DIR=/global/cfs/cdirs/kbase/cdm_task_service
       - KBCTS_S3_URL=http://minio:9000
       - KBCTS_S3_EXTERNAL_URL=https://ci.berkeley.kbase.us:9000
       - KBCTS_VERIFY_S3_EXTERNAL_URL=false

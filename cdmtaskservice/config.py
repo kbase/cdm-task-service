@@ -30,6 +30,7 @@ class CDMTaskServiceConfig:
         expected to have the client ID as the first line and the client private key in PEM format
         as the remaining lines.
     sfapi_user: str - the user name of the user accociated with the credentials.
+    nersc_remote_code_dir: str - the location at NERSC to upload remote code.
     s3_url: str - the URL of the S3 instance to use for data storage.
     s3_external_url: str - the URL of the S3 instance accessible to external code or services.
     s3_verify_external_url: bool - whether to verify connectivity to the external S3 url at
@@ -73,6 +74,7 @@ class CDMTaskServiceConfig:
         )
         self.sfapi_cred_path = _get_string_required(config, _SEC_NERSC, "sfapi_cred_path")
         self.sfapi_user = _get_string_required(config, _SEC_NERSC, "sfapi_user")
+        self.nersc_remote_code_dir = _get_string_required(config, _SEC_NERSC, "remote_code_dir")
         self.s3_url = _get_string_required(config, _SEC_S3, "url")
         self.s3_external_url = _get_string_required(config, _SEC_S3, "external_url")
         self.s3_verify_external_url = _get_string_optional(
@@ -108,6 +110,7 @@ class CDMTaskServiceConfig:
             f"Authentication has NERSC account role: {self.has_nersc_account_role}\n",
             f"NERSC client credential path: {self.sfapi_cred_path}\n",
             f"NERSC client user: {self.sfapi_user}\n",
+            f"NERSC remote code dir: {self.nersc_remote_code_dir}\n",
             f"S3 URL: {self.s3_url}\n",
             f"S3 external URL: {self.s3_external_url}\n",
             f"S3 verify external URL: {self.s3_verify_external_url}\n",

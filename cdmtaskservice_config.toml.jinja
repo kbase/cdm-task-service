@@ -31,6 +31,9 @@ sfapi_cred_path = "{{ KBCTS_SFAPI_CRED_PATH or "" }}"
 # the user doesn't match they will not be accepted.
 sfapi_user = "{{ KBCTS_SFAPI_USER or "" }}"
 
+# Where to store remote code at NERSC. This must be writeable by the service account.
+remote_code_dir = "{{ KBCTS_NERSC_REMOTE_CODE_DIR or "/global/cfs/cdirs/kbase/cdm_task_service" }}"
+
 [S3]
 
 # The connection parameters for the S3 instance to use for data source and storage.
