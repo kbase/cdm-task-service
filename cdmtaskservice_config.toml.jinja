@@ -34,6 +34,14 @@ sfapi_user = "{{ KBCTS_SFAPI_USER or "" }}"
 # Where to store remote code at NERSC. This must be writeable by the service account.
 remote_code_dir = "{{ KBCTS_NERSC_REMOTE_CODE_DIR or "/global/cfs/cdirs/kbase/cdm_task_service" }}"
 
+[JAWS]
+
+# The JGI JAWS token to use to run jobs. This can be obtained from a JAWS representative.
+token = "{{ KBCTS_JAWS_TOKEN or "" }}"
+
+# The JAWS group to use to run jobs.
+group = "{{ KBCTS_JAWS_GROUP or "kbase" }}"
+
 [S3]
 
 # The connection parameters for the S3 instance to use for data source and storage.
