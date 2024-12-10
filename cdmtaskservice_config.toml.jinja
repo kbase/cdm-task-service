@@ -31,16 +31,38 @@ sfapi_cred_path = "{{ KBCTS_SFAPI_CRED_PATH or "" }}"
 # the user doesn't match they will not be accepted.
 sfapi_user = "{{ KBCTS_SFAPI_USER or "" }}"
 
+# Where to store remote code at NERSC. This must be writeable by the service account.
+remote_code_dir = "{{ KBCTS_NERSC_REMOTE_CODE_DIR or "/global/cfs/cdirs/kbase/cdm_task_service" }}"
+
+[JAWS]
+
+# The JGI JAWS token to use to run jobs. This can be obtained from a JAWS representative.
+token = "{{ KBCTS_JAWS_TOKEN or "" }}"
+
+# The JAWS group to use to run jobs.
+group = "{{ KBCTS_JAWS_GROUP or "kbase" }}"
+
 [S3]
 
 # The connection parameters for the S3 instance to use for data source and storage.
 # See S3 requirements in the README.
-# allow_insecure = true (and only the exact string "true") skips checking the validity of the
-# SSL certificate, leaving the service vulnerable to Man in the Middle attacks.
 
+# The URL of the S3 instance accessible to the service.
 url = "{{ KBCTS_S3_URL or "" }}"
+# The URL of the same S3 instance accessible to external, remote code. This may not be accessible
+# to the service.
+external_url = "{{ KBCTS_S3_EXTERNAL_URL or "" }}"
+# Set to `false` to skip connection verification of the external URL at service startup.
+# If the external url is accessible to the service set to `true` or any other string to verify
+# the URL at startup.
+verify_external_url = "{{ KBCTS_VERIFY_S3_EXTERNAL_URL or "true"}}"
+# The S3 access key.
 access_key = "{{ KBCTS_S3_ACCESS_KEY or "" }}"
+# The S3 secret key.
 access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
+# Setting allow_insecure = true (and only the exact string "true") skips checking the validity of the
+# SSL certificate for both the standard and external urls, leaving the service vulnerable
+# to Man in the Middle attacks.
 allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
 
 [MongoDB]
@@ -61,6 +83,9 @@ mongo_retrywrites = "{{ KBCTS_MONGO_RETRYWRITES or "" }}"
 crane_path = "{{ KBCTS_CRANE_PATH or "" }}"
 
 [Service]
+
+# The root URL of the service. This is used to construct callback URLs for remote code.
+root_url = "{{ KBCTS_SERVICE_ROOT_URL or "https://ci.kbase.us/services/cts" }}"
 
 # If the service is behind a reverse proxy that rewrites the service path, that path needs
 # to be defined here in order for the OpenAPI documentation to function.

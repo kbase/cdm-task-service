@@ -21,7 +21,13 @@ services:
       - KBCTS_HAS_NERSC_ACCOUNT_ROLE=HAS_NERSC_ACCOUNT
       - KBCTS_SFAPI_CRED_PATH=/creds/sfapi_creds
       - KBCTS_SFAPI_USER=cdm_ts
+      - KBCTS_NERSC_REMOTE_CODE_DIR=/global/cfs/cdirs/kbase/cdm_task_service
+      # Don't commit your token to github please
+      - KBCTS_JAWS_TOKEN=tokengoeshere
+      - KBCTS_JAWS_GROUP=kbase
       - KBCTS_S3_URL=http://minio:9000
+      - KBCTS_S3_EXTERNAL_URL=https://ci.berkeley.kbase.us:9000
+      - KBCTS_VERIFY_S3_EXTERNAL_URL=false
       - KBCTS_S3_ACCESS_KEY=miniouser
       - KBCTS_S3_ACCESS_SECRET=miniopassword
       - KBCTS_MONGO_HOST=mongodb://mongodb:27017
@@ -33,6 +39,7 @@ services:
       # - KBCTS_MONGO_USER=root
       # - KBCTS_MONGO_PWD=secret
       - KBCTS_MONGO_RETRYWRITES=false
+      - KBCTS_SERVICE_ROOT_URL=https://ci.kbase.us/services/cts
     volumes:
       - ./tmp_creds:/creds
 

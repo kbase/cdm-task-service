@@ -8,12 +8,13 @@ from typing import BinaryIO, TextIO
 
 _SEC_AUTH = "Authentication"
 _SEC_NERSC = "NERSC"
+_SEC_JAWS = "JAWS"
 _SEC_S3 = "S3"
 _SEC_MONGODB = "MongoDB"
 _SEC_IMAGE = "Images"
 _SEC_SERVICE = "Service"
 
-_SECS=[_SEC_AUTH, _SEC_NERSC, _SEC_S3, _SEC_MONGODB, _SEC_IMAGE, _SEC_SERVICE]
+_SECS=[_SEC_AUTH, _SEC_NERSC, _SEC_JAWS, _SEC_S3, _SEC_MONGODB, _SEC_IMAGE, _SEC_SERVICE]
 
 
 class CDMTaskServiceConfig:
@@ -30,7 +31,13 @@ class CDMTaskServiceConfig:
         expected to have the client ID as the first line and the client private key in PEM format
         as the remaining lines.
     sfapi_user: str - the user name of the user accociated with the credentials.
-    s3_url: str - the url of the S3 instance to use for data storage.
+    nersc_remote_code_dir: str - the location at NERSC to upload remote code.
+    jaws_token: str - the JAWS token used to run jobs.
+    jaws_group: str - the JAWS group used to run jobs.
+    s3_url: str - the URL of the S3 instance to use for data storage.
+    s3_external_url: str - the URL of the S3 instance accessible to external code or services.
+    s3_verify_external_url: bool - whether to verify connectivity to the external S3 url at
+        service startup.
     s3_access_key: str - the S3 access key.
     s3_access_secret: str - the S3 access secret.
     s3_allow_insecure: bool - whether to skip SSL cert validation, leaving the service vulnerable
@@ -41,6 +48,7 @@ class CDMTaskServiceConfig:
     mongo_user: str | None - the MongoDB password.
     mongo_user: bool - whether to set the MongoDB retry writes parameter on.
     crane_path: str - the path to a `crane` executable.
+    service_root_url: str - the URL for the service root.
     service_root_path: str  | None - if the service is behind a reverse proxy that rewrites the
         service path, the path to the service. The path is required in order for the OpenAPI
         documentation to function.
@@ -69,7 +77,13 @@ class CDMTaskServiceConfig:
         )
         self.sfapi_cred_path = _get_string_required(config, _SEC_NERSC, "sfapi_cred_path")
         self.sfapi_user = _get_string_required(config, _SEC_NERSC, "sfapi_user")
+        self.nersc_remote_code_dir = _get_string_required(config, _SEC_NERSC, "remote_code_dir")
+        self.jaws_token = _get_string_required(config, _SEC_JAWS, "token")
+        self.jaws_group = _get_string_required(config, _SEC_JAWS, "group")
         self.s3_url = _get_string_required(config, _SEC_S3, "url")
+        self.s3_external_url = _get_string_required(config, _SEC_S3, "external_url")
+        self.s3_verify_external_url = _get_string_optional(
+            config, _SEC_S3, "verify_external_url") != "false"
         self.s3_access_key = _get_string_required(config, _SEC_S3, "access_key")
         self.s3_access_secret = _get_string_required(config, _SEC_S3, "access_secret")
         self.s3_allow_insecure = _get_string_optional(config, _SEC_S3, "allow_insecure") == "true"
@@ -85,6 +99,7 @@ class CDMTaskServiceConfig:
             raise ValueError("Either both or neither of the mongo user and password must "
                              + "be provided")
         self.crane_path = _get_string_required(config, _SEC_IMAGE, "crane_path")
+        self.service_root_url = _get_string_required(config, _SEC_SERVICE, "root_url")
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
 
     def print_config(self, output: TextIO):
@@ -92,27 +107,33 @@ class CDMTaskServiceConfig:
         Print the configuration to the output argument, censoring secrets.
         """
         pwd = "REDACTED FOR YOUR PLEASURE AND ENJOYMENT" if self.mongo_pwd else None
-        output.writelines([
-            "\n*** Service Configuration ***\n",
-            f"Authentication URL: {self.auth_url}\n",
-            f"Authentication full admin roles: {self.auth_full_admin_roles}\n",
-            f"Authentication KBase staff role: {self.kbase_staff_role}\n",
-            f"Authentication has NERSC account role: {self.has_nersc_account_role}\n",
-            f"NERSC client credential path: {self.sfapi_cred_path}\n",
-            f"NERSC client user: {self.sfapi_user}\n",
-            f"S3 url: {self.s3_url}\n",
-            f"S3 access key: {self.s3_access_key}\n",
-            f"S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT\n",
-            f"S3 allow insecure: {self.s3_allow_insecure}\n",
-            f"MongoDB host: {self.mongo_host}\n",
-            f"MongoDB database: {self.mongo_db}\n",
-            f"MongoDB user: {self.mongo_user}\n",
-            f"MongoDB password: {pwd}\n",
-            f"MongoDB retry writes: {self.mongo_retrywrites}\n",
-            f"crane executable path: {self.crane_path}\n",
-            f"Service root path: {self.service_root_path}\n",
-            "*** End Service Configuration ***\n\n"
-        ])
+        output.writelines([line + "\n" for line in [
+            "\n*** Service Configuration ***",
+            f"Authentication URL: {self.auth_url}",
+            f"Authentication full admin roles: {self.auth_full_admin_roles}",
+            f"Authentication KBase staff role: {self.kbase_staff_role}",
+            f"Authentication has NERSC account role: {self.has_nersc_account_role}",
+            f"NERSC client credential path: {self.sfapi_cred_path}",
+            f"NERSC client user: {self.sfapi_user}",
+            f"NERSC remote code dir: {self.nersc_remote_code_dir}",
+            "JAWS token: REDACTED FOR THE NATIONAL SECURITY OF GONDWANALAND",
+            f"JAWS group: {self.jaws_group}",
+            f"S3 URL: {self.s3_url}",
+            f"S3 external URL: {self.s3_external_url}",
+            f"S3 verify external URL: {self.s3_verify_external_url}",
+            f"S3 access key: {self.s3_access_key}",
+            "S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT",
+            f"S3 allow insecure: {self.s3_allow_insecure}",
+            f"MongoDB host: {self.mongo_host}",
+            f"MongoDB database: {self.mongo_db}",
+            f"MongoDB user: {self.mongo_user}",
+            f"MongoDB password: {pwd}",
+            f"MongoDB retry writes: {self.mongo_retrywrites}",
+            f"crane executable path: {self.crane_path}",
+            f"Service root URL: {self.service_root_url}",
+            f"Service root path: {self.service_root_path}",
+            "*** End Service Configuration ***\n"
+        ]])
 
 def _check_missing_section(config, section):
     if section not in config:
