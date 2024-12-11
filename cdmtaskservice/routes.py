@@ -105,8 +105,8 @@ async def submit_job(
     job_input: models.JobInput,
     user: kb_auth.KBaseUser=Depends(_AUTH),
 ):
-    job_state = app_state.get_app_state(r).job_state
-    return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
+    job_submit = app_state.get_app_state(r).job_submit
+    return SubmitJobResponse(job_id=await job_submit.submit(job_input, user))
 
 
 @ROUTER_JOBS.get(
