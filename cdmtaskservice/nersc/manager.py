@@ -122,6 +122,7 @@ class NERSCManager:
         return path
 
     async def _setup_remote_code(self):
+        # TODO RELIABILITY atomically write files. For these small ones probably doesn't matter?
         cli = self._client_provider()
         perlmutter = await cli.compute(Machine.perlmutter)
         dtns = await cli.compute(Machine.dtns)
@@ -155,7 +156,10 @@ class NERSCManager:
                          + f"pip install {deps}"  # adding notapackage causes a failure
                      + '"')
                 tg.create_task(perlmutter.run(command))
-        self._dtn_scratch = Path(res.result().strip())
+        scratch = res.result().strip()
+        if not scratch:
+            raise ValueError("Unable to determine $SCRATCH variable for NERSC dtns")
+        self._dtn_scratch = Path(scratch)
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
