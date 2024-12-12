@@ -28,6 +28,11 @@ from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
 
 # TODO CLEANUP clean up old code versions @NERSC somehow. Not particularly important
 
+_DT_TARGET = Machine.dtns
+# TDOO NERSCUIPDATE delete the following line when DTN downloads work.
+#       See https://nersc.servicenowservices.com/sp?sys_id=ad33e85f1b5a5610ac81a820f54bcba0&view=sp&id=ticket&table=incident
+_DT_TARGET = Machine.perlmutter
+
 _COMMAND_PATH = "utilities/command"
 
 _MIN_TIMEOUT_SEC = 300
@@ -125,7 +130,7 @@ class NERSCManager:
         # TODO RELIABILITY atomically write files. For these small ones probably doesn't matter?
         cli = self._client_provider()
         perlmutter = await cli.compute(Machine.perlmutter)
-        dtns = await cli.compute(Machine.dtns)
+        dt = await cli.compute(_DT_TARGET)
         async with asyncio.TaskGroup() as tg:
             for mod in _CTS_DEPENDENCIES:
                 target = self._nersc_code_path
@@ -142,7 +147,7 @@ class NERSCManager:
                 bio=io.BytesIO(_PROCESS_DATA_XFER_MANIFEST.encode()),
                 make_exe=True,
             ))
-            res = tg.create_task(dtns.run('bash -c "echo $SCRATCH"'))
+            res = tg.create_task(dt.run('bash -c "echo $SCRATCH"'))
             if _PIP_DEPENDENCIES:
                 deps = " ".join(
                     # may need to do something else if module doesn't have __version__
@@ -252,9 +257,9 @@ class NERSCManager:
     ):
         path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job_id / filename
         cli = self._client_provider()
-        dtn = await cli.compute(Machine.dtns)
+        dt = await cli.compute(_DT_TARGET)
         # TODO CLEANUP manifests after some period of time
-        await self._upload_file_to_nersc(dtn, path, bio=manifest)
+        await self._upload_file_to_nersc(dt, path, bio=manifest)
         command = (
             "bash -c '"
                 + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
@@ -264,7 +269,7 @@ class NERSCManager:
                 + f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}'
             + "'"
         )
-        task_id  = (await self._run_command(cli, Machine.dtns, command))["task_id"]
+        task_id  = (await self._run_command(cli, _DT_TARGET, command))["task_id"]
         # TODO LOGGING figure out how to handle logging, see other logging todos
         logging.getLogger(__name__).info(
             f"Created {task_type} task with id {task_id} for job {job_id}")

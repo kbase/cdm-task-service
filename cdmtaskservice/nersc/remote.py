@@ -30,13 +30,16 @@ def process_data_transfer_manifest(manifest_file_path: str, callback_url: str):
     # TODO TEST add tests for this and its dependency functions, including logging
     # Potential performance improvement could include a shared cross job cache for files
     #    only useful if jobs are reusing the same files, whcih seems def possible
+    # TODO LOGGINNG logging doesn't work
+    # TODO IMPORTANT ERRORHANDLING write an output file that can be read by the CTS
+    #                sfapi tasks only last for 10 minutes after completions
     log = logging.getLogger(__name__)
     try:
         with open(manifest_file_path) as f:
             manifest = json.load(f)
         asyncio.run(s3_pdtm(manifest["file-transfers"]))
     finally:
-        log.info(f"pinging callback url {callback_url}")
+        log.info(f"Pinging callback url {callback_url}")
         ret = requests.get(callback_url)
         if ret.status_code < 200 or ret.status_code > 299:
             log.error(ret.text)

@@ -14,6 +14,7 @@ from typing import NamedTuple, Any
 from fastapi import FastAPI, Request
 from cdmtaskservice import models
 from cdmtaskservice.config import CDMTaskServiceConfig
+from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
@@ -57,6 +58,7 @@ async def build_app(
     # This method is getting pretty long but it's stupid simple so...
     # May want to parallelize some of this for faster startups. would need to rework prints
     logr = logging.getLogger(__name__)
+    coman = await CoroutineWrangler.create()
     logr.info("Connecting to KBase auth service... ")
     auth = await KBaseAuth.create(
         cfg.auth_url,
@@ -102,7 +104,7 @@ async def build_app(
         runners = {models.Cluster.PERLMUTTER_JAWS: nerscjawsflow}
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         images = Images(mongodao, imginfo)
-        job_submit = JobSubmit(mongodao, s3)
+        job_submit = JobSubmit(mongodao, s3, coman, runners)
         app.state._mongo = mongocli
         app.state._cdmstate = AppState(
             auth, sfapi_client, s3, job_submit, job_state, images, runners
