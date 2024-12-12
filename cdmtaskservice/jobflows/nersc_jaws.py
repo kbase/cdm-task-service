@@ -8,7 +8,7 @@ from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.nersc.manager import NERSCManager
-from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.callback_url_paths import get_download_complete_callback
 
@@ -56,25 +56,23 @@ class NERSCJAWSRunner:
         self._jgroup = _require_string(jaws_group, "jaws_group")
         self._callback_root = _require_string(service_root_url, "service_root_url")
 
-    async def start_job(self, job: models.Job):
+    async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
         Start running a job. It is expected that the Job has been persisted to the data
-        storage system and is in the created state. It is further assumed that the input files
-        are of the S3File type, not bare strings.
+        storage system and is in the created state.
+        
+        job - the job
+        objmeta - the S3 object metadata for the files in the job.
         """
         if _not_falsy(job, "job").state != models.JobState.CREATED:
             raise ValueError("job must be in the created state")
         logr = logging.getLogger(__name__)
+        # Could check that the s3 and job paths / etags match... YAGNI
         # TODO PERF this validates the file paths yet again. Maybe the way to go is just have
         #           a validate method on S3Paths which can be called or not as needed, with
         #           a validated state boolean
-        paths = S3Paths([p.file for p in job.job_input.input_files])
+        paths = S3Paths([p.path for p in _not_falsy(objmeta, "objmeta")])
         try:
-            # This is making an S3 call again after the call in job_submit. If that's too expensive
-            # pass in the S3meta as well
-            # TODO PERF config / set concurrency
-            # TODO NOW pass this in to avoid race conditions w/ etags
-            meta = await self._s3.get_object_meta(paths)
             # TODO RELIABILITY config / set expiration time
             presigned = await self._s3ext.presign_get_urls(paths)
             callback_url = get_download_complete_callback(self._callback_root, job.id)
@@ -90,7 +88,7 @@ class NERSCJAWSRunner:
             # TODO NOW how get remote paths at next step? 
             # TODO NOW store task IDs
             task_id = await self._nman.download_s3_files(
-                job.id, meta, presigned, callback_url, insecure_ssl=self._s3insecure
+                job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
             )
         except Exception as e:
             # TODO LOGGING figure out how logging it going to work etc.
