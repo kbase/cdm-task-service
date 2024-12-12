@@ -3,10 +3,12 @@ Manages submitting jobs.
 """
 
 import uuid
+from typing import Any
 
 from cdmtaskservice import kb_auth
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.image_remote_lookup import parse_image_name
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.s3.client import S3Client
@@ -18,13 +20,23 @@ class JobSubmit:
     A manager for submitting CDM jobs.
     """
     
-    def __init__(self, mongo: MongoDAO, s3client: S3Client):
+    def __init__(
+        self,
+        mongo: MongoDAO,
+        s3client: S3Client,
+        coro_manager: CoroutineWrangler,
+        job_runners: dict[models.Cluster, Any],  # Make abstract class if necessary
+    ):
         """
         mongo - a MongoDB DAO object.
         s3Client - an S3Client pointed at the S3 storage system to use.
+        coro_manager - a coroutine manager.
+        job_runners - a mapping of remote compute cluster to the job runner for that cluster.
         """
         self._s3 = _not_falsy(s3client, "s3client")
         self._mongo = _not_falsy(mongo, "mongo")
+        self._coman = _not_falsy(coro_manager, "coro_manager")
+        self._runners = _not_falsy(job_runners, "job_runners")
         
     async def submit(self, job_input: models.JobInput, user: kb_auth.KBaseUser) -> str:
         """
@@ -76,6 +88,7 @@ class JobSubmit:
         )
         # TDDO JOBSUBMIT if reference data is required, is it staged?
         await self._mongo.save_job(job)
+        await self._coman.run_coroutine(self._runners[job.job_input.cluster].start_job(job))
         return job_id
 
 

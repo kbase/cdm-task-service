@@ -11,6 +11,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - 5000:5000
+    #extra_hosts:
+      # TODO DOCKERUPGRADE after upgrading docker switch from host mode
+      # See https://stackoverflow.com/a/43541732/643675
+      #- "host.docker.internal:host-gateway"
+    network_mode: host
     depends_on:
       - mongodb
       - minio
@@ -25,12 +30,19 @@ services:
       # Don't commit your token to github please
       - KBCTS_JAWS_TOKEN=tokengoeshere
       - KBCTS_JAWS_GROUP=kbase
-      - KBCTS_S3_URL=http://minio:9000
+      # TODO DOCKERUPGRADE after upgrading docker switch to host.docker.internal
+      - KBCTS_S3_URL=http://localhost:9002
+      #- KBCTS_S3_URL=http://host.docker.internal:9002
+      # local Minio, only useful if not running jobs on NERSC
+      #- KBCTS_S3_URL=http://minio:9000
       - KBCTS_S3_EXTERNAL_URL=https://ci.berkeley.kbase.us:9000
       - KBCTS_VERIFY_S3_EXTERNAL_URL=false
       - KBCTS_S3_ACCESS_KEY=miniouser
       - KBCTS_S3_ACCESS_SECRET=miniopassword
-      - KBCTS_MONGO_HOST=mongodb://mongodb:27017
+      - KBCTS_S3_ALLOW_INSECURE=true
+      # TODO DOCKERUPGRADE switch back when host mode no longer needed
+      - KBCTS_MONGO_HOST=mongodb://localhost:27017
+      #- KBCTS_MONGO_HOST=mongodb://mongodb:27017
       - KBCTS_MONGO_DB=cdmtaskservice
       # TODO MONGOAUTH need to add a user to the cmdtaskservice db before this works out
       #                of the box.
