@@ -88,7 +88,8 @@ class JobSubmit:
         )
         # TDDO JOBSUBMIT if reference data is required, is it staged?
         await self._mongo.save_job(job)
-        await self._coman.run_coroutine(self._runners[job.job_input.cluster].start_job(job))
+        # Pass in the meta to avoid potential race conditions w/ etag changes
+        await self._coman.run_coroutine(self._runners[job.job_input.cluster].start_job(job, meta))
         return job_id
 
 
