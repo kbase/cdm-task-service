@@ -4,12 +4,13 @@ DAO for MongoDB.
 # Could make an interface here so that mongo can be swapped out, but the chance that happens
 # low enough to YAGNI the idea.
 
+import datetime
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import IndexModel, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice import models
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 
 
 _INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
@@ -122,12 +123,53 @@ class MongoDAO:
 
     async def get_job(self, job_id: str):
         """ Get a job by its ID. """
-        job_id = _require_string(job_id, "job_id")
-        doc = await self._col_jobs.find_one({models.FLD_JOB_ID: job_id})
+        doc = await self._col_jobs.find_one({models.FLD_JOB_ID: _require_string(job_id, "job_id")})
         if not doc:
             raise NoSuchJobError(f"No job with ID '{job_id}' exists")
         # TODO PERF build up the job piece by piece to skip S3 path validation
         return models.Job(**doc)
+    
+    _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
+    
+    async def add_NERSC_download_task_id(
+        self,
+        job_id: str,
+        task_id: str,
+        current_state: models.JobState,
+        state: models.JobState,
+        time: datetime.datetime
+    ):
+        """
+        Add a download task_id to the NERSC section of a job and update the state.
+        
+        job_id - the job ID.
+        task_id - the NERSC task ID.
+        current_state - the expected current state of the job. If the job is not in this state
+            an error is thrown.
+        state - the new state for the job.
+        time - the time at which the job transitioned to the new state.
+        """
+        # may need to make this more generic where the cluster is passed in and mapped to
+        # a job structure location or something if we support more than NERSC
+        res = await self._col_jobs.update_one(
+            {
+                models.FLD_JOB_ID: _require_string(job_id, "job_id"),
+                models.FLD_JOB_STATE: _not_falsy(current_state, "current_state").value,
+            },
+            {
+                "$push": {
+                    self._FLD_NERSC_DL_TASK: _require_string(task_id, "task_id"),
+                    models.FLD_JOB_TRANS_TIMES:
+                          (_not_falsy(state, "state").value, _not_falsy(time, "time")
+                    )
+                },
+                "$set": {models.FLD_JOB_STATE: state.value}
+            },
+        )
+        if not res.matched_count:
+            raise NoSuchJobError(
+                f"No job with ID '{job_id}' in state {current_state.value} exists"
+            )
 
 
 class NoSuchImageError(Exception):

@@ -38,6 +38,10 @@ FLD_IMAGE_TAG = "tag"
 FLD_JOB_ID = "id"
 FLD_JOB_JOB_INPUT = "job_input"
 FLD_JOB_INPUT_RUNTIME = "runtime"
+FLD_JOB_TRANS_TIMES = "transition_times"
+FLD_JOB_STATE = "state"
+FLD_JOB_NERSC_DETAILS = "nersc_details"
+FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
@@ -659,6 +663,22 @@ class Job(BaseModel):
         ],
         description="A list of tuples of (job_state, time_job_state_entered)."
     )]
-    # TODO JOBRUNNING add job info like the jaws ID(?) and log locations. See design doc.
-    #      should we expose the JAWS ID to users? Maybe just admins. Subclass this if so
     # TODO ERRORHANDLING add error field and class
+
+
+class NERSCDetails(BaseModel):
+    """
+    Details about a job run at NERSC.
+    """
+    download_task_id: Annotated[list[str], Field(
+        description="IDs for a tasks run via the NERSC SFAPI to download files from an S3 "
+            + "instance to NERSC. Note that task details only persist for ~10 minutes past "
+            + "completion in the SFAPI. Multiple tasks indicate job retries after failures.")]
+
+
+class AdminJobDetails(Job):
+    """
+    Information about a job with added details of interest to service administrators.
+    """
+    nersc_details: NERSCDetails | None = None
+    # TODO NERSC more details, logs, etc.

@@ -5,12 +5,14 @@ Manages running jobs at NERSC using the JAWS system.
 import logging
 
 from cdmtaskservice import models
+from cdmtaskservice import timestamp
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
+from cdmtaskservice.callback_url_paths import get_download_complete_callback
 from cdmtaskservice.job_state import JobState
+from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
 from cdmtaskservice.s3.paths import S3Paths
-from cdmtaskservice.callback_url_paths import get_download_complete_callback
 
 # Not sure how other flows would work and how much code they might share. For now just make
 # this work and pull it apart / refactor later.
@@ -25,6 +27,7 @@ class NERSCJAWSRunner:
         self,
         nersc_manager: NERSCManager,
         job_state: JobState,
+        mongodao: MongoDAO,
         s3_client: S3Client,
         s3_external_client: S3Client,
         jaws_token: str,
@@ -37,6 +40,7 @@ class NERSCJAWSRunner:
         
         nersc_manager - the NERSC manager.
         job_state - the job state manager.
+        mongodao - the Mongo DAO object.
         s3_client - an S3 client pointed to the data stores.
         s3_external_client - an S3 client pointing to an external URL for the S3 data stores
             that may not be accessible from the current process, but is accessible to remote
@@ -49,6 +53,7 @@ class NERSCJAWSRunner:
         """
         self._nman = _not_falsy(nersc_manager, "nersc_manager")
         self._jstate = _not_falsy(job_state, "job_state")
+        self._mongo = _not_falsy(mongodao, "mongodao")
         self._s3 = _not_falsy(s3_client, "s3_client")
         self._s3ext = _not_falsy(s3_external_client, "s3_external_client")
         self._s3insecure = s3_insecure_ssl
@@ -86,9 +91,20 @@ class NERSCJAWSRunner:
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
             # TODO LOGGING make the remote code log summary of results and upload and store
             # TODO NOW how get remote paths at next step? 
-            # TODO NOW store task IDs
             task_id = await self._nman.download_s3_files(
                 job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
+            )
+            # Hmm. really this should go through job state but that seems pointless right now.
+            # May need to refactor this and the mongo method later to be more generic to
+            # remote cluster and have job_state handle choosing the correct mongo method & params
+            # to run
+            await self._mongo.add_NERSC_download_task_id(
+                # TODO TEST will need a way to mock out timestamps
+                job.id,
+                task_id,
+                models.JobState.CREATED,
+                models.JobState.UPLOAD_SUBMITTED,
+                timestamp.utcdatetime(),
             )
         except Exception as e:
             # TODO LOGGING figure out how logging it going to work etc.

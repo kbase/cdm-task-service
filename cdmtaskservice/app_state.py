@@ -94,6 +94,7 @@ async def build_app(
         nerscjawsflow = NERSCJAWSRunner(
             nerscman,
             job_state,
+            mongodao,
             s3,
             s3_external,
             cfg.jaws_token,
