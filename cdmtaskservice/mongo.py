@@ -121,13 +121,20 @@ class MongoDAO:
         # to ensure unique IDs
         await self._col_jobs.insert_one(jobd)
 
-    async def get_job(self, job_id: str):
-        """ Get a job by its ID. """
+    async def get_job(
+        self, job_id: str, as_admin: bool = False
+    ) -> models.Job | models.AdminJobDetails:
+        """
+        Get a job by its ID.
+        
+        job_id - the job ID.
+        as_admin - get additional details about the job.
+        """
         doc = await self._col_jobs.find_one({models.FLD_JOB_ID: _require_string(job_id, "job_id")})
         if not doc:
             raise NoSuchJobError(f"No job with ID '{job_id}' exists")
         # TODO PERF build up the job piece by piece to skip S3 path validation
-        return models.Job(**doc)
+        return models.AdminJobDetails(**doc) if as_admin else models.Job(**doc)
     
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     
