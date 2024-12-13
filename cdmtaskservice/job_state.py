@@ -36,7 +36,6 @@ class JobState:
         as_admin - True if the user should always have access to the job and should access
             additional job details.
         """
-        # TODO ADMIN add way for admins to get any job, as_admin query param maybe
         _not_falsy(user, "user")
         job = await self._mongo.get_job(_require_string(job_id, "job_id"), as_admin=as_admin)
         if not as_admin and job.user != user.user:
