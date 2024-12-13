@@ -100,7 +100,11 @@ class NERSCJAWSRunner:
             # to run
             await self._mongo.add_NERSC_download_task_id(
                 # TODO TEST will need a way to mock out timestamps
-                job.id, task_id, models.JobState.UPLOAD_SUBMITTED, timestamp.utcdatetime()
+                job.id,
+                task_id,
+                models.JobState.CREATED,
+                models.JobState.UPLOAD_SUBMITTED,
+                timestamp.utcdatetime(),
             )
         except Exception as e:
             # TODO LOGGING figure out how logging it going to work etc.

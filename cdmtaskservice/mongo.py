@@ -135,31 +135,41 @@ class MongoDAO:
         self,
         job_id: str,
         task_id: str,
+        current_state: models.JobState,
         state: models.JobState,
         time: datetime.datetime
     ):
         """
-        Add a download task_id to the NERSC section of a job and updates the state.
+        Add a download task_id to the NERSC section of a job and update the state.
         
         job_id - the job ID.
         task_id - the NERSC task ID.
+        current_state - the expected current state of the job. If the job is not in this state
+            an error is thrown.
         state - the new state for the job.
         time - the time at which the job transitioned to the new state.
         """
         # may need to make this more generic where the cluster is passed in and mapped to
         # a job structure location or something if we support more than NERSC
         res = await self._col_jobs.update_one(
-            {models.FLD_JOB_ID: _require_string(job_id, "job_id")},
             {
-                "$push": {self._FLD_NERSC_DL_TASK: _require_string(task_id, "task_id")},
-                "$push": {models.FLD_JOB_TRANS_TIMES:
-                          (_not_falsy(state, "state").value, _not_falsy(time, "time"))
+                models.FLD_JOB_ID: _require_string(job_id, "job_id"),
+                models.FLD_JOB_STATE: _not_falsy(current_state, "current_state").value,
+            },
+            {
+                "$push": {
+                    self._FLD_NERSC_DL_TASK: _require_string(task_id, "task_id"),
+                    models.FLD_JOB_TRANS_TIMES:
+                          (_not_falsy(state, "state").value, _not_falsy(time, "time")
+                    )
                 },
                 "$set": {models.FLD_JOB_STATE: state.value}
             },
         )
         if not res.matched_count:
-            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+            raise NoSuchJobError(
+                f"No job with ID '{job_id}' in state {current_state.value} exists"
+            )
 
 
 class NoSuchImageError(Exception):
