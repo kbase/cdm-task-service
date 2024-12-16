@@ -3,6 +3,7 @@ CDM task service endpoints.
 """
 
 import datetime
+import logging
 from fastapi import (
     APIRouter,
     Depends,
@@ -12,9 +13,14 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 from typing import Annotated
+
 from cdmtaskservice import app_state
 from cdmtaskservice import kb_auth
 from cdmtaskservice import models
+from cdmtaskservice.callback_url_paths import (
+    get_download_complete_callback,
+    get_job_complete_callback,
+)
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
@@ -25,8 +31,9 @@ SERVICE_NAME = "CDM Task Service Prototype"
 
 # may need to split these into different files if this file gets too big
 ROUTER_GENERAL = APIRouter(tags=["General"])
-ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
 ROUTER_JOBS = APIRouter(tags=["Jobs"], prefix="/jobs")
+ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
+ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 
 _AUTH = KBaseHTTPBearer()
 
@@ -221,6 +228,36 @@ async def get_nersc_client_info(
         expires_at=expires,
         expires_in=expires_in,
     )
+
+
+@ROUTER_CALLBACKS.get(
+    f"/{get_download_complete_callback()}/{{job_id}}",
+    summary="Report data download complete",
+    description="Report that data download for a job is complete. This method is not expected "
+        + "to be called by users."
+)
+async def download_complete(
+    r: Request,
+    job_id: _ANN_JOB_ID
+):
+    logging.getLogger(__name__).info(f"Download reported as complete for job {job_id}")
+    # TODO NOW implement
+    raise NotImplementedError()
+
+
+@ROUTER_CALLBACKS.get(
+    f"/{get_job_complete_callback()}/{{job_id}}",
+    summary="Report job complete",
+    description="Report a remote job is complete. This method is not expected "
+        + "to be called by users."
+)
+async def job_complete(
+    r: Request,
+    job_id: _ANN_JOB_ID
+):
+    logging.getLogger(__name__).info(f"Remote job reported as complete for job {job_id}")
+    # TODO JOBS implement when job is complete
+    raise NotImplementedError()
 
 
 class ClientLifeTimeError(Exception):
