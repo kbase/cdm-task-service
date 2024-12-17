@@ -8,6 +8,7 @@ from cdmtaskservice import models
 from cdmtaskservice import timestamp
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.callback_url_paths import get_download_complete_callback
+from cdmtaskservice.exceptions import InvalidJobStateError
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
@@ -70,7 +71,7 @@ class NERSCJAWSRunner:
         objmeta - the S3 object metadata for the files in the job.
         """
         if _not_falsy(job, "job").state != models.JobState.CREATED:
-            raise ValueError("job must be in the created state")
+            raise InvalidJobStateError("Job must be in the created state")
         logr = logging.getLogger(__name__)
         # Could check that the s3 and job paths / etags match... YAGNI
         # TODO PERF this validates the file paths yet again. Maybe the way to go is just have
@@ -103,7 +104,7 @@ class NERSCJAWSRunner:
                 job.id,
                 task_id,
                 models.JobState.CREATED,
-                models.JobState.UPLOAD_SUBMITTED,
+                models.JobState.DOWNLOAD_SUBMITTED,
                 timestamp.utcdatetime(),
             )
         except Exception as e:
@@ -111,3 +112,23 @@ class NERSCJAWSRunner:
             logr.exception(f"Error starting download for job {job.id}")
             # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
             raise e
+
+    async def download_complete(self, job: models.AdminJobDetails):
+        """
+        Continue a job after the download is complete. The job is expected to be in the 
+        download submitted satate.
+        """
+        if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
+            raise InvalidJobStateError("Job must be in the download submitted state")
+        # TODO ERRHANDLING IMPORTANT pull the task from the SFAPI. If it a) doesn't exist or b) has
+        #                  no errors, continue, otherwise put the job into an errored state.
+        # TODO ERRHANDLING IMPORTANT upload the output file from the download task and check for
+        #                  errors. If any exist, put the job into an errored state.
+        # TDOO LOGGING Add any relevant logs from the task / download task output file in state
+        #                  call
+        await self._mongo.update_job_state(
+            job.id,
+            models.JobState.DOWNLOAD_SUBMITTED,
+            models.JobState.JOB_SUBMITTING,
+            timestamp.utcdatetime()
+        )

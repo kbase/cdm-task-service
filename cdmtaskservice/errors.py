@@ -59,6 +59,9 @@ class ErrorType(Enum):
 
     CLIENT_LIFETIME =            (30200, "Client lifetime too short")  # noqa: E222 @IgnorePep8
     """ The client life time is shorter than requested. """
+    
+    INVALID_JOB_STATE =          (30300, "Invalid job state")  # noqa: E222 @IgnorePep8
+    """ The job is not in the correct state for the requested operation. """
 
     NOT_FOUND =                  (40000, "Not Found")  # noqa: E222 @IgnorePep8
     """ The requested resource was not found. """

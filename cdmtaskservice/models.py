@@ -597,11 +597,11 @@ class JobState(str, Enum):
     The state of a job.
     """
     CREATED = "created"
-    UPLOAD_SUBMITTED = "upload_submitted"
+    DOWNLOAD_SUBMITTED = "download_submitted"
     JOB_SUBMITTING = "job_submitting"
     JOB_SUBMITTED = "job_submitted"
-    DOWNLOAD_SUBMITTING = "download_submitting"
-    DOWNLOAD_SUBMITTED = "download_submitted"
+    UPLOAD_SUBMITTING = "upload_submitting"
+    UPLOAD_SUBMITTED = "upload_submitted"
     COMPLETE = "complete"
     ERROR = "error"
 

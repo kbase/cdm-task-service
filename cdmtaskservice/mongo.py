@@ -8,6 +8,7 @@ import datetime
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import IndexModel, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
+from typing import Any
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
@@ -135,7 +136,52 @@ class MongoDAO:
             raise NoSuchJobError(f"No job with ID '{job_id}' exists")
         # TODO PERF build up the job piece by piece to skip S3 path validation
         return models.AdminJobDetails(**doc) if as_admin else models.Job(**doc)
+
+    async def _update_job_state(
+        self,
+        job_id: str,
+        current_state: models.JobState,
+        state: models.JobState,
+        time: datetime.datetime,
+        push: dict[str, Any] | None = None,
+    ):
+        res = await self._col_jobs.update_one(
+            {
+                models.FLD_JOB_ID: _require_string(job_id, "job_id"),
+                models.FLD_JOB_STATE: _not_falsy(current_state, "current_state").value,
+            },
+            {
+                "$push": (push if push else {}) | {
+                    models.FLD_JOB_TRANS_TIMES:
+                          (_not_falsy(state, "state").value, _not_falsy(time, "time")
+                    )
+                },
+                "$set": {models.FLD_JOB_STATE: state.value}
+            },
+        )
+        if not res.matched_count:
+            raise NoSuchJobError(
+                f"No job with ID '{job_id}' in state {current_state.value} exists"
+            )
     
+    async def update_job_state(
+        self,
+        job_id: str,
+        current_state: models.JobState,
+        state: models.JobState,
+        time: datetime.datetime,
+    ):
+        """
+        Update the job state.
+        
+        job_id - the job ID.
+        current_state - the expected current state of the job. If the job is not in this state
+            an error is thrown.
+        state - the new state for the job.
+        time - the time at which the job transitioned to the new state.
+        """
+        await self._update_job_state(job_id, current_state, state, time)
+
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     
     async def add_NERSC_download_task_id(
@@ -158,25 +204,9 @@ class MongoDAO:
         """
         # may need to make this more generic where the cluster is passed in and mapped to
         # a job structure location or something if we support more than NERSC
-        res = await self._col_jobs.update_one(
-            {
-                models.FLD_JOB_ID: _require_string(job_id, "job_id"),
-                models.FLD_JOB_STATE: _not_falsy(current_state, "current_state").value,
-            },
-            {
-                "$push": {
-                    self._FLD_NERSC_DL_TASK: _require_string(task_id, "task_id"),
-                    models.FLD_JOB_TRANS_TIMES:
-                          (_not_falsy(state, "state").value, _not_falsy(time, "time")
-                    )
-                },
-                "$set": {models.FLD_JOB_STATE: state.value}
-            },
-        )
-        if not res.matched_count:
-            raise NoSuchJobError(
-                f"No job with ID '{job_id}' in state {current_state.value} exists"
-            )
+        await self._update_job_state(job_id, current_state, state, time, push={
+            self._FLD_NERSC_DL_TASK: _require_string(task_id, "task_id")
+        })
 
 
 class NoSuchImageError(Exception):

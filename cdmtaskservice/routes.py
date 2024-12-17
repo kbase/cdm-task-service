@@ -37,6 +37,9 @@ ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 
 _AUTH = KBaseHTTPBearer()
 
+# * isn't allowed in KBase user names
+_SERVICE_USER = "***service***"
+
 
 def _ensure_admin(user: kb_auth.KBaseUser, err_msg: str):
     if user.admin_perm != kb_auth.AdminPermission.FULL:
@@ -66,7 +69,7 @@ class Root(BaseModel):
     response_model=Root,
     summary="General service info",
     description="General information about the service.")
-async def root():
+async def root() -> Root:
     return {
         "service_name": SERVICE_NAME,
         "version": VERSION,
@@ -89,7 +92,7 @@ class WhoAmI(BaseModel):
     summary="Who am I? What does it all mean?",
     description="Information about the current user."
 )
-async def whoami(user: kb_auth.KBaseUser=Depends(_AUTH)):
+async def whoami(user: kb_auth.KBaseUser=Depends(_AUTH)) -> WhoAmI:
     return {
         "user": user.user,
         "is_service_admin": kb_auth.AdminPermission.FULL == user.admin_perm
@@ -111,7 +114,7 @@ async def submit_job(
     r: Request,
     job_input: models.JobInput,
     user: kb_auth.KBaseUser=Depends(_AUTH),
-):
+) -> SubmitJobResponse:
     job_submit = app_state.get_app_state(r).job_submit
     return SubmitJobResponse(job_id=await job_submit.submit(job_input, user))
 
@@ -135,9 +138,9 @@ async def get_job(
     r: Request,
     job_id: _ANN_JOB_ID,
     user: kb_auth.KBaseUser=Depends(_AUTH),
-):
+) -> models.Job:
     job_state = app_state.get_app_state(r).job_state
-    return await job_state.get_job(job_id, user)
+    return await job_state.get_job(job_id, user.user)
 
 
 @ROUTER_ADMIN.post(
@@ -162,7 +165,7 @@ async def approve_image(
         max_length=1000,
     )],
     user: kb_auth.KBaseUser=Depends(_AUTH)
-):
+) -> models.Image:
     _ensure_admin(user, "Only service administrators can approve images.")
     images = app_state.get_app_state(r).images
     return await images.register(image_id)
@@ -178,10 +181,10 @@ async def get_job_admin(
     r: Request,
     job_id: _ANN_JOB_ID,
     user: kb_auth.KBaseUser=Depends(_AUTH),
-):
+) -> models.AdminJobDetails:
     _ensure_admin(user, "Only service administrators can get jobs as an admin.")
     job_state = app_state.get_app_state(r).job_state
-    return await job_state.get_job(job_id, user, as_admin=True)
+    return await job_state.get_job(job_id, user.user, as_admin=True)
 
 
 class NERSCClientInfo(BaseModel):
@@ -215,7 +218,7 @@ async def get_nersc_client_info(
         ge=1
     )] = None,
     user: kb_auth.KBaseUser=Depends(_AUTH)
-):
+) -> NERSCClientInfo:
     _ensure_admin(user, "Only service administrators may view NERSC client information.")
     nersc_cli = app_state.get_app_state(r).sfapi_client
     expires = nersc_cli.expiration()
@@ -241,8 +244,9 @@ async def download_complete(
     job_id: _ANN_JOB_ID
 ):
     logging.getLogger(__name__).info(f"Download reported as complete for job {job_id}")
-    # TODO NOW implement
-    raise NotImplementedError()
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, _SERVICE_USER, as_admin=True)
+    await appstate.runners[job.job_input.cluster].download_complete(job)
 
 
 @ROUTER_CALLBACKS.get(
