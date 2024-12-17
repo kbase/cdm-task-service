@@ -68,6 +68,7 @@ def create_app():
     app.include_router(routes.ROUTER_GENERAL)
     app.include_router(routes.ROUTER_JOBS)
     app.include_router(routes.ROUTER_ADMIN)
+    app.include_router(routes.ROUTER_CALLBACKS)
 
     async def build_app_wrapper():
         await app_state.build_app(app, cfg)
