@@ -3,12 +3,15 @@ Manages running jobs at NERSC using the JAWS system.
 """
 
 import logging
+import os
 
 from cdmtaskservice import models
 from cdmtaskservice import timestamp
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.callback_url_paths import get_download_complete_callback
+from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidJobStateError
+from cdmtaskservice.input_file_locations import determine_file_locations
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
@@ -31,6 +34,7 @@ class NERSCJAWSRunner:
         mongodao: MongoDAO,
         s3_client: S3Client,
         s3_external_client: S3Client,
+        coro_manager: CoroutineWrangler,
         jaws_token: str,
         jaws_group: str,
         service_root_url: str,
@@ -46,6 +50,7 @@ class NERSCJAWSRunner:
         s3_external_client - an S3 client pointing to an external URL for the S3 data stores
             that may not be accessible from the current process, but is accessible to remote
             processes at NERSC.
+        coro_manager - a coroutine manager.
         jaws_token - a token for the JGI JAWS system.
         jaws_group - the group to use for running JAWS jobs.
         service_root_url - the URL of the service root, used for constructing service callbacks.
@@ -58,6 +63,7 @@ class NERSCJAWSRunner:
         self._s3 = _not_falsy(s3_client, "s3_client")
         self._s3ext = _not_falsy(s3_external_client, "s3_external_client")
         self._s3insecure = s3_insecure_ssl
+        self._coman = _not_falsy(coro_manager, "coro_manager")
         self._jtoken = _require_string(jaws_token, "jaws_token")
         self._jgroup = _require_string(jaws_group, "jaws_group")
         self._callback_root = _require_string(service_root_url, "service_root_url")
@@ -116,7 +122,7 @@ class NERSCJAWSRunner:
     async def download_complete(self, job: models.AdminJobDetails):
         """
         Continue a job after the download is complete. The job is expected to be in the 
-        download submitted satate.
+        download submitted state.
         """
         if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the download submitted state")
@@ -132,3 +138,42 @@ class NERSCJAWSRunner:
             models.JobState.JOB_SUBMITTING,
             timestamp.utcdatetime()
         )
+        await self._coman.run_coroutine(self._download_complete(job))
+    
+    async def _download_complete(self, job: models.AdminJobDetails):
+        logr = logging.getLogger(__name__)
+        manifest_files = self._generate_manifest_files(job)
+        # TODO REMOVE these lines
+        logr.info(f"*** manifiles: {len(manifest_files)}")
+        for m in manifest_files:
+            logr.info(m)
+            logr.info("***")
+    
+    def _generate_manifest_files(self, job: models.AdminJobDetails) -> list[str]:
+        # If we support multiple compute sites this should be moved to a general code location
+        # Currently leave here rather than creating yet another module
+        manifests = []
+        mani_spec = job.job_input.params.get_file_parameter()
+        if not mani_spec or mani_spec.type is not models.ParameterType.MANIFEST_FILE:
+            return manifests
+        file_to_rel_path = determine_file_locations(job.job_input)
+        for files in job.job_input.get_files_per_container().files:
+            manifest = ""
+            if mani_spec.manifest_file_header:
+                manifest = f"{mani_spec.manifest_file_header}\n"
+            for f in files:
+                match mani_spec.manifest_file_format:
+                    case models.ManifestFileFormat.DATA_IDS:
+                        manifest += f"{f.data_id}\n"
+                    case models.ManifestFileFormat.FILES:
+                        f = os.path.join(
+                            job.job_input.params.input_mount_point, file_to_rel_path[f]
+                        )
+                        manifest += f"{f}\n"
+                    case _:
+                        # Can't currently happen but for future safety
+                        raise ValueError(
+                            f"Unknown manifest file format: {manifest.manifest_file_format}"
+                        )
+            manifests.append(manifest)
+        return manifests

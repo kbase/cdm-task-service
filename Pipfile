@@ -6,21 +6,21 @@ name = "pypi"
 [packages]
 aiobotocore = "==2.15.2"
 aiohttp = "==3.11.10"
-sfapi-client = "==0.3.1"
-requests = "==2.32.3"
+bidict = "==0.23.1"
+cacheout = "==0.16.0"
 docker-image-py = "==0.1.13"
 fastapi = {extras = ["standard"], version = "==0.115.6"}
-marisa-trie = "==1.2.1"
-bidict = "==0.23.1"
-uvicorn = {extras = ["standard"], version = "==0.32.1"}
 jinja-cli = "==1.2.2"
-cacheout = "==0.16.0"
+marisa-trie = "==1.2.1"
 motor = "==3.6.0"
+requests = "==2.32.3"
+sfapi-client = "==0.3.1"
+uvicorn = {extras = ["standard"], version = "==0.32.1"}
 
 [dev-packages]
-pytest = "==8.3.4"
 coverage = "==7.6.9"
 ipython = "==8.30.0"
+pytest = "==8.3.4"
 pytest-asyncio = "==0.24.0"
 pytest-cov = "==6.0.0"
 

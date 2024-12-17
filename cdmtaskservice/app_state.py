@@ -91,12 +91,13 @@ async def build_app(
     try:
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
         job_state = JobState(mongodao)
-        nerscjawsflow = NERSCJAWSRunner(
+        nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
             nerscman,
-            job_state,
+            job_state, # TODO CODE if this isn't necessary, remove and recombine with job_submit
             mongodao,
             s3,
             s3_external,
+            coman,
             cfg.jaws_token,
             cfg.jaws_group,
             cfg.service_root_url,
