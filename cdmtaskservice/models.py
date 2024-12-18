@@ -314,6 +314,9 @@ class Parameters(BaseModel):
         If a file specification parameter is present in the arguments, get it.
         Returns None otherwise.
         """
+        # tried methodtools.lru_cache here but Pydantic complained
+        if hasattr(self, "_param"):  # memoize
+            return self._param
         param = None
         if self.positional_args:
             for i, p in enumerate(self.positional_args):
@@ -327,6 +330,7 @@ class Parameters(BaseModel):
                     # Space separated lists in environment variables don't really make sense.
                     # Come back to this if needed.
                     param, p, f"Environmental parameter at key {key}", no_space=True)
+        self._param = param
         return param
 
     def _check_parameter(
@@ -575,6 +579,25 @@ class JobInput(BaseModel):
     @classmethod
     def _check_outdir(cls, v):
         return _validate_s3_path(v)
+    
+    @model_validator(mode="after")
+    def _check_manifest_data_ids(self) -> Self:
+        fp = self.params.get_file_parameter()
+        # This seems really sketchy. Not sure how else to do it though
+        if (fp
+            # manifest file format is ignored, but not necc None, if type is not manifest file
+            and fp.type is ParameterType.MANIFEST_FILE
+            and fp.manifest_file_format is ManifestFileFormat.DATA_IDS
+            and (
+                not isinstance(self.input_files[0], S3File)
+                or not self.input_files[0].data_id
+            )
+        ):
+            raise ValueError(
+                "If a manifest file with data IDs is specified, "
+                + "data IDs must be supplied for all files"
+            )
+        return self
 
     def inputs_are_S3File(self) -> bool:
         """

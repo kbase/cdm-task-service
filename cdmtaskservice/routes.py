@@ -38,7 +38,7 @@ ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 _AUTH = KBaseHTTPBearer()
 
 # * isn't allowed in KBase user names
-_SERVICE_USER = "***service***"
+_SERVICE_USER = "***SERVICE***"
 
 
 def _ensure_admin(user: kb_auth.KBaseUser, err_msg: str):
