@@ -40,6 +40,15 @@ _SEC_PER_GB = 2 * 60  # may want to make this configurable
 
 _CTS_SCRATCH_ROOT_DIR = Path("cdm_task_service")
 
+
+_JAWS_CONF_FILENAME = "jaws.conf"
+_JAWS_CONF_TEMPLATE = """
+[USER]
+token = {token}
+default_team = {group}
+"""
+
+
 # TODO PROD add start and end time to task output and record
 # TODO NERSCFEATURE if NERSC puts python 3.11 on the dtns revert to regular load 
 _PYTHON_LOAD_HACK = "module use /global/common/software/nersc/pe/modulefiles/latest"
@@ -98,6 +107,8 @@ class NERSCManager:
         cls,
         client_provider: Callable[[], AsyncClient],
         nersc_code_path: Path,
+        jaws_token: str,
+        jaws_group: str,
     ) -> Self:
         """
         Create the NERSC manager.
@@ -106,9 +117,11 @@ class NERSCManager:
             the user associated with the client does not change.
         nersc_code_path - the path in which to store remote code at NERSC. It is advised to
             include version information in the path to avoid code conflicts.
+        jaws_token - a token for the JGI JAWS system.
+        jaws_group - the group to use for running JAWS jobs.
         """
         nm = NERSCManager(client_provider, nersc_code_path)
-        await nm._setup_remote_code()
+        await nm._setup_remote_code(jaws_token, jaws_group)
         return nm
         
     def __init__(
@@ -126,7 +139,7 @@ class NERSCManager:
             raise ValueError(f"{name} must be absolute to the NERSC root dir")
         return path
 
-    async def _setup_remote_code(self):
+    async def _setup_remote_code(self, jaws_token: str, jaws_group: str):
         # TODO RELIABILITY atomically write files. For these small ones probably doesn't matter?
         cli = self._client_provider()
         perlmutter = await cli.compute(Machine.perlmutter)
@@ -145,7 +158,15 @@ class NERSCManager:
                 perlmutter,
                 self._nersc_code_path / _PROCESS_DATA_XFER_MANIFEST_FILENAME,
                 bio=io.BytesIO(_PROCESS_DATA_XFER_MANIFEST.encode()),
-                make_exe=True,
+                chmod="u+x",
+            ))
+            tg.create_task(self._upload_file_to_nersc(
+                perlmutter,
+                Path(_JAWS_CONF_FILENAME),  # No path puts it in the home dir
+                bio=io.BytesIO(
+                    _JAWS_CONF_TEMPLATE.format(token=jaws_token, group=jaws_group).encode()
+                ),
+                chmod = "600"
             ))
             res = tg.create_task(dt.run('bash -c "echo $SCRATCH"'))
             if _PIP_DEPENDENCIES:
@@ -176,10 +197,11 @@ class NERSCManager:
         target: Path,
         file: Path = None,
         bio: io.BytesIO = None,
-        make_exe: bool = False,
+        chmod: str = None,
     ):
-        cmd = f'bash -c "mkdir -p {target.parent}"'
-        await compute.run(cmd)
+        if target.parent != Path("."):
+            cmd = f'bash -c "mkdir -p {target.parent}"'
+            await compute.run(cmd)
         # skip some API calls vs. the upload example in the NERSC docs
         # don't use a directory as the target or it makes an API call
         asrp = AsyncRemotePath(path=target, compute=compute)
@@ -190,8 +212,8 @@ class NERSCManager:
                 await asrp.upload(f)
         else:
             await asrp.upload(bio)
-        if make_exe:
-            cmd = f'bash -c "chmod u+x {target}"'
+        if chmod:
+            cmd = f'bash -c "chmod {chmod} {target}"'
             await compute.run(cmd)
 
     async def download_s3_files(

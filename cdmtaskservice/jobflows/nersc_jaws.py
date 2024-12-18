@@ -35,8 +35,6 @@ class NERSCJAWSRunner:
         s3_client: S3Client,
         s3_external_client: S3Client,
         coro_manager: CoroutineWrangler,
-        jaws_token: str,
-        jaws_group: str,
         service_root_url: str,
         s3_insecure_ssl: bool = False,
     ):
@@ -51,8 +49,6 @@ class NERSCJAWSRunner:
             that may not be accessible from the current process, but is accessible to remote
             processes at NERSC.
         coro_manager - a coroutine manager.
-        jaws_token - a token for the JGI JAWS system.
-        jaws_group - the group to use for running JAWS jobs.
         service_root_url - the URL of the service root, used for constructing service callbacks.
         s3_insecure_url - whether to skip checking the SSL certificate for the S3 instance,
             leaving the service open to MITM attacks.
@@ -64,8 +60,6 @@ class NERSCJAWSRunner:
         self._s3ext = _not_falsy(s3_external_client, "s3_external_client")
         self._s3insecure = s3_insecure_ssl
         self._coman = _not_falsy(coro_manager, "coro_manager")
-        self._jtoken = _require_string(jaws_token, "jaws_token")
-        self._jgroup = _require_string(jaws_group, "jaws_group")
         self._callback_root = _require_string(service_root_url, "service_root_url")
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
