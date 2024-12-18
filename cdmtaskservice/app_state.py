@@ -71,7 +71,9 @@ async def build_app(
     logr.info("Done")
     logr.info("Setting up NERSC manager and installing code at NERSC...")
     remote_code_loc = Path(cfg.nersc_remote_code_dir) / VERSION
-    nerscman = await NERSCManager.create(sfapi_client.get_client, remote_code_loc)
+    nerscman = await NERSCManager.create(
+        sfapi_client.get_client, remote_code_loc, cfg.jaws_token, cfg.jaws_group
+    )
     logr.info("Done")
     logr.info("Initializing S3 client... ")
     s3 = await S3Client.create(
@@ -98,8 +100,6 @@ async def build_app(
             s3,
             s3_external,
             coman,
-            cfg.jaws_token,
-            cfg.jaws_group,
             cfg.service_root_url,
             s3_insecure_ssl=cfg.s3_allow_insecure,
         )
