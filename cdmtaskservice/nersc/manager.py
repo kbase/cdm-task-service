@@ -16,7 +16,14 @@ import sys
 from types import ModuleType
 from typing import Self
 
-from cdmtaskservice.arg_checkers import not_falsy, require_string, check_int
+from cdmtaskservice import models
+from cdmtaskservice.arg_checkers import (
+    not_falsy as _not_falsy,
+    require_string as _require_string,
+    check_int as _check_int,
+)
+from cdmtaskservice.jaws import wdl
+from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
 from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
 
@@ -39,6 +46,9 @@ _MIN_TIMEOUT_SEC = 300
 _SEC_PER_GB = 2 * 60  # may want to make this configurable
 
 _CTS_SCRATCH_ROOT_DIR = Path("cdm_task_service")
+_JOB_FILES = "files"
+_MANIFESTS = "manifests"
+_MANIFEST_FILE_PREFIX = "manifest-"
 
 
 _JAWS_CONF_FILENAME = "jaws.conf"
@@ -129,11 +139,11 @@ class NERSCManager:
             client_provider: Callable[[], str],
             nersc_code_path: Path,
         ):
-        self._client_provider = not_falsy(client_provider, "client_provider")
+        self._client_provider = _not_falsy(client_provider, "client_provider")
         self._nersc_code_path = self._check_path(nersc_code_path, "nersc_code_path")
 
     def _check_path(self, path: Path, name: str):
-        not_falsy(path, name)
+        _not_falsy(path, name)
         # commands are ok with relative paths but file uploads are not
         if path.expanduser().absolute() != path:
             raise ValueError(f"{name} must be absolute to the NERSC root dir")
@@ -305,9 +315,9 @@ class NERSCManager:
         concurrency: int,
         insecure_ssl: bool,
     ) -> io.BytesIO:
-        require_string(job_id, "job_id")
-        not_falsy(objects, "objects")
-        not_falsy(presigned_urls, "presigned_urls")
+        _require_string(job_id, "job_id")
+        _not_falsy(objects, "objects")
+        _not_falsy(presigned_urls, "presigned_urls")
         if len(objects) != len(presigned_urls):
             raise ValueError("Must provide same number of paths and urls")
         manifest = self._base_manifest("download", concurrency, insecure_ssl)
@@ -318,14 +328,16 @@ class NERSCManager:
                 #              job ID and the minio path and have it handle the rest.
                 #              This allows JAWS / Cromwell to cache the files if they have the
                 #              same path, which they won't if there's a job ID in the mix
-                "outputpath": str(self._dtn_scratch / 
-                                  _CTS_SCRATCH_ROOT_DIR/ job_id / "files" / meta.path),
+                "outputpath": self._localize_s3_path(job_id, meta.path),
                 "etag": meta.e_tag,
                 "partsize": meta.effective_part_size,
                 "size": meta.size,
             } for url, meta in zip(presigned_urls, objects)
         ]
         return io.BytesIO(json.dumps({"file-transfers": manifest}).encode())
+    
+    def _localize_s3_path(self, job_id: str, s3path: str) -> str:
+        return str(self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR/ job_id / _JOB_FILES / s3path)
     
     def _create_upload_manifest(
         self,
@@ -334,8 +346,8 @@ class NERSCManager:
         concurrency: int,
         insecure_ssl: bool,
     ) -> io.BytesIO:
-        not_falsy(remote_files, "remote_files")
-        not_falsy(presigned_urls, "presigned_urls")
+        _not_falsy(remote_files, "remote_files")
+        _not_falsy(presigned_urls, "presigned_urls")
         if len(remote_files) != len(presigned_urls):
             raise ValueError("Must provide same number of files and urls")
         manifest = self._base_manifest("upload", concurrency, insecure_ssl)
@@ -351,8 +363,32 @@ class NERSCManager:
     def _base_manifest(self, op: str, concurrency: int, insecure_ssl: bool):
         return {
             "op": op,
-            "concurrency": check_int(concurrency, "concurrency"),
+            "concurrency": _check_int(concurrency, "concurrency"),
             "insecure-ssl": insecure_ssl,
             "min-timeout-sec": _MIN_TIMEOUT_SEC,
             "sec-per-GB": _SEC_PER_GB,
         }
+
+    async def run_JAWS(self, job: models.Job) -> str:
+        """
+        Run a JAWS job at NERSC and return the job ID.
+        """
+        if not _not_falsy(job, "job").job_input.inputs_are_S3File():
+            raise ValueError("Job files must be S3File objects")
+        manifest_files = generate_manifest_files(job)
+        manifest_file_paths = self._get_manifest_file_paths(job.id, len(manifest_files))
+        fmap = {m: self._localize_s3_path(job.id, m.file) for m in job.job_input.input_files}
+        wdljson = wdl.generate_wdl(job, fmap, manifest_file_paths)
+        # TODO REMOVE these lines
+        logr = logging.getLogger(__name__)
+        for m in manifest_files:
+            logr.info("***")
+            logr.info(m)
+        logr.info(f"*** wdl:\n{wdljson.wdl}\njson:\n{json.dumps(wdljson.input_json, indent=4)}")
+        return "fake_job_id"
+
+    def _get_manifest_file_paths(self, job_id: str, count: int) -> list[Path]:
+        if count == 0:
+            return []
+        pre = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job_id / _MANIFESTS 
+        return [pre / f"{_MANIFEST_FILE_PREFIX}{c}" for c in range(1, count + 1)]
