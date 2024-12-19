@@ -36,9 +36,9 @@ from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
 # TODO CLEANUP clean up old code versions @NERSC somehow. Not particularly important
 
 _DT_TARGET = Machine.dtns
-# TDOO NERSCUIPDATE delete the following line when DTN downloads work.
+# TDOO NERSCUIPDATE delete the following line when DTN downloads work normally.
 #       See https://nersc.servicenowservices.com/sp?sys_id=ad33e85f1b5a5610ac81a820f54bcba0&view=sp&id=ticket&table=incident
-_DT_TARGET = Machine.perlmutter
+_DT_WORKAROUND = "source /etc/bashrc"
 
 _COMMAND_PATH = "utilities/command"
 
@@ -178,24 +178,25 @@ class NERSCManager:
                 ),
                 chmod = "600"
             ))
-            res = tg.create_task(dt.run('bash -c "echo $SCRATCH"'))
+            res = tg.create_task(dt.run(f"{_DT_WORKAROUND}; echo $SCRATCH"))
             if _PIP_DEPENDENCIES:
                 deps = " ".join(
                     # may need to do something else if module doesn't have __version__
                     [f"{mod.__name__}=={mod.__version__}" for mod in _PIP_DEPENDENCIES])
                 command = (
-                    'bash -c "'
-                         + f"{_PYTHON_LOAD_HACK}; "
-                         + f"module load python; "
-                         # Unlikely, but this could cause problems if multiple versions
-                         # of the server are running at once. Don't worry about it for now 
-                         + f"pip install {deps}"  # adding notapackage causes a failure
-                     + '"')
-                tg.create_task(perlmutter.run(command))
+                    f"{_DT_WORKAROUND}; "
+                    + f"{_PYTHON_LOAD_HACK}; "
+                    + f"module load python; "
+                    # Unlikely, but this could cause problems if multiple versions
+                    # of the server are running at once. Don't worry about it for now 
+                    + f"pip install {deps}"  # adding notapackage causes a failure
+                )
+                tg.create_task(dt.run(command))
         scratch = res.result().strip()
         if not scratch:
             raise ValueError("Unable to determine $SCRATCH variable for NERSC dtns")
         self._dtn_scratch = Path(scratch)
+        logging.getLogger(__name__).info(f"NERSC DTN scratch path: {self._dtn_scratch}")
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
@@ -209,8 +210,9 @@ class NERSCManager:
         bio: io.BytesIO = None,
         chmod: str = None,
     ):
+        dtw = f"{_DT_WORKAROUND}; " if compute.name == Machine.dtns else ""
         if target.parent != Path("."):
-            cmd = f'bash -c "mkdir -p {target.parent}"'
+            cmd = f"{dtw}mkdir -p {target.parent}"
             await compute.run(cmd)
         # skip some API calls vs. the upload example in the NERSC docs
         # don't use a directory as the target or it makes an API call
@@ -223,7 +225,7 @@ class NERSCManager:
         else:
             await asrp.upload(bio)
         if chmod:
-            cmd = f'bash -c "chmod {chmod} {target}"'
+            cmd = f"{dtw}chmod {chmod} {target}"
             await compute.run(cmd)
 
     async def download_s3_files(
@@ -293,13 +295,12 @@ class NERSCManager:
         # TODO CLEANUP manifests after some period of time
         await self._upload_file_to_nersc(dt, path, bio=manifest)
         command = (
-            "bash -c '"
-                + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
-                + f"export CTS_MANIFEST_LOCATION={path}; "
-                + f"export CTS_CALLBACK_URL={callback_url}; "
-                + f"export SCRATCH=$SCRATCH; "
-                + f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}'
-            + "'"
+            f"{_DT_WORKAROUND}; "
+            + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
+            + f"export CTS_MANIFEST_LOCATION={path}; "
+            + f"export CTS_CALLBACK_URL={callback_url}; "
+            + f"export SCRATCH=$SCRATCH; "
+            + f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}'
         )
         task_id  = (await self._run_command(cli, _DT_TARGET, command))["task_id"]
         # TODO LOGGING figure out how to handle logging, see other logging todos
