@@ -3,7 +3,6 @@ Manages running jobs at NERSC using the JAWS system.
 """
 
 import logging
-import os
 
 from cdmtaskservice import models
 from cdmtaskservice import timestamp
@@ -11,7 +10,6 @@ from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string 
 from cdmtaskservice.callback_url_paths import get_download_complete_callback
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidJobStateError
-from cdmtaskservice.input_file_locations import determine_file_locations
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
@@ -135,39 +133,7 @@ class NERSCJAWSRunner:
         await self._coman.run_coroutine(self._download_complete(job))
     
     async def _download_complete(self, job: models.AdminJobDetails):
+        jaws_job_id = await self._nman.run_JAWS(job)
+        # TODO JAWS record job ID in DB
         logr = logging.getLogger(__name__)
-        manifest_files = self._generate_manifest_files(job)
-        # TODO REMOVE these lines
-        logr.info(f"*** manifiles: {len(manifest_files)}")
-        for m in manifest_files:
-            logr.info(m)
-            logr.info("***")
-    
-    def _generate_manifest_files(self, job: models.AdminJobDetails) -> list[str]:
-        # If we support multiple compute sites this should be moved to a general code location
-        # Currently leave here rather than creating yet another module
-        manifests = []
-        mani_spec = job.job_input.params.get_file_parameter()
-        if not mani_spec or mani_spec.type is not models.ParameterType.MANIFEST_FILE:
-            return manifests
-        file_to_rel_path = determine_file_locations(job.job_input)
-        for files in job.job_input.get_files_per_container().files:
-            manifest = ""
-            if mani_spec.manifest_file_header:
-                manifest = f"{mani_spec.manifest_file_header}\n"
-            for f in files:
-                match mani_spec.manifest_file_format:
-                    case models.ManifestFileFormat.DATA_IDS:
-                        manifest += f"{f.data_id}\n"
-                    case models.ManifestFileFormat.FILES:
-                        f = os.path.join(
-                            job.job_input.params.input_mount_point, file_to_rel_path[f]
-                        )
-                        manifest += f"{f}\n"
-                    case _:
-                        # Can't currently happen but for future safety
-                        raise ValueError(
-                            f"Unknown manifest file format: {manifest.manifest_file_format}"
-                        )
-            manifests.append(manifest)
-        return manifests
+        logr.info(f"JAWS job id: {jaws_job_id}")

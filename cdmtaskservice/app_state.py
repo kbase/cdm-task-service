@@ -70,6 +70,7 @@ async def build_app(
     sfapi_client = await NERSCSFAPIClientProvider.create(Path(cfg.sfapi_cred_path), cfg.sfapi_user)
     logr.info("Done")
     logr.info("Setting up NERSC manager and installing code at NERSC...")
+    # TODO MULTICLUSTER service won't start if perlmutter is down, need to make it more dynamic
     remote_code_loc = Path(cfg.nersc_remote_code_dir) / VERSION
     nerscman = await NERSCManager.create(
         sfapi_client.get_client, remote_code_loc, cfg.jaws_token, cfg.jaws_group
