@@ -58,7 +58,7 @@ async def build_app(
     # This method is getting pretty long but it's stupid simple so...
     # May want to parallelize some of this for faster startups. would need to rework prints
     logr = logging.getLogger(__name__)
-    coman = await CoroutineWrangler.create()
+    coman = CoroutineWrangler()
     logr.info("Connecting to KBase auth service... ")
     auth = await KBaseAuth.create(
         cfg.auth_url,
@@ -112,6 +112,7 @@ async def build_app(
         images = Images(mongodao, imginfo)
         job_submit = JobSubmit(mongodao, s3, coman, runners)
         app.state._mongo = mongocli
+        app.state._coroman = coman
         app.state._cdmstate = AppState(
             auth, sfapi_client, s3, job_submit, job_state, images, runners
         )
@@ -133,6 +134,7 @@ async def destroy_app_state(app: FastAPI):
     """
     appstate = _get_app_state_from_app(app)  # first to check state was set up
     app.state._mongo.close()
+    app.state._coroman.destroy()
     await appstate.sfapi_client.destroy()
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)
