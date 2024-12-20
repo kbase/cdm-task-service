@@ -71,9 +71,12 @@ async def build_app(
     logr.info("Done")
     logr.info("Setting up NERSC manager and installing code at NERSC...")
     # TODO MULTICLUSTER service won't start if perlmutter is down, need to make it more dynamic
-    remote_code_loc = Path(cfg.nersc_remote_code_dir) / VERSION
     nerscman = await NERSCManager.create(
-        sfapi_client.get_client, remote_code_loc, cfg.jaws_token, cfg.jaws_group
+        sfapi_client.get_client,
+        Path(cfg.nersc_remote_code_dir) / VERSION,
+        cfg.nersc_file_group,
+        cfg.jaws_token,
+        cfg.jaws_group,
     )
     logr.info("Done")
     logr.info("Initializing S3 client... ")

@@ -32,6 +32,7 @@ class CDMTaskServiceConfig:
         as the remaining lines.
     sfapi_user: str - the user name of the user accociated with the credentials.
     nersc_remote_code_dir: str - the location at NERSC to upload remote code.
+    nersc_file_group: str - the NERSC group with which downloaded files must be shared. 
     jaws_token: str - the JAWS token used to run jobs.
     jaws_group: str - the JAWS group used to run jobs.
     s3_url: str - the URL of the S3 instance to use for data storage.
@@ -78,6 +79,7 @@ class CDMTaskServiceConfig:
         self.sfapi_cred_path = _get_string_required(config, _SEC_NERSC, "sfapi_cred_path")
         self.sfapi_user = _get_string_required(config, _SEC_NERSC, "sfapi_user")
         self.nersc_remote_code_dir = _get_string_required(config, _SEC_NERSC, "remote_code_dir")
+        self.nersc_file_group = _get_string_required(config, _SEC_NERSC, "file_group")
         self.jaws_token = _get_string_required(config, _SEC_JAWS, "token")
         self.jaws_group = _get_string_required(config, _SEC_JAWS, "group")
         self.s3_url = _get_string_required(config, _SEC_S3, "url")
@@ -116,6 +118,7 @@ class CDMTaskServiceConfig:
             f"NERSC client credential path: {self.sfapi_cred_path}",
             f"NERSC client user: {self.sfapi_user}",
             f"NERSC remote code dir: {self.nersc_remote_code_dir}",
+            f"NERSC file group: {self.nersc_file_group}",
             "JAWS token: REDACTED FOR THE NATIONAL SECURITY OF GONDWANALAND",
             f"JAWS group: {self.jaws_group}",
             f"S3 URL: {self.s3_url}",
