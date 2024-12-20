@@ -117,6 +117,7 @@ class NERSCManager:
         cls,
         client_provider: Callable[[], AsyncClient],
         nersc_code_path: Path,
+        file_group: str,
         jaws_token: str,
         jaws_group: str,
     ) -> Self:
@@ -127,11 +128,16 @@ class NERSCManager:
             the user associated with the client does not change.
         nersc_code_path - the path in which to store remote code at NERSC. It is advised to
             include version information in the path to avoid code conflicts.
+        file_group - the group with which to share downloaded files at NERSC.
         jaws_token - a token for the JGI JAWS system.
         jaws_group - the group to use for running JAWS jobs.
         """
         nm = NERSCManager(client_provider, nersc_code_path)
-        await nm._setup_remote_code(jaws_token, jaws_group)
+        await nm._setup_remote_code(
+            _require_string(file_group, "file_group"),
+            _require_string(jaws_token, "jaws_token"),
+            _require_string(jaws_group, "jaws_group"),
+        )
         return nm
         
     def __init__(
@@ -149,7 +155,7 @@ class NERSCManager:
             raise ValueError(f"{name} must be absolute to the NERSC root dir")
         return path
 
-    async def _setup_remote_code(self, jaws_token: str, jaws_group: str):
+    async def _setup_remote_code(self, file_group: str, jaws_token: str, jaws_group: str):
         # TODO RELIABILITY atomically write files. For these small ones probably doesn't matter?
         cli = self._client_provider()
         perlmutter = await cli.compute(Machine.perlmutter)
@@ -178,7 +184,7 @@ class NERSCManager:
                 ),
                 chmod = "600"
             ))
-            res = tg.create_task(dt.run(f"{_DT_WORKAROUND}; echo $SCRATCH"))
+            scratch = tg.create_task(self._set_up_dtn_scratch(cli, file_group))
             if _PIP_DEPENDENCIES:
                 deps = " ".join(
                     # may need to do something else if module doesn't have __version__
@@ -192,11 +198,19 @@ class NERSCManager:
                     + f"pip install {deps}"  # adding notapackage causes a failure
                 )
                 tg.create_task(dt.run(command))
-        scratch = res.result().strip()
+        self._dtn_scratch = scratch.result()
+    
+    async def _set_up_dtn_scratch(self, client: AsyncClient, file_group: str) -> Path:
+        dt = await client.compute(_DT_TARGET)
+        scratch = await dt.run(f"{_DT_WORKAROUND}; echo $SCRATCH")
+        scratch = scratch.strip()
         if not scratch:
             raise ValueError("Unable to determine $SCRATCH variable for NERSC dtns")
-        self._dtn_scratch = Path(scratch)
-        logging.getLogger(__name__).info(f"NERSC DTN scratch path: {self._dtn_scratch}")
+        logging.getLogger(__name__).info(f"NERSC DTN scratch path: {scratch}")
+        await dt.run(
+            f"{_DT_WORKAROUND}; set -e; chgrp {file_group} {scratch}; chmod g+rs {scratch}"
+        )
+        return Path(scratch)
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
