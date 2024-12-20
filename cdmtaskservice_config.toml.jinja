@@ -27,10 +27,11 @@ has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"
 # reloads the contents if changed.
 sfapi_cred_path = "{{ KBCTS_SFAPI_CRED_PATH or "" }}"
 
-# The user associated with the client credentials. If the client credentials are updated but
-# the user doesn't match they will not be accepted. It is advised to create a collaboration
-# user for the service. The jaws.conf file will be created in the user's home directory on
-# service startup.
+# The user associated with the client credentials. The user's default shell must be bash.
+# If the client credentials are updated but the user doesn't match they will not be accepted.
+# It is advised to create a collaboration user for the service.
+# The jaws.conf file will be created in the user's home directory on service startup, overwriting
+# any extant file.
 sfapi_user = "{{ KBCTS_SFAPI_USER or "" }}"
 
 # Where to store remote code at NERSC. This must be writeable by the service account.
