@@ -133,7 +133,14 @@ class NERSCJAWSRunner:
         await self._coman.run_coroutine(self._download_complete(job))
     
     async def _download_complete(self, job: models.AdminJobDetails):
-        jaws_job_id = await self._nman.run_JAWS(job)
-        # TODO JAWS record job ID in DB
         logr = logging.getLogger(__name__)
-        logr.info(f"JAWS job id: {jaws_job_id}")
+        try:
+            # TODO PERF configure file download concurrency
+            jaws_job_id = await self._nman.run_JAWS(job)
+            # TODO JAWS record job ID in DB
+            logr.info(f"JAWS job id: {jaws_job_id}")
+        except Exception as e:
+            # TODO LOGGING figure out how logging it going to work etc.
+            logr.exception(f"Error starting JAWS job for job {job.id}")
+            # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
+            raise e
