@@ -408,6 +408,10 @@ class NERSCManager:
         perl = await cli.compute(Machine.perlmutter)
         pre = self._perlmutter_scratch / _CTS_SCRATCH_ROOT_DIR / job.id
         try:
+            # TODO PERF this copies all the files to the jaws staging area, and so could take
+            #           a long time. Hardlink them in first to avoid the copy. Also look into
+            #           caching between jobs, so multiple jobs on the same file don't DL it over
+            #           and over
             res = await perl.run(_JAWS_COMMAND_TEMPLATE.format(
                 job_id=job.id,
                 wdlpath=pre / _JAWS_INPUT_WDL,
@@ -431,7 +435,7 @@ class NERSCManager:
             logging.getLogger(__name__).info(
                 f"Submitted JAWS job with run id {run_id} for job {job.id}"
             )
-            return run_id
+            return str(run_id)
         except json.JSONDecodeError as e:
             raise ValueError(f"JAWS returned invalid JSON: {e}\n{res}") from e
 

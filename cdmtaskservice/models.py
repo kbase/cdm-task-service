@@ -42,6 +42,8 @@ FLD_JOB_TRANS_TIMES = "transition_times"
 FLD_JOB_STATE = "state"
 FLD_JOB_NERSC_DETAILS = "nersc_details"
 FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
+FLD_JOB_JAWS_DETAILS = "jaws_details"
+FLD_JAWS_DETAILS_RUN_ID = "run_id"
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
@@ -699,9 +701,18 @@ class NERSCDetails(BaseModel):
             + "completion in the SFAPI. Multiple tasks indicate job retries after failures.")]
 
 
+class JAWSDetails(BaseModel):
+    """
+    Details about a JAWS job run.
+    """
+    run_id: Annotated[list[str], Field(
+        description="Run IDs for a JGI JAWS job. Multiple run IDs indicate job retries after "
+            + "failures.")]
+
 class AdminJobDetails(Job):
     """
     Information about a job with added details of interest to service administrators.
     """
     nersc_details: NERSCDetails | None = None
     # TODO NERSC more details, logs, etc.
+    jaws_details: JAWSDetails | None = None

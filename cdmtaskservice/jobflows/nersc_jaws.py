@@ -98,11 +98,11 @@ class NERSCJAWSRunner:
             # remote cluster and have job_state handle choosing the correct mongo method & params
             # to run
             await self._mongo.add_NERSC_download_task_id(
-                # TODO TEST will need a way to mock out timestamps
                 job.id,
                 task_id,
                 models.JobState.CREATED,
                 models.JobState.DOWNLOAD_SUBMITTED,
+                # TODO TEST will need a way to mock out timestamps
                 timestamp.utcdatetime(),
             )
         except Exception as e:
@@ -137,8 +137,16 @@ class NERSCJAWSRunner:
         try:
             # TODO PERF configure file download concurrency
             jaws_job_id = await self._nman.run_JAWS(job)
-            # TODO JAWS record job ID in DB
-            logr.info(f"JAWS job id: {jaws_job_id}")
+            # See notes above about adding the NERSC task id to the job
+            await self._mongo.add_JAWS_run_id(
+                job.id,
+                jaws_job_id,
+                models.JobState.JOB_SUBMITTING,
+                models.JobState.JOB_SUBMITTED,
+                # TODO TEST will need a way to mock out timestamps
+                timestamp.utcdatetime(),
+            )
+            # TDOO JOBRUN start polling JAWS to wait for job completion
         except Exception as e:
             # TODO LOGGING figure out how logging it going to work etc.
             logr.exception(f"Error starting JAWS job for job {job.id}")
