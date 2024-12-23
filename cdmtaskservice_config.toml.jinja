@@ -30,17 +30,12 @@ sfapi_cred_path = "{{ KBCTS_SFAPI_CRED_PATH or "" }}"
 # The user associated with the client credentials. The user's default shell must be bash.
 # If the client credentials are updated but the user doesn't match they will not be accepted.
 # It is advised to create a collaboration user for the service.
-# The user's scratch directory will be shared with the file_group below.
 # The jaws.conf file will be created in the user's home directory on service startup, overwriting
 # any extant file.
 sfapi_user = "{{ KBCTS_SFAPI_USER or "" }}"
 
 # Where to store remote code at NERSC. This must be writeable by the service account.
 remote_code_dir = "{{ KBCTS_NERSC_REMOTE_CODE_DIR or "/global/cfs/cdirs/kbase/cdm_task_service" }}"
-
-# The group with which to share downloaded data files. The JAWS user that will run jobs must
-# be in the same group so it can read the input files.
-file_group = "{{ KBCTS_NERSC_FILE_GROUP or "kbase" }}"
 
 [JAWS]
 
