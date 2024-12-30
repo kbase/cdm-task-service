@@ -39,6 +39,9 @@ remote_code_dir = "{{ KBCTS_NERSC_REMOTE_CODE_DIR or "/global/cfs/cdirs/kbase/cd
 
 [JAWS]
 
+# The JAWS Central server URL.
+url = "{{ KBCTS_JAWS_URL or "https://jaws-api.jgi.doe.gov/api/v2" }}"
+
 # The JGI JAWS token to use to run jobs. This can be obtained from a JAWS representative.
 token = "{{ KBCTS_JAWS_TOKEN or "" }}"
 

@@ -17,6 +17,7 @@ from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
+from cdmtaskservice.jaws.client import JAWSClient
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.job_submit import JobSubmit
@@ -35,6 +36,7 @@ class AppState(NamedTuple):
     """ Holds application state. """
     auth: KBaseAuth
     sfapi_client: NERSCSFAPIClientProvider
+    jaws_client: JAWSClient
     s3_client: S3Client
     job_submit: JobSubmit
     job_state: JobState
@@ -93,11 +95,16 @@ async def build_app(
     logr.info("Initializing MongoDB client...")
     mongocli = await get_mongo_client(cfg)
     logr.info("Done")
+    jaws_client = None
     try:
+        logr.info("Initializing JAWS Central client... ")
+        jaws_client = await JAWSClient.create(cfg.jaws_url, cfg.jaws_token)
+        logr.info("Done")
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
         job_state = JobState(mongodao)
         nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
             nerscman,
+            jaws_client,
             job_state, # TODO CODE if this isn't necessary, remove and recombine with job_submit
             mongodao,
             s3,
@@ -113,10 +120,12 @@ async def build_app(
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._cdmstate = AppState(
-            auth, sfapi_client, s3, job_submit, job_state, images, runners
+            auth, sfapi_client, jaws_client, s3, job_submit, job_state, images, runners
         )
     except:
         mongocli.close()
+        if jaws_client:
+            await jaws_client.close()
         raise
 
 
@@ -135,6 +144,7 @@ async def destroy_app_state(app: FastAPI):
     app.state._mongo.close()
     app.state._coroman.destroy()
     await appstate.sfapi_client.destroy()
+    await appstate.jaws_client.close()
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)
 

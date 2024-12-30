@@ -3,6 +3,7 @@ Manages running jobs at NERSC using the JAWS system.
 """
 
 import logging
+from typing import Any
 
 from cdmtaskservice import models
 from cdmtaskservice import timestamp
@@ -10,6 +11,7 @@ from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string 
 from cdmtaskservice.callback_url_paths import get_download_complete_callback
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidJobStateError
+from cdmtaskservice.jaws.client import JAWSClient
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
@@ -28,6 +30,7 @@ class NERSCJAWSRunner:
     def __init__(
         self,
         nersc_manager: NERSCManager,
+        jaws_client: JAWSClient,
         job_state: JobState,
         mongodao: MongoDAO,
         s3_client: S3Client,
@@ -40,6 +43,7 @@ class NERSCJAWSRunner:
         Create the runner.
         
         nersc_manager - the NERSC manager.
+        jaws_client - a JAWS Central client.
         job_state - the job state manager.
         mongodao - the Mongo DAO object.
         s3_client - an S3 client pointed to the data stores.
@@ -52,6 +56,7 @@ class NERSCJAWSRunner:
             leaving the service open to MITM attacks.
         """
         self._nman = _not_falsy(nersc_manager, "nersc_manager")
+        self._jaws = _not_falsy(jaws_client, "jaws_client")
         self._jstate = _not_falsy(job_state, "job_state")
         self._mongo = _not_falsy(mongodao, "mongodao")
         self._s3 = _not_falsy(s3_client, "s3_client")
@@ -89,7 +94,6 @@ class NERSCJAWSRunner:
             #                   will be deleted automatically by JAWS, or need own file deletion
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
             # TODO LOGGING make the remote code log summary of results and upload and store
-            # TODO NOW how get remote paths at next step? 
             task_id = await self._nman.download_s3_files(
                 job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
             )
@@ -152,3 +156,31 @@ class NERSCJAWSRunner:
             logr.exception(f"Error starting JAWS job for job {job.id}")
             # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
             raise e
+
+    async def job_complete(self, job: models.AdminJobDetails):
+        """
+        Continue a job after the remote job run is complete. The job is expected to be in the
+        job submitted state.
+        """
+        if _not_falsy(job, "job").state != models.JobState.JOB_SUBMITTED:
+            raise InvalidJobStateError("Job must be in the job submitted state")
+        # We assume this is a jaws job if it was mapped to this runner
+        # TODO RETRIES this line might need changes 
+        jaws_info = await self._jaws.status(job.jaws_details.run_id[-1])
+        if jaws_info["status"] != "done":
+            raise InvalidJobStateError("JAWS run is incomplete")
+        # TODO ERRHANDLING IMPORTANT if in an error state, pull the erros.json file from the
+        #                  JAWS job dir and add stderr / out to job record (what do to about huge
+        #                  logs?) and set job to error 
+        await self._mongo.update_job_state(
+            job.id,
+            models.JobState.JOB_SUBMITTED,
+            models.JobState.UPLOAD_SUBMITTING,
+            timestamp.utcdatetime()
+        )
+        await self._coman.run_coroutine(self._upload_files(job, jaws_info))
+    
+    async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
+        logr = logging.getLogger(__name__)
+        # TODO REMOVE after implementing file upload
+        logr.info(f"Starting file upload for job {job.id} JAWS run {jaws_info['id']}")

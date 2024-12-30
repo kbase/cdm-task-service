@@ -260,8 +260,9 @@ async def job_complete(
     job_id: _ANN_JOB_ID
 ):
     logging.getLogger(__name__).info(f"Remote job reported as complete for job {job_id}")
-    # TODO JOBS implement when job is complete
-    raise NotImplementedError()
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, _SERVICE_USER, as_admin=True)
+    await appstate.runners[job.job_input.cluster].job_complete(job)
 
 
 class ClientLifeTimeError(Exception):
