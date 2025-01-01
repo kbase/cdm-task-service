@@ -14,7 +14,7 @@ jinja-cli = "==1.2.2"
 marisa-trie = "==1.2.1"
 motor = "==3.6.0"
 requests = "==2.32.3"
-sfapi-client = "==0.3.1"
+sfapi-client = "==0.3.2"
 uvicorn = {extras = ["standard"], version = "==0.32.1"}
 
 [dev-packages]
