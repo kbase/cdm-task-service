@@ -4,7 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-aiobotocore = "==2.15.2"
+aiobotocore = "==2.16.1"
 aiohttp = "==3.11.10"
 bidict = "==0.23.1"
 cacheout = "==0.16.0"
