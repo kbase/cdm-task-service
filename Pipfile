@@ -5,7 +5,7 @@ name = "pypi"
 
 [packages]
 aiobotocore = "==2.15.2"
-aiohttp = "==3.11.10"
+aiohttp = "==3.11.11"
 bidict = "==0.23.1"
 cacheout = "==0.16.0"
 docker-image-py = "==0.1.13"
