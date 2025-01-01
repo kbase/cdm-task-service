@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "46e4a1f9a38b215bf752bd03c2f19434ab03076f4393316077c4819252a7bea4"
+            "sha256": "83a1ee5bd5148a196ef644723eaf2a93bd40899914d878065bf75c763a0c1391"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -18,11 +18,12 @@
     "default": {
         "aiobotocore": {
             "hashes": [
-                "sha256:9ac1cfcaccccc80602968174aa032bf978abe36bd4e55e6781d6500909af1375",
-                "sha256:d4d3128b4b558e2b4c369bfa963b022d7e87303adb82eec623cec8aa77ae578a"
+                "sha256:0f94904c6a1d14d5aac0502fcc1d721b95ee60d46d8a0e546f6203de0410d522",
+                "sha256:e7cf6295471224c82a111deaf31c2c3a4bcd6dbd6973e75c7fc4739fcccd5b0b"
             ],
             "index": "pypi",
-            "version": "==2.15.2"
+            "markers": "python_version >= '3.8'",
+            "version": "==2.16.1"
         },
         "aiohappyeyeballs": {
             "hashes": [
@@ -112,6 +113,7 @@
                 "sha256:fbbaea811a2bba171197b08eea288b9402faa2bab2ba0858eecdd0a4105753a3"
             ],
             "index": "pypi",
+            "markers": "python_version >= '3.9'",
             "version": "==3.11.10"
         },
         "aioitertools": {
@@ -179,11 +181,11 @@
         },
         "botocore": {
             "hashes": [
-                "sha256:354ec1b766f0029b5d6ff0c45d1a0f9e5007b7d2f3ec89bcdd755b208c5bc797",
-                "sha256:64241c778bf2dc863d93abab159e14024d97a926a5715056ef6411418cb9ead3"
+                "sha256:58dcd9a464c354b8c6c25261d8de830d175d9739eae568bf0c52e57116fb03c6",
+                "sha256:e60cc3fbe8d7a10f70e7e852d76be2b29f23ead418a5899d366ea32b1eacb5a5"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==1.35.36"
+            "version": "==1.35.88"
         },
         "cacheout": {
             "hashes": [
@@ -1514,11 +1516,11 @@
         },
         "urllib3": {
             "hashes": [
-                "sha256:ca899ca043dcb1bafa3e262d73aa25c465bfb49e0bd9dd5d59f1d0acba2f8fac",
-                "sha256:e7d814a81dad81e6caf2ec9fdedb284ecc9c73076b62654547cc64ccdcae26e9"
+                "sha256:1cee9ad369867bfdbbb48b7dd50374c0967a0bb7710050facf0dd6911440e3df",
+                "sha256:f8c5449b3cf0861679ce7e0503c7b44b5ec981bec0d1d3795a07f1ba96f0204d"
             ],
-            "markers": "python_version >= '3.8'",
-            "version": "==2.2.3"
+            "markers": "python_version >= '3.9'",
+            "version": "==2.3.0"
         },
         "uvicorn": {
             "extras": [
