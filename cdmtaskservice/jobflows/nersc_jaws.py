@@ -3,19 +3,23 @@ Manages running jobs at NERSC using the JAWS system.
 """
 
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 from cdmtaskservice import models
 from cdmtaskservice import timestamp
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
-from cdmtaskservice.callback_url_paths import get_download_complete_callback
+from cdmtaskservice.callback_url_paths import (
+    get_download_complete_callback,
+    get_upload_complete_callback,
+)
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidJobStateError
 from cdmtaskservice.jaws.client import JAWSClient
-from cdmtaskservice.job_state import JobState
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
-from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
+from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, S3PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
 
 # Not sure how other flows would work and how much code they might share. For now just make
@@ -31,7 +35,6 @@ class NERSCJAWSRunner:
         self,
         nersc_manager: NERSCManager,
         jaws_client: JAWSClient,
-        job_state: JobState,
         mongodao: MongoDAO,
         s3_client: S3Client,
         s3_external_client: S3Client,
@@ -44,7 +47,6 @@ class NERSCJAWSRunner:
         
         nersc_manager - the NERSC manager.
         jaws_client - a JAWS Central client.
-        job_state - the job state manager.
         mongodao - the Mongo DAO object.
         s3_client - an S3 client pointed to the data stores.
         s3_external_client - an S3 client pointing to an external URL for the S3 data stores
@@ -57,7 +59,6 @@ class NERSCJAWSRunner:
         """
         self._nman = _not_falsy(nersc_manager, "nersc_manager")
         self._jaws = _not_falsy(jaws_client, "jaws_client")
-        self._jstate = _not_falsy(job_state, "job_state")
         self._mongo = _not_falsy(mongodao, "mongodao")
         self._s3 = _not_falsy(s3_client, "s3_client")
         self._s3ext = _not_falsy(s3_external_client, "s3_external_client")
@@ -182,5 +183,30 @@ class NERSCJAWSRunner:
     
     async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
         logr = logging.getLogger(__name__)
-        # TODO REMOVE after implementing file upload
-        logr.info(f"Starting file upload for job {job.id} JAWS run {jaws_info['id']}")
+
+        async def presign(output_files: list[Path]) -> list[S3PresignedPost]:
+            root = job.job_input.output_dir
+            # TODO PERF this parses the paths yet again
+            # TODO RELIABILITY config / set expiration time
+            paths = S3Paths([os.path.join(root, f) for f in output_files])
+            return await self._s3ext.presign_post_urls(paths)
+        
+        try:
+            # TODO PERF config / set concurrency
+            # TODO DISKSPACE will need to clean up job results @ NERSC
+            # TODO LOGGING make the remote code log summary of results and upload and store
+            upload_task_id = await self._nman.upload_JAWS_job_files(
+                job,
+                jaws_info["output_dir"],
+                presign,
+                get_upload_complete_callback(self._callback_root, job.id),
+                insecure_ssl=self._s3insecure,
+            )
+            logr.info(f"got upload task id {upload_task_id} for job {job.id}")
+            # TODO UPLOAD save task ID in mongo & update job state
+            # See notes above about adding the NERSC task id to the job
+        except Exception as e:
+            # TODO LOGGING figure out how logging it going to work etc.
+            logr.exception(f"Error starting upload for job {job.id}")
+            # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
+            raise e

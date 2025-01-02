@@ -8,6 +8,7 @@ import io
 import inspect
 import json
 import logging
+import os
 from pathlib import Path
 from sfapi_client import AsyncClient
 from sfapi_client.exceptions import SfApiError
@@ -15,7 +16,7 @@ from sfapi_client.paths import AsyncRemotePath
 from sfapi_client.compute import Machine, AsyncCompute
 import sys
 from types import ModuleType
-from typing import Self
+from typing import Self, Awaitable
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
@@ -23,7 +24,10 @@ from cdmtaskservice.arg_checkers import (
     require_string as _require_string,
     check_int as _check_int,
 )
-from cdmtaskservice.jaws import wdl
+from cdmtaskservice.jaws import (
+    wdl,
+    output as jaws_output
+)
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
 from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
@@ -239,8 +243,7 @@ class NERSCManager:
             await compute.run(cmd)
         # skip some API calls vs. the upload example in the NERSC docs
         # don't use a directory as the target or it makes an API call
-        asrp = AsyncRemotePath(path=target, compute=compute)
-        asrp.perms = "-"  # hack to prevent an unnecessary network call
+        asrp = self._get_async_path(compute, target)
         # TODO ERRORHANDLING throw custom errors
         if file:
             with open(file, "rb") as f:
@@ -250,6 +253,11 @@ class NERSCManager:
         if chmod:
             cmd = f"{dtw}chmod {chmod} {target}"
             await compute.run(cmd)
+
+    def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
+        asrp = AsyncRemotePath(path=target, compute=compute)
+        asrp.perms = "-"  # hack to prevent an unnecessary network call
+        return asrp
 
     async def download_s3_files(
         self,
@@ -268,8 +276,7 @@ class NERSCManager:
         objects - the S3 files to download.
         presigned_urls - the presigned download URLs for each object, in the same order as
             the objects.
-        callback_url - the URL to provide to NERSC as a callback for when the download is
-            complete.
+        callback_url - the URL to GET as a callback for when the download is complete.
         concurrency - the number of simultaneous downloads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
         
@@ -297,8 +304,7 @@ class NERSCManager:
         remote_files - the files to upload.
         presigned_urls - the presigned upload URLs for each file, in the same order as
             the file.
-        callback_url - the URL to provide to NERSC as a callback for when the upload is
-            complete.
+        callback_url - the URL to GET as a callback for when the upload is complete.
         concurrency - the number of simultaneous uploads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
         
@@ -475,3 +481,50 @@ class NERSCManager:
         if count == 0:
             return []
         return [_JOB_MANIFESTS / f"{_MANIFEST_FILE_PREFIX}{c}" for c in range(1, count + 1)]
+
+    async def upload_JAWS_job_files(
+        self,
+        job: models.Job,
+        jaws_output_dir: Path,
+        files_to_urls: Callable[[list[Path]], Awaitable[list[S3PresignedPost]]],
+        callback_url: str,
+        concurrency: int = 10,
+        insecure_ssl: bool = False
+    ) -> str:
+        """
+        Upload a set of output files from a JAWS run to S3.
+        
+        job - the job being processed. No other transfers should be occurring for the job.
+        jaws_output_dir - the NERSC output directory of the JAWS job containing the output files,
+            manifests, etc.
+        files_to_urls - an async function that provides a list of presigned S3 upload urls
+            given relative paths to files. The returned list must be in the same order as the input
+            list.
+        callback_url - the URL to GET as a callback for when the upload is complete.
+        concurrency - the number of simultaneous uploads to process.
+        insecure_ssl - whether to skip the cert check for the S3 URL.
+        
+        Returns the NERSC task ID for the upload.
+        """
+        _not_falsy(job, "job")
+        _not_falsy(files_to_urls, "files_to_urls")
+        cburl = _require_string(callback_url, "callback_url")
+        _check_int(concurrency, "concurrency")
+        outfilepath = Path(
+            _require_string(jaws_output_dir, "jaws_output_dir")) / jaws_output.OUTPUTS_JSON_FILE
+        cli = self._client_provider()
+        dtns = await cli.compute(Machine.dtns)
+        outputs_json = await self._get_async_path(dtns, outfilepath).download()
+        outputs = jaws_output.parse_outputs_json(outputs_json)
+        container_files = list(outputs.output_files.keys())
+        presigns = await files_to_urls(container_files)
+        # TODO CORRECTNESS IMPORTANT log etags in remote code, upload and return
+        # TODO LOGGING upload job stdout and stderr logs
+        return await self.upload_s3_files(
+            job.id,
+            [os.path.join(jaws_output_dir, outputs.output_files[f]) for f in container_files],
+            presigns,
+            cburl,
+            concurrency,
+            insecure_ssl,
+        )

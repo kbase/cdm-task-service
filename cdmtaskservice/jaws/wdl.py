@@ -22,6 +22,27 @@ from cdmtaskservice.models import (
 from cdmtaskservice.input_file_locations import determine_file_locations
 
 
+OUTPUT_FILES = "output_files"
+"""
+The key specifying the location of output files in the WDL output.
+"""
+
+STDOUTS = "stdouts"
+"""
+The key specifying the location of standard out files in the WDL output.
+"""
+
+STDERRS = "stderrs"
+"""
+The key specifying the location of standard error files in the WDL output.
+"""
+
+OUTPUT_DIR = "__output__"
+"""
+The directory containing the job output. The directory name is expected to be unique in the path.
+"""
+
+
 _WDL_VERSION = "1.0"  # Cromwell, and therefore JAWS, only supports 1.0
 
 _IMAGE_TRANS_CHARS = str.maketrans({".": "_", "-": "_", "/": "_", ":": "_"})
@@ -139,9 +160,9 @@ workflow {workflow_name} {{
     }}
   }}
   output {{
-    Array[Array[File]] output_files = run_container.output_files
-    Array[File] stdouts = run_container.stdout
-    Array[File] stderrs = run_container.stderr
+    Array[Array[File]] {OUTPUT_FILES} = run_container.output_files
+    Array[File] {STDOUTS} = run_container.stdout
+    Array[File] {STDERRS} = run_container.stderr
   }}
 }}
 
@@ -155,11 +176,11 @@ task run_container {{
   command <<<
     # ensure host mount points exist
     mkdir -p ./__input__
-    mkdir -p ./__output__
+    mkdir -p ./{OUTPUT_DIR}
     
     # TODO MOUNTING remove hack for collections containers
     ln -s __input__ collectionssource
-    ln -s __output__ collectionsdata
+    ln -s {OUTPUT_DIR} collectionsdata
     
     # link any manifest file into the mount point
     if [[ -n "~{{manifest}}" ]]; then
@@ -186,7 +207,7 @@ task run_container {{
     echo "Entrypoint exit code: $EC"
 
     # list the output of the command
-    find ./__output__ -type f > ./output_files.txt
+    find ./{OUTPUT_DIR} -type f > ./output_files.txt
     
     exit $EC
   >>>
