@@ -228,6 +228,28 @@ class MongoDAO:
             self._FLD_JAWS_RUN_ID: _require_string(run_id, "run_id")
         })
 
+    _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
+    
+    async def add_NERSC_upload_task_id(
+        self,
+        job_id: str,
+        task_id: str,
+        current_state: models.JobState,
+        state: models.JobState,
+        time: datetime.datetime
+    ):
+        """
+        Add an upload task_id to the NERSC section of a job and update the state.
+        
+        Arguments are as update_job_state except for the addition of:
+        
+        task_id - the NERSC task ID.
+        """
+        # may need to make this more generic where the cluster is passed in and mapped to
+        # a job structure location or something if we support more than NERSC
+        await self._update_job_state(job_id, current_state, state, time, push={
+            self._FLD_NERSC_UL_TASK: _require_string(task_id, "task_id")
+        })
 
 class NoSuchImageError(Exception):
     """ The image does not exist in the system. """

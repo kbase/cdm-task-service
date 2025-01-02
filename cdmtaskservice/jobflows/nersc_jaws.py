@@ -195,16 +195,22 @@ class NERSCJAWSRunner:
             # TODO PERF config / set concurrency
             # TODO DISKSPACE will need to clean up job results @ NERSC
             # TODO LOGGING make the remote code log summary of results and upload and store
-            upload_task_id = await self._nman.upload_JAWS_job_files(
+            task_id = await self._nman.upload_JAWS_job_files(
                 job,
                 jaws_info["output_dir"],
                 presign,
                 get_upload_complete_callback(self._callback_root, job.id),
                 insecure_ssl=self._s3insecure,
             )
-            logr.info(f"got upload task id {upload_task_id} for job {job.id}")
-            # TODO UPLOAD save task ID in mongo & update job state
             # See notes above about adding the NERSC task id to the job
+            await self._mongo.add_NERSC_upload_task_id(
+                job.id,
+                task_id,
+                models.JobState.UPLOAD_SUBMITTING,
+                models.JobState.UPLOAD_SUBMITTED,
+                # TODO TEST will need a way to mock out timestamps
+                timestamp.utcdatetime(),
+            )
         except Exception as e:
             # TODO LOGGING figure out how logging it going to work etc.
             logr.exception(f"Error starting upload for job {job.id}")
