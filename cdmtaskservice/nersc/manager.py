@@ -54,6 +54,7 @@ _CTS_SCRATCH_ROOT_DIR = Path("cdm_task_service")
 _JOB_FILES = Path("files")
 _JOB_MANIFESTS = Path("manifests")
 _MANIFEST_FILE_PREFIX = "manifest-"
+_MD5_JSON_FILE_NAME = "upload_md5s.json"
 
 
 _JAWS_CONF_FILENAME = "jaws_cts.conf"
@@ -85,11 +86,13 @@ module load python
 
 export PYTHONPATH=$CTS_CODE_LOCATION
 export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
+export CTS_MD5_FILE_LOCATION=$CTS_MD5_FILE_LOCATION
 export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
 export SCRATCH=$SCRATCH
 
 echo "PYTHONPATH=[$PYTHONPATH]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
+echo "CTS_MD5_FILE_LOCATION=[$CTS_MD5_FILE_LOCATION]"
 echo "CTS_CALLBACK_URL=[$CTS_CALLBACK_URL]"
 echo "SCRATCH=[$SCRATCH]"
 
@@ -313,24 +316,35 @@ class NERSCManager:
         maniio = self._create_upload_manifest(
             remote_files, presigned_urls, concurrency, insecure_ssl)
         return await self._process_manifest(
-            maniio, job_id, callback_url, "upload_manifest.json", "upload")
+            maniio, job_id, callback_url, "upload_manifest.json", "upload", upload_md5s_file=True
+        )
     
     async def _process_manifest(
-        self, manifest: io.BytesIO, job_id: str, callback_url: str, filename: str, task_type: str
+        self,
+        manifest: io.BytesIO,
+        job_id: str,
+        callback_url: str,
+        filename: str,
+        task_type: str,
+        upload_md5s_file: bool = False,
     ):
-        path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job_id / filename
+        rootpath = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job_id
+        manifestpath = rootpath / filename
         cli = self._client_provider()
         dt = await cli.compute(_DT_TARGET)
         # TODO CLEANUP manifests after some period of time
-        await self._upload_file_to_nersc(dt, path, bio=manifest)
-        command = (
-            f"{_DT_WORKAROUND}; "
-            + f"export CTS_CODE_LOCATION={self._nersc_code_path}; "
-            + f"export CTS_MANIFEST_LOCATION={path}; "
-            + f"export CTS_CALLBACK_URL={callback_url}; "
-            + f"export SCRATCH=$SCRATCH; "
-            + f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}'
-        )
+        await self._upload_file_to_nersc(dt, manifestpath, bio=manifest)
+        command = [
+            f"{_DT_WORKAROUND}; ",
+            f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
+            f"export CTS_MANIFEST_LOCATION={manifestpath}; ",
+            f"export CTS_CALLBACK_URL={callback_url}; ",
+            f"export SCRATCH=$SCRATCH; ",
+            f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}',
+        ]
+        if upload_md5s_file:
+            command.insert(1, f"export CTS_MD5_FILE_LOCATION={rootpath / _MD5_JSON_FILE_NAME}; ")
+        command = "".join(command)
         task_id  = (await self._run_command(cli, _DT_TARGET, command))["task_id"]
         # TODO LOGGING figure out how to handle logging, see other logging todos
         logging.getLogger(__name__).info(
