@@ -20,7 +20,6 @@ from cdmtaskservice.images import Images
 from cdmtaskservice.jaws.client import JAWSClient
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.job_state import JobState
-from cdmtaskservice.job_submit import JobSubmit
 from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
@@ -38,7 +37,6 @@ class AppState(NamedTuple):
     sfapi_client: NERSCSFAPIClientProvider
     jaws_client: JAWSClient
     s3_client: S3Client
-    job_submit: JobSubmit
     job_state: JobState
     images: Images
     # TODO CODE make an abstract jobflow class or something. For now just duck type them
@@ -101,8 +99,6 @@ async def build_app(
         jaws_client = await JAWSClient.create(cfg.jaws_url, cfg.jaws_token)
         logr.info("Done")
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
-        # TODO CODE once the nerscjawsflow is done merge job_state and job_submit back together
-        job_state = JobState(mongodao)
         nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
             nerscman,
             jaws_client,
@@ -116,11 +112,11 @@ async def build_app(
         runners = {models.Cluster.PERLMUTTER_JAWS: nerscjawsflow}
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         images = Images(mongodao, imginfo)
-        job_submit = JobSubmit(mongodao, s3, coman, runners)
+        job_state = JobState(mongodao, s3, coman, runners)
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._cdmstate = AppState(
-            auth, sfapi_client, jaws_client, s3, job_submit, job_state, images, runners
+            auth, sfapi_client, jaws_client, s3, job_state, images, runners
         )
     except:
         mongocli.close()
