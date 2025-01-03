@@ -532,7 +532,6 @@ class NERSCManager:
         outputs = jaws_output.parse_outputs_json(outputs_json)
         container_files = list(outputs.output_files.keys())
         presigns = await files_to_urls(container_files)
-        # TODO CORRECTNESS IMPORTANT log etags in remote code, upload and return
         # TODO LOGGING upload job stdout and stderr logs
         return await self.upload_s3_files(
             job.id,

@@ -45,6 +45,7 @@ FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
 FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
+FLD_JOB_OUTPUTS = "outputs"
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations

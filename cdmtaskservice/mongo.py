@@ -144,6 +144,7 @@ class MongoDAO:
         state: models.JobState,
         time: datetime.datetime,
         push: dict[str, Any] | None = None,
+        set_: dict[str, Any] | None = None,
     ):
         res = await self._col_jobs.update_one(
             {
@@ -156,7 +157,7 @@ class MongoDAO:
                           (_not_falsy(state, "state").value, _not_falsy(time, "time")
                     )
                 },
-                "$set": {models.FLD_JOB_STATE: state.value}
+                "$set": (set_ if set_ else {}) | {models.FLD_JOB_STATE: state.value}
             },
         )
         if not res.matched_count:
@@ -250,6 +251,27 @@ class MongoDAO:
         await self._update_job_state(job_id, current_state, state, time, push={
             self._FLD_NERSC_UL_TASK: _require_string(task_id, "task_id")
         })
+    
+    async def add_output_files_to_job(
+        self,
+        job_id: str,
+        output: list[models.S3FileOutput],
+        current_state: models.JobState,
+        state: models.JobState,
+        time: datetime.datetime
+    ):
+        """
+        Add output files to a job and update the state.
+        
+        Arguments are as update_job_state except for the addition of:
+        
+        output - the output files.
+        """
+        out = [o.model_dump() for o in _not_falsy(output, "output")]
+        await self._update_job_state(
+            job_id, current_state, state, time, set_={models.FLD_JOB_OUTPUTS: out}
+        )
+
 
 class NoSuchImageError(Exception):
     """ The image does not exist in the system. """
