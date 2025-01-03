@@ -53,10 +53,15 @@ class JAWSClient:
         """
         Get the status of a JAWS run.
         """
-        res = await self._get(
-            f"run/{_require_string(run_id, 'run_id')}",
-            params={"verbose": "true", "local_tz": "UTC"}
-        )
+        try:
+            res = await self._get(
+                f"run/{_require_string(run_id, 'run_id')}",
+                params={"verbose": "true", "local_tz": "UTC"}
+            )
+        except aiohttp.client_exceptions.ClientResponseError as e:
+            if e.status == 404:
+                raise NoSuchJAWSJobError(run_id) from e
+            raise
         res["submitted"] = _add_tz(res["submitted"])
         res["updated"] = _add_tz(res["updated"])
         return res
@@ -67,3 +72,16 @@ class JAWSClient:
 
 def _add_tz(timestr: str) -> datetime.datetime:
     return datetime.datetime.fromisoformat(timestr).replace(tzinfo=datetime.timezone.utc)
+
+
+# In lieu of making a pydantic model for the jaws status output, for now we just add little
+# helper methods. If this gets too gross make the model.
+def is_done(job: dict[str, Any]) -> bool:
+    """
+    Given a JAWS status dictionary, determine if the job is done.
+    """
+    return job["status"] == "done"
+
+
+class NoSuchJAWSJobError(Exception):
+    """ Thrown when a a jaws run ID does not exist. """
