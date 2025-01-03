@@ -669,6 +669,20 @@ class Image(BaseModel):
         return f"{self.name}@{self.digest}"
 
 
+class S3FileOutput(BaseModel):
+    """ Am output file in an S3 instance. """
+
+    # no validators since this is an outgoing data structure only
+    file: Annotated[str, Field(
+        example="mybucket/foo/bar/baz.jpg",
+        description="A path to an object in an S3 instance, starting with the bucket.",
+    )]
+    etag: Annotated[str, Field(
+        example="a70a4d1732484e75434df2c08570e1b2-3",
+        description="The S3 e-tag of the file. Weak e-tags are not supported. "
+    )]
+
+
 class Job(BaseModel):
     """
     Information about a job.
@@ -690,6 +704,7 @@ class Job(BaseModel):
         ],
         description="A list of tuples of (job_state, time_job_state_entered)."
     )]
+    outputs: list[S3FileOutput] | None = None
     # TODO ERRORHANDLING add error field and class
 
 

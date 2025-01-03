@@ -6,7 +6,7 @@ import io
 import json
 from typing import NamedTuple
 
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.jaws.wdl import OUTPUT_FILES, OUTPUT_DIR, STDOUTS, STDERRS
 
 
@@ -56,7 +56,7 @@ def parse_outputs_json(outputs_json: io.BytesIO) -> OutputsJSON:
     for key, val in js.items():
         if key.endswith(OUTPUT_FILES):
             for files in val:
-                outfiles.update({f.split(f"/{OUTPUT_DIR}/")[-1]: f for f in files})
+                outfiles.update({get_relative_file_path(f): f for f in files})
         # assume files are ordered correctly. If this is wrong sort by path first
         elif key.endswith(STDOUTS):
             stdo = val
@@ -66,3 +66,11 @@ def parse_outputs_json(outputs_json: io.BytesIO) -> OutputsJSON:
             # shouldn't happen, but let's not fail silently if it does
             raise ValueError(f"unexpected JAWS outputs.json key: {key}")
     return OutputsJSON(outfiles, stdo, stde)
+
+
+def get_relative_file_path(file: str) -> str:
+    """
+    Given a JAWS output file path, get the file path relative to the container output directoy,
+    e.g. the file that was written from the container's perspective.
+    """
+    return _require_string(file, "file").split(f"/{OUTPUT_DIR}/")[-1]
