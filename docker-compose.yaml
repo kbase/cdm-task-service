@@ -27,7 +27,6 @@ services:
       - KBCTS_SFAPI_CRED_PATH=/creds/sfapi_creds
       - KBCTS_SFAPI_USER=cdm_ts
       - KBCTS_NERSC_REMOTE_CODE_DIR=/global/cfs/cdirs/kbase/cdm_task_service
-      - KBCTS_NERSC_FILE_GROUP=kbase
       # Don't commit your token to github please
       - KBCTS_JAWS_TOKEN=tokengoeshere
       - KBCTS_JAWS_GROUP=kbase

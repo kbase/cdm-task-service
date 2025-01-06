@@ -74,7 +74,6 @@ async def build_app(
     nerscman = await NERSCManager.create(
         sfapi_client.get_client,
         Path(cfg.nersc_remote_code_dir) / VERSION,
-        cfg.nersc_file_group,
         cfg.jaws_token,
         cfg.jaws_group,
     )
