@@ -130,9 +130,9 @@ class NERSCJAWSRunner:
             models.JobState.JOB_SUBMITTING,
             timestamp.utcdatetime()
         )
-        await self._coman.run_coroutine(self._download_complete(job))
+        await self._coman.run_coroutine(self._submit_jaws_job(job))
     
-    async def _download_complete(self, job: models.AdminJobDetails):
+    async def _submit_jaws_job(self, job: models.AdminJobDetails):
         logr = logging.getLogger(__name__)
         try:
             # TODO PERF configure file download concurrency
