@@ -194,7 +194,7 @@ async def upload_presigned_url(
                                ) from e
 
 
-# TDOO CODE could merge this with the above method and add a toggle... eh
+# TODO CODE could merge this with the above method and add a toggle... eh
 async def upload_presigned_url_with_crc32(
     session: aiohttp.ClientSession,
     url: str,

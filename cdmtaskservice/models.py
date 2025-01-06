@@ -46,6 +46,9 @@ FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_OUTPUTS = "outputs"
+FLD_JOB_ERROR = "error"
+FLD_JOB_ADMIN_ERROR = "admin_error"
+FLD_JOB_TRACEBACK = "traceback"
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
@@ -671,7 +674,7 @@ class Image(BaseModel):
 
 
 class S3FileOutput(BaseModel):
-    """ Am output file in an S3 instance. """
+    """ An output file in an S3 instance. """
 
     # no validators since this is an outgoing data structure only
     file: Annotated[str, Field(
@@ -706,13 +709,17 @@ class Job(BaseModel):
         description="A list of tuples of (job_state, time_job_state_entered)."
     )]
     outputs: list[S3FileOutput] | None = None
-    # TODO ERRORHANDLING add error field and class
+    error: Annotated[str | None, Field(
+        example="The front fell off",
+        description="A description of the error that occurred."
+    )] = None
 
 
 class NERSCDetails(BaseModel):
     """
     Details about a job run at NERSC.
     """
+    # TODO NERSC more details, logs, etc.
     download_task_id: Annotated[list[str], Field(
         description="IDs for a tasks run via the NERSC SFAPI to download files from an S3 "
             + "instance to NERSC. Note that task details only persist for ~10 minutes past "
@@ -739,5 +746,10 @@ class AdminJobDetails(Job):
     Information about a job with added details of interest to service administrators.
     """
     nersc_details: NERSCDetails | None = None
-    # TODO NERSC more details, logs, etc.
     jaws_details: JAWSDetails | None = None
+    admin_error: Annotated[str | None, Field(
+        example="The back fell off",
+        description="A description of the error that occurred oriented towards service "
+            + "admins, potentially including more details."
+    )] = None
+    traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
