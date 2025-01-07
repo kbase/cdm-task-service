@@ -25,7 +25,6 @@ from cdmtaskservice.input_file_locations import determine_file_locations
 _WDL_VERSION = "1.0"  # Cromwell, and therefore JAWS, only supports 1.0
 
 _IMAGE_TRANS_CHARS = str.maketrans({".": "_", "-": "_", "/": "_", ":": "_"})
-_CONTAINER_NUM = "container_num"
 
 
 class JawsInput(NamedTuple):
@@ -75,7 +74,7 @@ def generate_wdl(
     environment = []
     cmdlines = []
     mfl = [None] * job_files.containers if not manifest_file_list else manifest_file_list
-    for files, manifest in zip(job_files.files, mfl):
+    for i, (files, manifest) in enumerate(zip(job_files.files, mfl)):
         ins = []
         rels = []
         for f in files:
@@ -86,15 +85,15 @@ def generate_wdl(
         input_files.append(ins)
         relpaths.append(rels)
         cmd = [shlex.quote(c) for c in job.image.entrypoint]
-        cmd.extend(_process_flag_args(job, files, file_to_rel_path, manifest))
-        cmd.extend(_process_pos_args(job, files, file_to_rel_path, manifest))
+        cmd.extend(_process_flag_args(job, i, files, file_to_rel_path, manifest))
+        cmd.extend(_process_pos_args(job, i, files, file_to_rel_path, manifest))
         cmdlines.append(cmd)
-        environment.append(_process_environment(job, files, file_to_rel_path, manifest))
+        environment.append(_process_environment(job, i, files, file_to_rel_path, manifest))
     input_json = {
         f"{workflow_name}.input_files_list": input_files,
         f"{workflow_name}.file_locs_list": relpaths,
         f"{workflow_name}.environment_list": environment,
-        f"{workflow_name}.cmdline_list": cmdlines
+        f"{workflow_name}.cmdline_list": cmdlines,
     }
     if manifest_file_list:
         input_json[f"{workflow_name}.manifest_list"] = [str(m) for m in manifest_file_list]
@@ -133,7 +132,6 @@ workflow {workflow_name} {{
   scatter (i in range(length(input_files_list))) {{
     call run_container {{
       input:
-        {_CONTAINER_NUM} = i,
         input_files = input_files_list[i],
         file_locs = file_locs_list[i],
         environ = environment_list[i],
@@ -149,7 +147,6 @@ workflow {workflow_name} {{
 
 task run_container {{
   input {{
-    Int {_CONTAINER_NUM}
     Array[File] input_files
     Array[String] file_locs
     Array[String] environ
@@ -160,9 +157,13 @@ task run_container {{
     mkdir -p ./__input__
     mkdir -p ./__output__
     
+    # TODO MOUNTING remove hack for collections containers
+    ln -s __input__ collectionssource
+    ln -s __output__ collectionsdata
+    
     # link any manifest file into the mount point
-    if [[ -n "${{manifest}}" ]]; then
-        ln ${{manifest}} ./__input__/$(basename ${{manifest}})
+    if [[ -n "~{{manifest}}" ]]; then
+        ln ~{{manifest}} ./__input__/$(basename ~{{manifest}})
     fi
     
     # link the input files into the mount point
@@ -210,6 +211,7 @@ task run_container {{
 
 def _process_flag_args(
     job: Job,
+    container_num: int,
     files: list[S3File],
     file_to_rel_path: dict[S3File, Path],
     manifest: Path | None,
@@ -218,13 +220,14 @@ def _process_flag_args(
     if job.job_input.params.flag_args:
         for flag, p in job.job_input.params.flag_args.items():
             cmd.extend(_process_parameter(
-                p, job, files, file_to_rel_path, manifest, as_list=True, flag=flag
+                p, job, container_num, files, file_to_rel_path, manifest, as_list=True, flag=flag
             ))
     return cmd
 
 
 def _process_pos_args(
     job: Job,
+    container_num: int,
     files: list[S3File],
     file_to_rel_path: dict[S3File, Path],
     manifest: Path | None,
@@ -232,12 +235,15 @@ def _process_pos_args(
     cmd = []
     if job.job_input.params.positional_args:
         for p in job.job_input.params.positional_args:
-            cmd.extend(_process_parameter(p, job, files, file_to_rel_path, manifest, as_list=True))
+            cmd.extend(_process_parameter(
+                p, job, container_num, files, file_to_rel_path, manifest, as_list=True
+            ))
     return cmd
 
 
 def _process_environment(
     job: Job,
+    container_num: int,
     files: list[S3File],
     file_to_rel_path: dict[S3File, Path],
     manifest: Path | None,
@@ -245,7 +251,9 @@ def _process_environment(
     env = []
     if job.job_input.params.environment:
         for envkey, enval in job.job_input.params.environment.items():
-            enval = _process_parameter(enval, job, files, file_to_rel_path, manifest)
+            enval = _process_parameter(
+                enval, job, container_num, files, file_to_rel_path, manifest
+            )
             env.append(f'{envkey}={enval}')
     return env
 
@@ -253,6 +261,7 @@ def _process_environment(
 def _process_parameter(
     param: str | Parameter,
     job: Job,
+    container_num: int,
     files: list[S3File],
     file_to_rel_path: dict[S3File, Path],
     manifest: Path | None,
@@ -266,7 +275,7 @@ def _process_parameter(
             case ParameterType.MANIFEST_FILE:  # implies manifest file is not None
                 param = _handle_manifest(job, manifest, flag)
             case ParameterType.CONTAINTER_NUMBER:
-                param = _handle_container_num(flag)
+                param = _handle_container_num(flag, container_num)
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
@@ -280,9 +289,9 @@ def _process_parameter(
     return [param] if as_list and not isinstance(param, list) else param
 
 
-def _handle_container_num(flag: str) -> str | list[str]:
+def _handle_container_num(flag: str, container_num: int) -> str | list[str]:
     # similar to the function below
-    cn = f"${_CONTAINER_NUM}"
+    cn = str(container_num)
     if flag:
         if flag.endswith("="):
             # TODO TEST not sure if this will work
@@ -295,7 +304,9 @@ def _handle_container_num(flag: str) -> str | list[str]:
 
 
 def _handle_manifest(job: Job, manifest: Path, flag: str) -> str | list[str]:
-    pth = os.path.join(job.job_input.params.input_mount_point, manifest.name)
+    # TODO MOUNTING remove this hack when mounting works
+    #pth = os.path.join(job.job_input.params.input_mount_point, manifest.name)
+    pth = os.path.join("./__input__", manifest.name)
     # This is the same as the command separated list case below... not sure if using a common fn
     # makes sense
     if flag:
