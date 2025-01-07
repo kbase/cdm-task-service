@@ -416,18 +416,13 @@ class Cluster(str, Enum):
 
 FilesPerContainer = NamedTuple("FilesPerContainer", [
     ("containers", int),
-    ("files_per_container", int),
-    ("last_container", int),
     ("files", list[list[S3File | str]])
 ])
 """
 Information about splitting files to be processed among containers.
 
-containers - the number of containers expected to be run; this is the mimimum of the specified
+containers - the number of containers expected to be run; this is the minimum of the specified
     container count and the number of files.
-files_per_container - the number of files to be run per container
-last_container - the remainder of files to be run in the last container. Always less than
-    files_per_container.
 files - a list of lists of files, split up per container.
 """
 
@@ -609,12 +604,18 @@ class JobInput(BaseModel):
         
     def get_files_per_container(self) -> FilesPerContainer:
         """
-        Returns the number of files to be run per container and the files, split up by container.
+        Returns the container count and the files split up by container.
         """
         containers = min(self.num_containers, len(self.input_files))
-        fpc = math.ceil(len(self.input_files) / containers)
-        files = [self.input_files[i:i + fpc] for i in range(0, fpc * containers, fpc)]
-        return FilesPerContainer(containers, fpc, len(self.input_files) % fpc, files)
+        fpc, extra_files = divmod(len(self.input_files), containers)
+        infiles = list(self.input_files)
+        files = []
+        for i in range(1, containers + 1):
+            # this seems dumb. It works though, make it pretty later
+            fcount = fpc + (1 if i <= extra_files else 0)
+            files.append(infiles[:fcount])
+            infiles = infiles[fcount:]
+        return FilesPerContainer(containers, files)
 
 
 class JobState(str, Enum):
