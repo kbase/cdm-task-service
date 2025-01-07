@@ -129,7 +129,6 @@ class NERSCJAWSRunner:
             #                   Either make cache in JAWS staging area, in which case files
             #                   will be deleted automatically by JAWS, or need own file deletion
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
-            # TODO LOGGING make the remote code log summary of results and upload and store
             task_id = await self._nman.download_s3_files(
                 job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
             )
@@ -222,9 +221,9 @@ class NERSCJAWSRunner:
         
         try:
             # TODO PERF config / set concurrency
-            # TODO LOGGING make the remote code log summary of results and upload and store
             # TODO LOGGING upload the container std* logs to S3 and store locations in job
             #              or maybe store in GFS? Should discuss with group how this should work
+            #              Do we need this on a successful run or just errors?
             task_id = await self._nman.upload_JAWS_job_files(
                 job,
                 jaws_info["output_dir"],

@@ -460,7 +460,6 @@ class JobInput(BaseModel):
             + "between the containers. If there are more containers than input files the "
             + "container count will be reduced appropriately.",
         ge=1,
-        # TODO LIMITS whats a reasonable max number of containers per job? 1k seems ok for now 
         le=1000,
     )] = 1
     cpus: Annotated[int, Field(
@@ -727,7 +726,6 @@ class NERSCDetails(BaseModel):
     """
     Details about a job run at NERSC.
     """
-    # TODO NERSC more details, logs, etc.
     download_task_id: Annotated[list[str], Field(
         description="IDs for a tasks run via the NERSC SFAPI to download files from an S3 "
             + "instance to NERSC. Note that task details only persist for ~10 minutes past "

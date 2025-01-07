@@ -74,7 +74,7 @@ _JAWS_INPUT_WDL = "input.wdl"
 _JAWS_INPUT_JSON = "input.json"
 
 
-# TODO PROD add start and end time to task output and record
+# TODO PERF add start and end time to task output and log / record in db / put in result file)
 # TODO NERSCFEATURE if NERSC puts python 3.11 on the dtns revert to regular load 
 _PYTHON_LOAD_HACK = "module use /global/common/software/nersc/pe/modulefiles/latest"
 _PROCESS_DATA_XFER_MANIFEST_FILENAME = "process_data_transfer_manifest.sh"
