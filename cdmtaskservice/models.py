@@ -607,8 +607,7 @@ class JobInput(BaseModel):
         Returns the container count and the files split up by container.
         """
         containers = min(self.num_containers, len(self.input_files))
-        fpc = math.floor(len(self.input_files) / containers)
-        extra_files = len(self.input_files) - (fpc * containers)
+        fpc, extra_files = divmod(len(self.input_files), containers)
         infiles = list(self.input_files)
         files = []
         for i in range(1, containers + 1):
