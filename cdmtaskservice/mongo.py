@@ -195,17 +195,37 @@ class MongoDAO:
         """
         Add a download task_id to the NERSC section of a job and update the state.
         
-        job_id - the job ID.
+        Arguments are as update_job_state except for the addition of:
+        
         task_id - the NERSC task ID.
-        current_state - the expected current state of the job. If the job is not in this state
-            an error is thrown.
-        state - the new state for the job.
-        time - the time at which the job transitioned to the new state.
         """
         # may need to make this more generic where the cluster is passed in and mapped to
         # a job structure location or something if we support more than NERSC
         await self._update_job_state(job_id, current_state, state, time, push={
             self._FLD_NERSC_DL_TASK: _require_string(task_id, "task_id")
+        })
+
+    _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
+
+    async def add_JAWS_run_id(
+        self,
+        job_id: str,
+        run_id: str,
+        current_state: models.JobState,
+        state: models.JobState,
+        time: datetime.datetime
+    ):
+        """
+        Add a run ID to the JAWS section of a job and update the state.
+        
+        Arguments are as update_job_state except for the addition of:
+        
+        run_id - the JAWS run ID.
+        """
+        # may need to make this more generic where the cluster is passed in and mapped to
+        # a job structure location or something if we support more than NERSC
+        await self._update_job_state(job_id, current_state, state, time, push={
+            self._FLD_JAWS_RUN_ID: _require_string(run_id, "run_id")
         })
 
 
