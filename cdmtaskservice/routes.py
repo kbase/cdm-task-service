@@ -35,6 +35,7 @@ SERVICE_NAME = "CDM Task Service Prototype"
 # may need to split these into different files if this file gets too big
 ROUTER_GENERAL = APIRouter(tags=["General"])
 ROUTER_JOBS = APIRouter(tags=["Jobs"], prefix="/jobs")
+ROUTER_IMAGES = APIRouter(tags=["Images"], prefix="/images")
 ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
 ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 
@@ -146,6 +147,32 @@ async def get_job(
     return await job_state.get_job(job_id, user.user)
 
 
+_ANN_IMAGE_ID = Annotated[str, FastPath(
+    example="ghcr.io/kbase/collections:checkm2_0.1.6"
+        + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+    description="The name of a docker image. Include the SHA to ensure "
+        + "referencing the correct image.",
+    # Don't bother validating other than some basic checks, validation will occur when
+    # checking / getting the image SHA from the remote repository
+    min_length=1,
+    max_length=1000,
+)]
+
+
+@ROUTER_IMAGES.get(
+    "/{image_id:path}",
+    response_model=models.Image,
+    summary="Get an image by name",
+    description="Get an image previously registered to the system by the image name."
+)
+async def get_image(
+    r: Request,
+    image_id: _ANN_IMAGE_ID,
+    # Public for now - any reason for these to be private to KBase staff?
+):
+    return await app_state.get_app_state(r).images.get_image(image_id)
+
+
 @ROUTER_ADMIN.post(
     "/images/{image_id:path}",
     response_model=models.Image,
@@ -157,21 +184,12 @@ async def get_job(
 )
 async def approve_image(
     r: Request,
-    image_id: Annotated[str, FastPath(
-        example="ghcr.io/kbase/collections:checkm2_0.1.6"
-            + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
-        description="The Docker image to run for the job. Include the SHA to ensure the "
-            + "exact code requested is run.",
-        # Don't bother validating other than some basic checks, validation will occur when
-        # checking / getting the image SHA from the remote repository
-        min_length=1,
-        max_length=1000,
-    )],
+    image_id: _ANN_IMAGE_ID,
     user: kb_auth.KBaseUser=Depends(_AUTH)
 ) -> models.Image:
     _ensure_admin(user, "Only service administrators can approve images.")
     images = app_state.get_app_state(r).images
-    return await images.register(image_id)
+    return await images.register(image_id, user.user)
 
 
 @ROUTER_ADMIN.get(

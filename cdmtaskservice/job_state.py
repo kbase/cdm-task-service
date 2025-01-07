@@ -11,7 +11,7 @@ from cdmtaskservice import kb_auth
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import UnauthorizedError
-from cdmtaskservice.image_remote_lookup import parse_image_name
+from cdmtaskservice.images import Images
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
@@ -26,15 +26,18 @@ class JobState:
         self,
         mongo: MongoDAO,
         s3client: S3Client,
+        images: Images,
         coro_manager: CoroutineWrangler,
         job_runners: dict[models.Cluster, Any],  # Make abstract class if necessary
     ):
         """
         mongo - a MongoDB DAO object.
         s3Client - an S3Client pointed at the S3 storage system to use.
+        images - a handler for getting images.
         coro_manager - a coroutine manager.
         job_runners - a mapping of remote compute cluster to the job runner for that cluster.
         """
+        self._images = _not_falsy(images, "images")
         self._s3 = _not_falsy(s3client, "s3client")
         self._mongo = _not_falsy(mongo, "mongo")
         self._coman = _not_falsy(coro_manager, "coro_manager")
@@ -52,11 +55,7 @@ class JobState:
         _not_falsy(job_input, "job_input")
         _not_falsy(user, "user")
         # Could parallelize these ops but probably not worth it
-        parsedimage = parse_image_name(job_input.image)
-        tag = parsedimage.tag
-        if not parsedimage.tag and not parsedimage.digest:
-            tag = "latest"
-        image = await self._mongo.get_image(parsedimage.name, digest=parsedimage.digest, tag=tag)
+        image = await self._images.get_image(job_input.image)
         await self._s3.has_bucket(job_input.output_dir.split("/", 1)[0])
         paths = [f.file if isinstance(f, models.S3File) else f for f in job_input.input_files]
         # TODO PERF may want to make concurrency configurable here

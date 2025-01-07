@@ -660,6 +660,14 @@ class Image(BaseModel):
         description="The image tag at registration time. "
             + "The tag may no longer point to the same image."
     )] = None
+    registered_by: Annotated[str, Field(
+        example="aparkin",
+        description="The username of the user that registered this image."
+    )]
+    registered_on: Annotated[datetime.datetime, Field(
+        example="2024-10-24T22:35:40Z",
+        description="The time of registration."
+    )]
     # TODO REFERENCEDATA add reference data ID
     
     @property

@@ -169,7 +169,7 @@ class DockerImageInfo:
 
 
 # TODO TEST add tests calling this method specifically
-def parse_image_name(image_name: str) -> reference.Reference:
+def parse_image_name(image_name: str) -> ParsedImageName:
     image_name = image_name.strip() if image_name is not None else None
     # Image name rules: https://docs.docker.com/reference/cli/docker/image/tag/
     # Don't do an exhaustive check here, but enough that we're reasonably confident

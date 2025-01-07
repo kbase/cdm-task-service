@@ -112,7 +112,7 @@ async def build_app(
         runners = {models.Cluster.PERLMUTTER_JAWS: nerscjawsflow}
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         images = Images(mongodao, imginfo)
-        job_state = JobState(mongodao, s3, coman, runners)
+        job_state = JobState(mongodao, s3, images, coman, runners)
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._cdmstate = AppState(

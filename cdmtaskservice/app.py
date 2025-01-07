@@ -67,6 +67,7 @@ def create_app():
     app.add_middleware(GZipMiddleware)
     app.include_router(routes.ROUTER_GENERAL)
     app.include_router(routes.ROUTER_JOBS)
+    app.include_router(routes.ROUTER_IMAGES)
     app.include_router(routes.ROUTER_ADMIN)
     app.include_router(routes.ROUTER_CALLBACKS)
 
