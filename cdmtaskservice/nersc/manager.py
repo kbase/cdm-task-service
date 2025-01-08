@@ -30,7 +30,7 @@ from cdmtaskservice.jaws import (
 )
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
-from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
+from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
 
 # This is mostly tested manually to avoid modifying files at NERSC.
 
@@ -294,17 +294,17 @@ class NERSCManager:
         return await self._process_manifest(
             maniio, job_id, callback_url, "download_manifest.json", "download")
     
-    async def upload_s3_files(
+    async def upload_presigned_files(
         self,
         job_id: str,
         remote_files: list[Path],
-        presigned_urls: list[S3PresignedPost],
+        presigned_urls: list[PresignedPost],
         callback_url: str,
         concurrency: int = 10,
         insecure_ssl: bool = False
     ) -> str:
         """
-        Upload a set of files to an S3 instance from NERSC.
+        Upload a set of files to presigned URLs from NERSC.
         
         job_id - the ID of the job for which the files are being transferred. 
             This must be a unique ID, and no other transfers should be occurring for the job.
@@ -392,7 +392,7 @@ class NERSCManager:
     def _create_upload_manifest(
         self,
         remote_files: list[Path],
-        presigned_urls: list[S3PresignedPost],
+        presigned_urls: list[PresignedPost],
         concurrency: int,
         insecure_ssl: bool,
     ) -> io.BytesIO:
@@ -432,18 +432,18 @@ class NERSCManager:
         Returns a tuple of the error message and the error traceback or None if the upload was
         successful.
         """
-        return await self._get_s3_transfer_result(job, "download")
+        return await self._get_transfer_result(job, "download")
 
-    async def get_s3_upload_result(self, job: models.Job) -> tuple[str, str] | None:
+    async def get_presigned_upload_result(self, job: models.Job) -> tuple[str, str] | None:
         """
-        Get the results of uploading files to NERSC from s3.
+        Get the results of uploading files from NERSC to presigned URLs.
         
         Returns a tuple of the error message and the error traceback or None if the upload was
         successful.
         """
-        return await self._get_s3_transfer_result(job, "upload")
+        return await self._get_transfer_result(job, "upload")
 
-    async def _get_s3_transfer_result(self, job: models.Job, op: str) -> tuple[str, str] | None:
+    async def _get_transfer_result(self, job: models.Job, op: str) -> tuple[str, str] | None:
         _not_falsy(job, "job")
         path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id / f"{op}_result.json"
         res = await self._download_json_file_from_NERSC(Machine.dtns, path)
@@ -539,18 +539,18 @@ class NERSCManager:
         self,
         job: models.Job,
         jaws_output_dir: Path,
-        files_to_urls: Callable[[list[Path]], Awaitable[list[S3PresignedPost]]],
+        files_to_urls: Callable[[list[Path]], Awaitable[list[PresignedPost]]],
         callback_url: str,
         concurrency: int = 10,
         insecure_ssl: bool = False
     ) -> str:
         """
-        Upload a set of output files from a JAWS run to S3.
+        Upload a set of output files from a JAWS run to presigned URLs.
         
         job - the job being processed. No other transfers should be occurring for the job.
         jaws_output_dir - the NERSC output directory of the JAWS job containing the output files,
             manifests, etc.
-        files_to_urls - an async function that provides a list of presigned S3 upload urls
+        files_to_urls - an async function that provides a list of presigned upload urls
             given relative paths to files. The returned list must be in the same order as the input
             list.
         callback_url - the URL to GET as a callback for when the upload is complete.
@@ -572,7 +572,7 @@ class NERSCManager:
         container_files = list(outputs.output_files.keys())
         presigns = await files_to_urls(container_files)
         # TODO LOGGING upload job stdout and stderr logs
-        return await self.upload_s3_files(
+        return await self.upload_presigned_files(
             job.id,
             [os.path.join(jaws_output_dir, outputs.output_files[f]) for f in container_files],
             presigns,

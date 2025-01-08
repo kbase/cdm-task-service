@@ -62,11 +62,14 @@ class S3ObjectMeta:
         return self.part_size or self.size
 
 
-class S3PresignedPost:
+# This isn't technically S3 specific but leave it here since it's the only place it gets
+# produced
+class PresignedPost:
     """
-    A presigned url and fields for posting data to an S3 instance.
+    A presigned url and fields for posting data.
     
-    See https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3-presigned-urls.html#generating-a-presigned-url-to-upload-a-file
+    For an S3 example, see
+    https://boto3.amazonaws.com/v1/documentation/api/latest/guide/s3-presigned-urls.html#generating-a-presigned-url-to-upload-a-file
     """
     
     __slots__ = ["url", "fields"]
@@ -81,7 +84,7 @@ class S3PresignedPost:
         # again input checking is a little pointless here
         self.url = url
         self.fields = fields
-    
+
 
 class S3Client:
     """
@@ -286,7 +289,7 @@ class S3Client:
         self,
         paths: S3Paths,
         expiration_sec: int = 3600
-    ) -> list[S3PresignedPost]:
+    ) -> list[PresignedPost]:
         """
         Presign urls to allow posting to s3 paths. Does not check for overwrites.
         
@@ -300,7 +303,7 @@ class S3Client:
             for buk, key in paths.split_paths():
                 ret = await client.generate_presigned_post(
                     Bucket=buk, Key=key, ExpiresIn=expiration_sec)
-                results.append(S3PresignedPost(ret["url"], ret["fields"]))
+                results.append(PresignedPost(ret["url"], ret["fields"]))
         return results
 
 

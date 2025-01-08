@@ -21,7 +21,7 @@ from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
-from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, S3PresignedPost
+from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
 
 # Not sure how other flows would work and how much code they might share. For now just make
@@ -212,7 +212,7 @@ class NERSCJAWSRunner:
     
     async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
 
-        async def presign(output_files: list[Path]) -> list[S3PresignedPost]:
+        async def presign(output_files: list[Path]) -> list[PresignedPost]:
             root = job.job_input.output_dir
             # TODO PERF this parses the paths yet again
             # TODO RELIABILITY config / set expiration time
@@ -250,7 +250,7 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the upload submitted state")
-        err = await self._nman.get_s3_upload_result(job)
+        err = await self._nman.get_presigned_upload_result(job)
         if err:
             await self._handle_transfer_exception(job, "Upload", err)
         await self._coman.run_coroutine(self._upload_complete(job))
