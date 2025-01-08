@@ -15,6 +15,16 @@ kbase_staff_role = "{{ KBCTS_KBASE_STAFF_ROLE or "KBASE_STAFF"}}"
 # This role is required to use the CDM task service.
 has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"}}"
 
+[NERSC_JAWS]
+
+# The username of the NERSC user that will interact with the Superfacility API and JAWS.
+# This user must match the SFAPI credentials in the NERSC block below and the token in the JAWS
+# block.
+# The NERSC user's default shell must be bash.
+# If the client credentials are updated but the user doesn't match they will not be accepted.
+# It is advised to create a collaboration user for the service.
+user = "{{ KBCTS_NERSC_JAWS_USER or "" }}"
+
 [NERSC]
 
 # The path to a NERSC Superfacility API (SFAPI) credential file. The file is expected to have
@@ -26,13 +36,6 @@ has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"
 # been approved for the user, the service periodically checks for updates to this file and
 # reloads the contents if changed.
 sfapi_cred_path = "{{ KBCTS_SFAPI_CRED_PATH or "" }}"
-
-# The user associated with the client credentials. The user's default shell must be bash.
-# If the client credentials are updated but the user doesn't match they will not be accepted.
-# It is advised to create a collaboration user for the service.
-# The jaws.conf file will be created in the user's home directory on service startup, overwriting
-# any extant file.
-sfapi_user = "{{ KBCTS_SFAPI_USER or "" }}"
 
 # Where to store remote code at NERSC. This must be writeable by the service account.
 remote_code_dir = "{{ KBCTS_NERSC_REMOTE_CODE_DIR or "/global/cfs/cdirs/kbase/cdm_task_service" }}"
