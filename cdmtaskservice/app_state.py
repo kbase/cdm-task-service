@@ -101,11 +101,11 @@ async def build_app(
         jaws_client = await JAWSClient.create(cfg.jaws_url, cfg.jaws_token)
         logr.info("Done")
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
+        # TODO CODE once the nerscjawsflow is done merge job_state and job_submit back together
         job_state = JobState(mongodao)
         nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
             nerscman,
             jaws_client,
-            job_state, # TODO CODE if this isn't necessary, remove and recombine with job_submit
             mongodao,
             s3,
             s3_external,
