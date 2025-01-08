@@ -69,10 +69,17 @@ verify_external_url = "{{ KBCTS_VERIFY_S3_EXTERNAL_URL or "true"}}"
 access_key = "{{ KBCTS_S3_ACCESS_KEY or "" }}"
 # The S3 secret key.
 access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
-# Setting allow_insecure = true (and only the exact string "true") skips checking the validity of the
-# SSL certificate for both the standard and external urls, leaving the service vulnerable
+# Setting allow_insecure = true (and only the exact string "true") skips checking the validity of
+# the SSL certificate for both the standard and external urls, leaving the service vulnerable
 # to Man in the Middle attacks.
 allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
+
+[Logging]
+
+# An S3 path, starting with the bucket, to where container log files should be uploaded from jobs.
+# Must contain a key. Must be writable by the service and readable by users who need to see
+# their job logs.
+container_s3_log_dir = "{{ KBCTS_CONTAINER_S3_LOG_DIR or "" }}"
 
 [MongoDB]
 

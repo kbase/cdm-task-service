@@ -11,6 +11,7 @@ _SEC_NERSC_JAWS = "NERSC_JAWS"
 _SEC_NERSC = "NERSC"
 _SEC_JAWS = "JAWS"
 _SEC_S3 = "S3"
+_SEC_LOGGING = "Logging"
 _SEC_MONGODB = "MongoDB"
 _SEC_IMAGE = "Images"
 _SEC_SERVICE = "Service"
@@ -45,6 +46,7 @@ class CDMTaskServiceConfig:
     s3_access_secret: str - the S3 access secret.
     s3_allow_insecure: bool - whether to skip SSL cert validation, leaving the service vulnerable
         to MITM attacks.
+    container_s3_log_dir: str - where to store container logs in S3.
     mongo_host: str - the MongoDB host.
     mongo_db: str - the MongoDB database.
     mongo_user: str | None - the MongoDB user name.
@@ -93,6 +95,9 @@ class CDMTaskServiceConfig:
         self.s3_allow_insecure = _get_string_optional(config, _SEC_S3, "allow_insecure") == "true"
         # If needed, we could add an S3 region parameter. YAGNI
         # If needed we could add sub sections to support > 1 S3 instance per service. YAGNI
+        self.container_s3_log_dir = _get_string_required(
+            config, _SEC_LOGGING, "container_s3_log_dir"
+        )
         self.mongo_host = _get_string_required(config, _SEC_MONGODB, "mongo_host")
         self.mongo_db = _get_string_required(config, _SEC_MONGODB, "mongo_db")
         self.mongo_user = _get_string_optional(config, _SEC_MONGODB, "mongo_user")
@@ -129,6 +134,7 @@ class CDMTaskServiceConfig:
             f"S3 access key: {self.s3_access_key}",
             "S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT",
             f"S3 allow insecure: {self.s3_allow_insecure}",
+            f"Directory in S3 for container logs: {self.container_s3_log_dir}",
             f"MongoDB host: {self.mongo_host}",
             f"MongoDB database: {self.mongo_db}",
             f"MongoDB user: {self.mongo_user}",

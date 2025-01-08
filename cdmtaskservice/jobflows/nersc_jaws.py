@@ -40,6 +40,7 @@ class NERSCJAWSRunner:
         mongodao: MongoDAO,
         s3_client: S3Client,
         s3_external_client: S3Client,
+        container_s3_log_dir: str,
         coro_manager: CoroutineWrangler,
         service_root_url: str,
         s3_insecure_ssl: bool = False,
@@ -54,6 +55,7 @@ class NERSCJAWSRunner:
         s3_external_client - an S3 client pointing to an external URL for the S3 data stores
             that may not be accessible from the current process, but is accessible to remote
             processes at NERSC.
+        container_s3_log_dir - where to store container logs in S3.
         coro_manager - a coroutine manager.
         service_root_url - the URL of the service root, used for constructing service callbacks.
         s3_insecure_url - whether to skip checking the SSL certificate for the S3 instance,
@@ -65,6 +67,7 @@ class NERSCJAWSRunner:
         self._s3 = _not_falsy(s3_client, "s3_client")
         self._s3ext = _not_falsy(s3_external_client, "s3_external_client")
         self._s3insecure = s3_insecure_ssl
+        self._s3logdir = _require_string(container_s3_log_dir, "container_s3_log_dir")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")
         

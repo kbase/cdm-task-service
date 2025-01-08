@@ -41,6 +41,7 @@ services:
       - KBCTS_S3_ACCESS_KEY=miniouser
       - KBCTS_S3_ACCESS_SECRET=miniopassword
       - KBCTS_S3_ALLOW_INSECURE=true
+      - KBCTS_CONTAINER_S3_LOG_DIR=cts-logs/container_logs
       # TODO DOCKERUPGRADE switch back when host mode no longer needed
       - KBCTS_MONGO_HOST=mongodb://localhost:27017
       #- KBCTS_MONGO_HOST=mongodb://mongodb:27017

@@ -25,6 +25,7 @@ from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.s3.paths import validate_path
 from cdmtaskservice.version import VERSION
 
 # The main point of this module is to handle all the application state in one place
@@ -58,6 +59,7 @@ async def build_app(
     # This method is getting pretty long but it's stupid simple so...
     # May want to parallelize some of this for faster startups. would need to rework prints
     logr = logging.getLogger(__name__)
+    validate_path(cfg.container_s3_log_dir)  # check that the path is a valid path
     coman = CoroutineWrangler()
     logr.info("Connecting to KBase auth service... ")
     auth = await KBaseAuth.create(
@@ -109,6 +111,7 @@ async def build_app(
             mongodao,
             s3,
             s3_external,
+            cfg.container_s3_log_dir,
             coman,
             cfg.service_root_url,
             s3_insecure_ssl=cfg.s3_allow_insecure,
