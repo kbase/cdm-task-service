@@ -8,11 +8,13 @@ from fastapi import (
     APIRouter,
     Depends,
     Request,
+    Response,
+    status,
     Query,
     Path as FastPath
 )
 from pydantic import BaseModel, Field
-from typing import Annotated
+from typing import Annotated, Any
 
 from cdmtaskservice import app_state
 from cdmtaskservice import kb_auth
@@ -20,6 +22,7 @@ from cdmtaskservice import models
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
     get_job_complete_callback,
+    get_upload_complete_callback,
 )
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.git_commit import GIT_COMMIT
@@ -237,32 +240,59 @@ async def get_nersc_client_info(
     f"/{get_download_complete_callback()}/{{job_id}}",
     summary="Report data download complete",
     description="Report that data download for a job is complete. This method is not expected "
-        + "to be called by users."
+        + "to be called by users.",
+    status_code = status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def download_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    logging.getLogger(__name__).info(f"Download reported as complete for job {job_id}")
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, _SERVICE_USER, as_admin=True)
-    await appstate.runners[job.job_input.cluster].download_complete(job)
+    runner, job = await _callback_handling(r, "Download", job_id)
+    await runner.download_complete(job)
 
 
 @ROUTER_CALLBACKS.get(
     f"/{get_job_complete_callback()}/{{job_id}}",
     summary="Report job complete",
     description="Report a remote job is complete. This method is not expected "
-        + "to be called by users."
+        + "to be called by users.",
+    status_code = status.HTTP_204_NO_CONTENT,
+    response_class=Response,
 )
 async def job_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    logging.getLogger(__name__).info(f"Remote job reported as complete for job {job_id}")
+    runner, job = await _callback_handling(r, "Remote job", job_id)
+    await runner.job_complete(job)
+
+
+@ROUTER_CALLBACKS.get(
+    f"/{get_upload_complete_callback()}/{{job_id}}",
+    summary="Report data upload complete",
+    description="Report that data upload for a job is complete. This method is not expected "
+        + "to be called by users.",
+    status_code = status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def upload_complete(
+    r: Request,
+    job_id: _ANN_JOB_ID
+):
+    runner, job = await _callback_handling(r, "Upload", job_id)
+    await runner.upload_complete(job)
+
+
+async def _callback_handling(
+    r: Request, operation: str, job_id: str
+) -> (Any, models.AdminJobDetails):
+    # Any in the tuple is the job flow runner. Would need to make an abstract class to type it
+    # YAGNI
+    logging.getLogger(__name__).info(f"{operation} reported as complete for job {job_id}")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, _SERVICE_USER, as_admin=True)
-    await appstate.runners[job.job_input.cluster].job_complete(job)
+    return appstate.runners[job.job_input.cluster], job
 
 
 class ClientLifeTimeError(Exception):

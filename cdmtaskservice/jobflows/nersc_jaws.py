@@ -193,8 +193,9 @@ class NERSCJAWSRunner:
         
         try:
             # TODO PERF config / set concurrency
-            # TODO DISKSPACE will need to clean up job results @ NERSC
             # TODO LOGGING make the remote code log summary of results and upload and store
+            # TODO LOGGING upload the container std* logs to S3 and store locations in job
+            #              or maybe store in GFS? Should discuss with group how this should work
             task_id = await self._nman.upload_JAWS_job_files(
                 job,
                 jaws_info["output_dir"],
@@ -216,3 +217,28 @@ class NERSCJAWSRunner:
             logr.exception(f"Error starting upload for job {job.id}")
             # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
             raise e
+
+    async def upload_complete(self, job: models.AdminJobDetails):
+        """
+        Complete a job after the upload is complete. The job is expected to be in the 
+        upload submitted state.
+        """
+        if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
+            raise InvalidJobStateError("Job must be in the upload submitted state")
+        # TODO ERRHANDLING IMPORTANT pull the task from the SFAPI. If it a) doesn't exist or b) has
+        #                  no errors, continue, otherwise put the job into an errored state.
+        # TODO ERRHANDLING IMPORTANT upload the output file from the upload task and check for
+        #                  errors. If any exist, put the job into an errored state.
+        # TDOO LOGGING Add any relevant logs from the task / download task output file in state
+        #                  call. Alternatively, just add code to fetch them from NERSC rather
+        #                  than storing them permanently. 99% of the time they'll be uninteresting
+        # TODO DATA CORRECTNESS IMPORTANT upload the file list & MD5 of the files, check the MD5s 
+        #                  vs the e-tags in Minio and save the files & e-tags to the job
+        # TODO DISKSPACE will need to clean up job results @ NERSC
+        await self._mongo.update_job_state(
+            job.id,
+            models.JobState.UPLOAD_SUBMITTED,
+            models.JobState.COMPLETE,
+            # TODO TEST will need a way to mock out timestamps
+            timestamp.utcdatetime()
+        )
