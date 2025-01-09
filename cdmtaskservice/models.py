@@ -43,6 +43,7 @@ FLD_JOB_STATE = "state"
 FLD_JOB_NERSC_DETAILS = "nersc_details"
 FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
 FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
+FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_OUTPUTS = "outputs"
@@ -723,15 +724,21 @@ class NERSCDetails(BaseModel):
     Details about a job run at NERSC.
     """
     download_task_id: Annotated[list[str], Field(
-        description="IDs for a tasks run via the NERSC SFAPI to download files from an S3 "
+        description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
             + "instance to NERSC. Note that task details only persist for ~10 minutes past "
             + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
     )]
     upload_task_id: Annotated[list[str], Field(
-        description="IDs for a tasks run via the NERSC SFAPI to upload files to an S3 "
+        description="IDs for tasks run via the NERSC SFAPI to upload files to an S3 "
             + "instance from NERSC. Note that task details only persist for ~10 minutes past "
             + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
             + "Empty if an upload task has not yet been submitted to NERSC."
+    )] = []
+    log_upload_task_id: Annotated[list[str], Field(
+        description="IDs for tasks run via the NERSC SFAPI to upload log files to an S3 "
+            + "instance from NERSC. Note that task details only persist for ~10 minutes past "
+            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
+            + "Empty if a log upload task has not yet been submitted to NERSC."
     )] = []
 
 
