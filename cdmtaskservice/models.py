@@ -627,6 +627,7 @@ class JobState(str, Enum):
     UPLOAD_SUBMITTING = "upload_submitting"
     UPLOAD_SUBMITTED = "upload_submitted"
     COMPLETE = "complete"
+    ERROR_PROCESSING = "error_processing"
     ERROR = "error"
 
 
