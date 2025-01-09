@@ -16,7 +16,8 @@ from cdmtaskservice.callback_url_paths import (
 )
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidJobStateError
-from cdmtaskservice.jaws.client import JAWSClient
+from cdmtaskservice.jaws import client as jaws_client
+from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, S3PresignedPost
@@ -34,7 +35,7 @@ class NERSCJAWSRunner:
     def __init__(
         self,
         nersc_manager: NERSCManager,
-        jaws_client: JAWSClient,
+        jaws_client: jaws_client.JAWSClient,
         mongodao: MongoDAO,
         s3_client: S3Client,
         s3_external_client: S3Client,
@@ -151,7 +152,8 @@ class NERSCJAWSRunner:
                 # TODO TEST will need a way to mock out timestamps
                 timestamp.utcdatetime(),
             )
-            # TDOO JOBRUN start polling JAWS to wait for job completion
+            jaws_info = await poll_jaws(self._jaws, job.id, jaws_job_id)
+            await self._job_complete(job, jaws_info)
         except Exception as e:
             # TODO LOGGING figure out how logging it going to work etc.
             logr.exception(f"Error starting JAWS job for job {job.id}")
@@ -168,7 +170,10 @@ class NERSCJAWSRunner:
         # We assume this is a jaws job if it was mapped to this runner
         # TODO RETRIES this line might need changes 
         jaws_info = await self._jaws.status(job.jaws_details.run_id[-1])
-        if jaws_info["status"] != "done":
+        await self._job_complete(job, jaws_info)
+    
+    async def _job_complete(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
+        if not jaws_client.is_done(jaws_info):
             raise InvalidJobStateError("JAWS run is incomplete")
         # TODO ERRHANDLING IMPORTANT if in an error state, pull the erros.json file from the
         #                  JAWS job dir and add stderr / out to job record (what do to about huge
