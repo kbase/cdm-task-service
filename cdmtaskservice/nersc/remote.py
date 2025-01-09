@@ -10,11 +10,13 @@ import asyncio
 import hashlib
 import json
 import os
+from pathlib import Path
 import requests
 import sys
 import traceback
 from typing import Any, Callable
 
+from cdmtaskservice.jaws.remote import parse_errors_json
 from cdmtaskservice.s3.remote import process_data_transfer_manifest as s3_pdtm
 
 # TODO TEST add tests for this file and its dependency functions
@@ -53,6 +55,28 @@ def process_data_transfer_manifest(
     if md5_json_file_path:  # assume that this is only present for uploads
         _generate_md5s(md5_json_file_path, manifest["file-transfers"]["files"])
     asyncio.run(s3_pdtm(manifest["file-transfers"]))
+    return None
+
+
+def process_errorsjson(
+        errorsjson_file_path: str,
+        logfiles_directory: str,
+        manifest_file_path: str,
+    ):
+    """
+    Processes a JAWS errors.json file and uploads the resulting log files via a provided
+    manifest.
+    
+    errorjson_file_path - the path to the JAWS errors.json file
+    logfiles_directory - where to write the various log files extracted from the errors file
+    manifest_file_path - an upload manifest for the log files
+    """
+    logfiles_directory = Path(logfiles_directory)
+    logfiles_directory.mkdir(parents=True, exist_ok=True)
+    with open(errorsjson_file_path) as f:
+        ret = parse_errors_json(f, logfiles_directory)
+    process_data_transfer_manifest(manifest_file_path)
+    return ret
 
 
 def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callback_url: str):
@@ -62,8 +86,9 @@ def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callb
     cext = None
     ctext = None
     ret = None
+    cts_env = {k: v for k, v in os.environ.items() if k.startswith("CTS_")}
     try:
-        func(*args)
+        data = func(*args)
     except Exception as jobexep:
         jex = jobexep
         jext = traceback.format_exc()
@@ -88,12 +113,12 @@ def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callb
                 "callback_trace": cext,
                 "callback_text": ctext,
                 "callback_code": ret.status_code if ret else None,
-                "callback_url": callback_url,
+                "cts_env": cts_env,
             }
             json.dump(j, f, indent=4)
             sys.exit(1)
         else:
-            json.dump({"result": "success"}, f)
+            json.dump({"result": "success", "data": data, "cts_env": cts_env}, f)
 
 
 def main():
@@ -107,7 +132,17 @@ def main():
             resfile,
             callback_url
         )
-    # TDOO NEXT add errors.json parse mode
+    elif mode == "errorsjson":
+        _error_wrapper(
+            process_errorsjson,
+            [
+                os.environ["CTS_ERRORS_JSON_LOCATION"],
+                os.environ["CTS_CONTAINER_LOGS_LOCATION"],
+                os.environ["CTS_MANIFEST_LOCATION"],  # expected to be an upload manifest
+            ],
+            resfile,
+            callback_url
+        )
     else:  # Should never happen
         raise ValueError(f"unexpected mode: {mode}")
 

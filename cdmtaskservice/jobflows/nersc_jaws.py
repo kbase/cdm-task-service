@@ -14,6 +14,7 @@ from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string 
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
     get_upload_complete_callback,
+    get_error_complete_callback,
 )
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidJobStateError
@@ -213,29 +214,48 @@ class NERSCJAWSRunner:
             await self._mongo.update_job_state(
                 job.id,
                 models.JobState.JOB_SUBMITTED,
-                models.JobState.ERROR_PROCESSING,
+                models.JobState.ERROR_PROCESSING_SUBMITTING,
                 timestamp.utcdatetime()
             )
             await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
     
     async def _upload_container_logs(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
-        logging.getLogger(__name__).info(f"Well crap: {job.id}")
-        # TODO NEXT upload job logs to S3. First get expected files and make presigned urls
-    
-    async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
-
+        # we're assuming here that the errors.json file @ NERSC has the std* files
+        # if not this will break badly, but it also means (I think) that JAWS is broken badly
+        # So things are in a right old mess and a service admin will need to dig into it
         async def presign(output_files: list[Path]) -> list[PresignedPost]:
-            root = job.job_input.output_dir
-            # TODO PERF this parses the paths yet again
+            root = Path(self._s3logdir) / job.id
             # TODO RELIABILITY config / set expiration time
             paths = S3Paths([os.path.join(root, f) for f in output_files])
             return await self._s3ext.presign_post_urls(paths)
         
         try:
             # TODO PERF config / set concurrency
-            # TODO LOGGING upload the container std* logs to S3 and store locations in job
-            #              or maybe store in GFS? Should discuss with group how this should work
-            #              Do we need this on a successful run or just errors?
+            task_id = await self._nman.upload_JAWS_log_files_on_error(
+                job,
+                jaws_info["output_dir"],
+                presign,
+                get_error_complete_callback(self._callback_root, job.id),
+                insecure_ssl=self._s3insecure,
+            )
+            logging.getLogger(__name__).info(f"Error task_id: {task_id}")
+            # TODO NEXT add task Id to mongo & change state to error submitted
+            # TODO NEXT TEXT add error complete endpoint and change state to error
+            # and add log dir loc and error message based on the data field from the result.json
+        except Exception as e:
+            await self._handle_exception(e, job.id, "starting error processing for")
+    
+    async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
+        # This is kind of similar to the method above, not sure if trying to merge is worth it
+        
+        async def presign(output_files: list[Path]) -> list[PresignedPost]:
+            root = job.job_input.output_dir
+            # TODO RELIABILITY config / set expiration time
+            paths = S3Paths([os.path.join(root, f) for f in output_files])
+            return await self._s3ext.presign_post_urls(paths)
+        
+        try:
+            # TODO PERF config / set concurrency
             task_id = await self._nman.upload_JAWS_job_files(
                 job,
                 jaws_info["output_dir"],

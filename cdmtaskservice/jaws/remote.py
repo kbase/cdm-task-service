@@ -10,7 +10,11 @@ import io
 import json
 from pathlib import Path
 
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+
+ERRORS_JSON_FILE = "errors.json"
+"""
+The filename of the errors JSON file in the jaws output directory.
+"""
 
 
 def get_filenames_for_container(container_num: int) -> tuple[str, str, str]:
@@ -43,8 +47,11 @@ def parse_errors_json(errors_json: io.BytesIO, logpath: Path) -> list[tuple[int,
     # These files could be really big
     # Pretty sure there are error conditions that may occur where this parser will choke,
     # will deal with them as they happen
-    _not_falsy(logpath, "logpath")
-    j = json.load(_not_falsy(errors_json, "errors_json"))
+    if not logpath:
+        raise ValueError("logpath is required")
+    if not errors_json:
+        raise ValueError("errors_json is required")
+    j = json.load(errors_json)
     if not j:
         raise ValueError("No errors in error json")
     j = j["calls"]

@@ -7,6 +7,7 @@ _CALLBACK = "callback"
 _DOWNLOAD_COMPLETE = "download"
 _JOB_COMPLETE = "job"
 _UPLOAD_COMPLETE = "upload"
+_ERROR_COMPLETE = "error"
 
 
 def get_download_complete_callback(root_url: str = None, job_id: str = None):
@@ -37,6 +38,16 @@ def get_upload_complete_callback(root_url: str = None, job_id: str = None):
     job_id - suffix the path with a job ID.
     """
     return _get_callback(_UPLOAD_COMPLETE, root_url, job_id)
+
+
+def get_error_complete_callback(root_url: str = None, job_id: str = None):
+    """
+    Get a url or path for a service callback to communicate that error processing is complete.
+    
+    root_url - prepend the path with the given root url.
+    job_id - suffix the path with a job ID.
+    """
+    return _get_callback(_ERROR_COMPLETE, root_url, job_id)
 
 
 def _get_callback(subpath: str, root_url: str = None, job_id: str = None):
