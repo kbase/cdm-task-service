@@ -41,7 +41,7 @@ from cdmtaskservice.s3.client import S3ObjectMeta, S3PresignedPost
 # TODO CLEANUP clean up old code versions @NERSC somehow. Not particularly important
 
 _DT_TARGET = Machine.dtns
-# TDOO NERSCUIPDATE delete the following line when DTN downloads work normally.
+# TODO NERSCUPDATE delete the following line when DTN downloads work normally.
 #       See https://nersc.servicenowservices.com/sp?sys_id=ad33e85f1b5a5610ac81a820f54bcba0&view=sp&id=ticket&table=incident
 _DT_WORKAROUND = "source /etc/bashrc"
 

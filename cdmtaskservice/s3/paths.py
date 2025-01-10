@@ -55,7 +55,7 @@ class S3Paths:
             yield parts
 
 
-# TDOO TEST add tests for public method
+# TODO TEST add tests for public method
 # TODO S3PATHS allow accepting model paths to the constructor here so they aren't validated 2x 
 def validate_path(path: str, index: int = None) -> str:
     """
@@ -94,7 +94,7 @@ def validate_path(path: str, index: int = None) -> str:
     return f"{bucket}/{key}"
 
 
-# TDOO TEST add tests for public method
+# TODO TEST add tests for public method
 def validate_bucket_name(bucket_name: str, index: int = None):
     """
     Validate an S3 bucket name.

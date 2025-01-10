@@ -140,17 +140,17 @@ class MongoDAO:
     async def _update_job_state(
         self,
         job_id: str,
-        current_state: models.JobState,
         state: models.JobState,
         time: datetime.datetime,
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
+        current_state: models.JobState | None = None,
     ):
+        query = {models.FLD_JOB_ID: _require_string(job_id, "job_id")}
+        if current_state:
+            query[models.FLD_JOB_STATE] = current_state.value
         res = await self._col_jobs.update_one(
-            {
-                models.FLD_JOB_ID: _require_string(job_id, "job_id"),
-                models.FLD_JOB_STATE: _not_falsy(current_state, "current_state").value,
-            },
+            query,
             {
                 "$push": (push if push else {}) | {
                     models.FLD_JOB_TRANS_TIMES:
@@ -181,7 +181,7 @@ class MongoDAO:
         state - the new state for the job.
         time - the time at which the job transitioned to the new state.
         """
-        await self._update_job_state(job_id, current_state, state, time)
+        await self._update_job_state(job_id, state, time, current_state=current_state)
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     
@@ -202,7 +202,7 @@ class MongoDAO:
         """
         # may need to make this more generic where the cluster is passed in and mapped to
         # a job structure location or something if we support more than NERSC
-        await self._update_job_state(job_id, current_state, state, time, push={
+        await self._update_job_state(job_id, state, time, current_state=current_state, push={
             self._FLD_NERSC_DL_TASK: _require_string(task_id, "task_id")
         })
 
@@ -225,7 +225,7 @@ class MongoDAO:
         """
         # may need to make this more generic where the cluster is passed in and mapped to
         # a job structure location or something if we support more than NERSC
-        await self._update_job_state(job_id, current_state, state, time, push={
+        await self._update_job_state(job_id, state, time, current_state=current_state, push={
             self._FLD_JAWS_RUN_ID: _require_string(run_id, "run_id")
         })
 
@@ -248,7 +248,7 @@ class MongoDAO:
         """
         # may need to make this more generic where the cluster is passed in and mapped to
         # a job structure location or something if we support more than NERSC
-        await self._update_job_state(job_id, current_state, state, time, push={
+        await self._update_job_state(job_id, state, time, current_state=current_state, push={
             self._FLD_NERSC_UL_TASK: _require_string(task_id, "task_id")
         })
     
@@ -269,8 +269,34 @@ class MongoDAO:
         """
         out = [o.model_dump() for o in _not_falsy(output, "output")]
         await self._update_job_state(
-            job_id, current_state, state, time, set_={models.FLD_JOB_OUTPUTS: out}
+            job_id, state, time, current_state=current_state, set_={models.FLD_JOB_OUTPUTS: out}
         )
+
+    async def set_job_error(
+        self,
+        job_id: str,
+        user_error: str,
+        admin_error: str,
+        state: models.JobState,
+        time: datetime.datetime,
+        traceback: str | None = None,
+    ):
+        """
+        Put the job into an error state.
+        
+        job_id - the job ID.
+        user_error - an error message targeted towards a service user.
+        admin_error - an error message targeted towards a service admin.
+        state - the new state for the job.
+        time - the time at which the job transitioned to the new state.
+        traceback - the error traceback.
+        """
+        # TODO RETRIES will need to clear the error fields when attempting a retry
+        await self._update_job_state(job_id, state, time, set_={
+            models.FLD_JOB_ERROR: user_error,
+            models.FLD_JOB_ADMIN_ERROR: admin_error,
+            models.FLD_JOB_TRACEBACK: traceback,
+        })
 
 
 class NoSuchImageError(Exception):

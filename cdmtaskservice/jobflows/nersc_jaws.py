@@ -5,6 +5,7 @@ Manages running jobs at NERSC using the JAWS system.
 import logging
 import os
 from pathlib import Path
+import traceback
 from typing import Any
 
 from cdmtaskservice import models
@@ -66,6 +67,23 @@ class NERSCJAWSRunner:
         self._s3insecure = s3_insecure_ssl
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")
+        
+    async def _handle_exception(self, e: Exception, job_id: str, errtype: str):
+        # TODO LOGGING figure out how logging it going to work etc.
+        logging.getLogger(__name__).exception(f"Error {errtype} job {job_id}")
+        # if this fails, well, then we're screwed
+        await self._mongo.set_job_error(
+            job_id,
+            # We'll need to see what kinds of errors happen and change the user message appropriately.
+            # Just provide a generic message for now, as most errors aren't going to be fixable
+            # by users
+            "An unexpected error occurred",
+            str(e),
+            models.JobState.ERROR,
+            # TODO TEST will need a way to mock out timestamps
+            timestamp.utcdatetime(),
+            traceback=traceback.format_exc(),
+        )
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
@@ -77,7 +95,6 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.CREATED:
             raise InvalidJobStateError("Job must be in the created state")
-        logr = logging.getLogger(__name__)
         # Could check that the s3 and job paths / etags match... YAGNI
         # TODO PERF this validates the file paths yet again. Maybe the way to go is just have
         #           a validate method on S3Paths which can be called or not as needed, with
@@ -112,10 +129,7 @@ class NERSCJAWSRunner:
                 timestamp.utcdatetime(),
             )
         except Exception as e:
-            # TODO LOGGING figure out how logging it going to work etc.
-            logr.exception(f"Error starting download for job {job.id}")
-            # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
-            raise e
+            await self._handle_exception(e, job.id, "starting file download for")
 
     async def download_complete(self, job: models.AdminJobDetails):
         """
@@ -128,7 +142,7 @@ class NERSCJAWSRunner:
         #                  no errors, continue, otherwise put the job into an errored state.
         # TODO ERRHANDLING IMPORTANT upload the output file from the download task and check for
         #                  errors. If any exist, put the job into an errored state.
-        # TDOO LOGGING Add any relevant logs from the task / download task output file in state
+        # TODO LOGGING Add any relevant logs from the task / download task output file in state
         #                  call
         await self._mongo.update_job_state(
             job.id,
@@ -139,7 +153,6 @@ class NERSCJAWSRunner:
         await self._coman.run_coroutine(self._submit_jaws_job(job))
     
     async def _submit_jaws_job(self, job: models.AdminJobDetails):
-        logr = logging.getLogger(__name__)
         try:
             # TODO PERF configure file download concurrency
             jaws_job_id = await self._nman.run_JAWS(job)
@@ -155,10 +168,7 @@ class NERSCJAWSRunner:
             jaws_info = await poll_jaws(self._jaws, job.id, jaws_job_id)
             await self._job_complete(job, jaws_info)
         except Exception as e:
-            # TODO LOGGING figure out how logging it going to work etc.
-            logr.exception(f"Error starting JAWS job for job {job.id}")
-            # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
-            raise e
+            await self._handle_exception(e, job.id, "starting JAWS job for")
 
     async def job_complete(self, job: models.AdminJobDetails):
         """
@@ -175,9 +185,10 @@ class NERSCJAWSRunner:
     async def _job_complete(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
         if not jaws_client.is_done(jaws_info):
             raise InvalidJobStateError("JAWS run is incomplete")
-        # TODO ERRHANDLING IMPORTANT if in an error state, pull the erros.json file from the
-        #                  JAWS job dir and add stderr / out to job record (what do to about huge
-        #                  logs?) and set job to error 
+        # TODO ERRHANDLING IMPORTANT if in an error state, use https://github.com/ICRAR/ijson
+        #                  to pull data out of the the erros.json file at NERSC (since it could
+        #                  be huge. Store the stderr/out files... where? Check their Etags
+        #                  and set job to error 
         await self._mongo.update_job_state(
             job.id,
             models.JobState.JOB_SUBMITTED,
@@ -187,7 +198,6 @@ class NERSCJAWSRunner:
         await self._coman.run_coroutine(self._upload_files(job, jaws_info))
     
     async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
-        logr = logging.getLogger(__name__)
 
         async def presign(output_files: list[Path]) -> list[S3PresignedPost]:
             root = job.job_input.output_dir
@@ -218,10 +228,7 @@ class NERSCJAWSRunner:
                 timestamp.utcdatetime(),
             )
         except Exception as e:
-            # TODO LOGGING figure out how logging it going to work etc.
-            logr.exception(f"Error starting upload for job {job.id}")
-            # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
-            raise e
+            await self._handle_exception(e, job.id, "starting file upload for")
 
     async def upload_complete(self, job: models.AdminJobDetails):
         """
@@ -234,13 +241,12 @@ class NERSCJAWSRunner:
         #                  no errors, continue, otherwise put the job into an errored state.
         # TODO ERRHANDLING IMPORTANT upload the output file from the upload task and check for
         #                  errors. If any exist, put the job into an errored state.
-        # TDOO LOGGING Add any relevant logs from the task / download task output file in state
+        # TODO LOGGING Add any relevant logs from the task / download task output file in state
         #                  call. Alternatively, just add code to fetch them from NERSC rather
         #                  than storing them permanently. 99% of the time they'll be uninteresting
         await self._coman.run_coroutine(self._upload_complete(job))
     
     async def _upload_complete(self, job: models.AdminJobDetails):
-        logr = logging.getLogger(__name__)
         try:
             md5s = await self._nman.get_uploaded_JAWS_files(job)
             filemd5s = {os.path.join(job.job_input.output_dir, f): md5 for f, md5 in md5s.items()}
@@ -265,7 +271,4 @@ class NERSCJAWSRunner:
                 timestamp.utcdatetime()
             )
         except Exception as e:
-            # TODO LOGGING figure out how logging it going to work etc.
-            logr.exception(f"Error completing job {job.id}")
-            # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
-            raise e
+            await self._handle_exception(e, job.id, "completing")

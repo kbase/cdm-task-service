@@ -59,7 +59,7 @@ class JobState:
         image = await self._mongo.get_image(parsedimage.name, digest=parsedimage.digest, tag=tag)
         await self._s3.has_bucket(job_input.output_dir.split("/", 1)[0])
         paths = [f.file if isinstance(f, models.S3File) else f for f in job_input.input_files]
-        # TODO PERF may wan to make concurrency configurable here
+        # TODO PERF may want to make concurrency configurable here
         # TODO PERF this checks the file path syntax again, consider some way to avoid
         meta = await self._s3.get_object_meta(S3Paths(paths))
         new_input = []
