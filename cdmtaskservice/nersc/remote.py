@@ -7,15 +7,32 @@ python versions.
 '''
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import requests
+from typing import Any
 
 from cdmtaskservice.s3.remote import process_data_transfer_manifest as s3_pdtm
 
 
-def process_data_transfer_manifest(manifest_file_path: str, callback_url: str):
+def _generate_md5s(path: str, files: list[dict[str, Any]]):
+    # Maybe could speed this up with parallelization or async? Probably disk limited
+    # Test different approaches if it's taking a long time
+    path2md5 = {}
+    for f in files:
+        with open(f["file"], "rb") as fi:
+            path2md5[f["file"]] = hashlib.file_digest(fi, "md5").hexdigest()
+    with open(path, "w") as f:
+        json.dump(path2md5, f)
+
+
+def process_data_transfer_manifest(
+        manifest_file_path: str,
+        callback_url: str,
+        md5_json_file_path: str = None,
+    ):
     """
     Processes an upload manifest file.
     
@@ -29,7 +46,7 @@ def process_data_transfer_manifest(manifest_file_path: str, callback_url: str):
     # stress error checking too much.
     # TODO TEST add tests for this and its dependency functions, including logging
     # Potential performance improvement could include a shared cross job cache for files
-    #    only useful if jobs are reusing the same files, whcih seems def possible
+    #    only useful if jobs are reusing the same files, which seems def possible
     # TODO LOGGINNG logging doesn't work
     # TODO IMPORTANT ERRORHANDLING write an output file that can be read by the CTS
     #                sfapi tasks only last for 10 minutes after completions
@@ -37,6 +54,8 @@ def process_data_transfer_manifest(manifest_file_path: str, callback_url: str):
     try:
         with open(manifest_file_path) as f:
             manifest = json.load(f)
+        if md5_json_file_path:  # assume that this is only present for uploads
+            _generate_md5s(md5_json_file_path, manifest["file-transfers"]["files"])
         asyncio.run(s3_pdtm(manifest["file-transfers"]))
     finally:
         log.info(f"Pinging callback url {callback_url}")
@@ -48,4 +67,7 @@ def process_data_transfer_manifest(manifest_file_path: str, callback_url: str):
 
 if __name__ == "__main__":
     process_data_transfer_manifest(
-        os.environ["CTS_MANIFEST_LOCATION"], os.environ["CTS_CALLBACK_URL"])
+        os.environ["CTS_MANIFEST_LOCATION"],
+        os.environ["CTS_CALLBACK_URL"],
+        os.environ.get("CTS_MD5_FILE_LOCATION")
+    )
