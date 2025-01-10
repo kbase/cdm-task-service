@@ -118,8 +118,8 @@ async def submit_job(
     job_input: models.JobInput,
     user: kb_auth.KBaseUser=Depends(_AUTH),
 ) -> SubmitJobResponse:
-    job_submit = app_state.get_app_state(r).job_submit
-    return SubmitJobResponse(job_id=await job_submit.submit(job_input, user))
+    job_state = app_state.get_app_state(r).job_state
+    return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
 
 
 _ANN_JOB_ID = Annotated[str, FastPath(
