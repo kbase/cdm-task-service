@@ -202,7 +202,8 @@ class NERSCJAWSRunner:
     async def _job_complete(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
         if not jaws_client.is_done(jaws_info):
             raise InvalidJobStateError("JAWS run is incomplete")
-        if jaws_client.succeeded(jaws_info):
+        res = jaws_client.result(jaws_info)
+        if res == jaws_client.JAWSResult.SUCCESS:
             await self._mongo.update_job_state(
                 job.id,
                 models.JobState.JOB_SUBMITTED,
@@ -210,7 +211,7 @@ class NERSCJAWSRunner:
                 timestamp.utcdatetime()
             )
             await self._coman.run_coroutine(self._upload_files(job, jaws_info))
-        else:
+        elif res == jaws_client.JAWSResult.FAILED:
             await self._mongo.update_job_state(
                 job.id,
                 models.JobState.JOB_SUBMITTED,
@@ -218,6 +219,17 @@ class NERSCJAWSRunner:
                 timestamp.utcdatetime()
             )
             await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
+        elif res == jaws_client.JAWSResult.SYSTEM_ERROR:
+            await self._mongo.set_job_error(
+                job.id,
+                "An unexpected error occurred",
+                "JAWS failed to run the job - check the JAWS job logs",
+                models.JobState.ERROR,
+                # TODO TEST will need a way to mock out timestamps
+                timestamp.utcdatetime(),
+            )
+        else:  # should never happen
+            raise ValueError(f"unexpected JAWS result: {res}")
     
     async def _upload_container_logs(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
         # we're assuming here that the errors.json file @ NERSC has the std* files
