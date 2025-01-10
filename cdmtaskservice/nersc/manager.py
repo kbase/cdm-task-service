@@ -542,3 +542,20 @@ class NERSCManager:
             concurrency,
             insecure_ssl,
         )
+
+    async def get_uploaded_JAWS_files(self, job: models.Job) -> dict[str, str]:
+        """
+        Get the list of files that were uploaded to S3 as part of a JAWS job.
+        
+        Returns a dict of file paths relative to the output directory of a container to their
+        MD5s.
+        
+        Expects that the upload_JAWS_job_files function has been run, and will error otherwise.
+        """
+        _not_falsy(job, "job")
+        path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id / _MD5_JSON_FILE_NAME
+        cli = self._client_provider()
+        dtns = await cli.compute(Machine.dtns)
+        md5s_json = await self._get_async_path(dtns, path).download()
+        file_to_md5 = json.load(md5s_json)
+        return {jaws_output.get_relative_file_path(f): md5 for f, md5 in file_to_md5.items()}

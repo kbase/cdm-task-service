@@ -237,13 +237,36 @@ class NERSCJAWSRunner:
         # TDOO LOGGING Add any relevant logs from the task / download task output file in state
         #                  call. Alternatively, just add code to fetch them from NERSC rather
         #                  than storing them permanently. 99% of the time they'll be uninteresting
-        # TODO DATA CORRECTNESS IMPORTANT upload the file list & MD5 of the files, check the MD5s 
-        #                  vs the e-tags in Minio and save the files & e-tags to the job
-        # TODO DISKSPACE will need to clean up job results @ NERSC
-        await self._mongo.update_job_state(
-            job.id,
-            models.JobState.UPLOAD_SUBMITTED,
-            models.JobState.COMPLETE,
-            # TODO TEST will need a way to mock out timestamps
-            timestamp.utcdatetime()
-        )
+        await self._coman.run_coroutine(self._upload_complete(job))
+    
+    async def _upload_complete(self, job: models.AdminJobDetails):
+        logr = logging.getLogger(__name__)
+        try:
+            md5s = await self._nman.get_uploaded_JAWS_files(job)
+            filemd5s = {os.path.join(job.job_input.output_dir, f): md5 for f, md5 in md5s.items()}
+            # TODO PERF parsing the paths for the zillionth time
+            # TODO PERF configure / set concurrency
+            s3objs = await self._s3.get_object_meta(S3Paths(filemd5s.keys()))
+            outfiles = []
+            for o in s3objs:
+                if o.e_tag != filemd5s[o.path]:
+                    raise ValueError(
+                        f"Expected Etag {filemd5s[o.path]} but got {o.e_tag} for uploaded "
+                        + f"file {o.path}"
+                    )
+                outfiles.append(models.S3FileOutput(file=o.path, etag=o.e_tag))
+            # TODO DISKSPACE will need to clean up job results @ NERSC
+            # TODO NEXT save output files to mongo and remove log line
+            logr.info(f"outfiles:\n{outfiles}")
+            await self._mongo.update_job_state(
+                job.id,
+                models.JobState.UPLOAD_SUBMITTED,
+                models.JobState.COMPLETE,
+                # TODO TEST will need a way to mock out timestamps
+                timestamp.utcdatetime()
+            )
+        except Exception as e:
+            # TODO LOGGING figure out how logging it going to work etc.
+            logr.exception(f"Error completing job {job.id}")
+            # TODO IMPORTANT ERRORHANDLING update job state to ERROR w/ message and don't raise
+            raise e
