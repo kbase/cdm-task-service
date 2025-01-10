@@ -256,10 +256,9 @@ class NERSCJAWSRunner:
                     )
                 outfiles.append(models.S3FileOutput(file=o.path, etag=o.e_tag))
             # TODO DISKSPACE will need to clean up job results @ NERSC
-            # TODO NEXT save output files to mongo and remove log line
-            logr.info(f"outfiles:\n{outfiles}")
-            await self._mongo.update_job_state(
+            await self._mongo.add_output_files_to_job(
                 job.id,
+                outfiles,
                 models.JobState.UPLOAD_SUBMITTED,
                 models.JobState.COMPLETE,
                 # TODO TEST will need a way to mock out timestamps
