@@ -16,7 +16,7 @@ from sfapi_client.paths import AsyncRemotePath
 from sfapi_client.compute import Machine, AsyncCompute
 import sys
 from types import ModuleType
-from typing import Self, Awaitable, Any
+from typing import Self, Awaitable, Any, NamedTuple
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
@@ -134,6 +134,19 @@ def _get_dependencies(mod: ModuleType, cts_dep: set[ModuleType], pip_dep: set[Mo
         elif rootname not in sys.stdlib_module_names:
             pip_dep.add(m)
 _get_dependencies(remote, _CTS_DEPENDENCIES, _PIP_DEPENDENCIES)
+
+
+class TransferResult(NamedTuple):
+    """ Results of a file transfer between NERSC and another location. """
+    
+    success: bool = True
+    """ True if the file transfer succeeded. """
+    
+    message: str | None = None
+    """ If the transfer failed, contains an error message about the transfer. """
+    
+    traceback: str | None = None
+    """ If the transfer failed, may contain a stack trace if available. """
 
 
 class NERSCManager:
@@ -439,32 +452,44 @@ class NERSCManager:
         result = await self._get_async_path(dtns, path).download()
         return json.load(result)
     
-    async def get_s3_download_result(self, job: models.Job) -> tuple[str, str] | None:
+    async def get_s3_download_result(self, job: models.Job) -> TransferResult:
         """
-        Get the results of downloading files to NERSC from s3.
-        
-        Returns a tuple of the error message and the error traceback or None if the upload was
-        successful.
+        Get the results of downloading files to NERSC from s3 for a job.
         """
-        return await self._get_transfer_result(job, "download")
+        return (await self._get_transfer_result(job, "download"))[0]
 
-    async def get_presigned_upload_result(self, job: models.Job) -> tuple[str, str] | None:
+    async def get_presigned_upload_result(self, job: models.Job) -> TransferResult:
         """
-        Get the results of uploading files from NERSC to presigned URLs.
+        Get the results of uploading files from NERSC to presigned URLs for a job.
+        """
+        return (await self._get_transfer_result(job, "upload"))[0]
+    
+    # not thrilled about this api... probably needs a rethink
+    async def get_presigned_error_log_upload_result(self, job: models.Job
+    ) -> tuple[TransferResult, list[tuple[int, str]] | None]:
+        """
+        Get the results of uploading logs files from an errored job from
+        NERSC to presigned URLs.
         
-        Returns a tuple of the error message and the error traceback or None if the upload was
-        successful.
+        Returns a tuple of
+        * the result of the transfer
+        * a list of tuples consisting of
+          * The return code for each container
+          * Any error message for each container. These are typically not useful to users.
+          * This will be None if the upload failed.
         """
-        return await self._get_transfer_result(job, "upload")
+        return await self._get_transfer_result(job, "error_log")
 
     async def _get_transfer_result(self, job: models.Job, op: str) -> tuple[str, str] | None:
         _not_falsy(job, "job")
         path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id / f"{op}_result.json"
         res = await self._download_json_file_from_NERSC(Machine.dtns, path)
         if res["result"] == "success":
-            return None
+            return TransferResult(), res["data"]
         else:
-            return res["job_msg"], res["job_trace"]
+            return TransferResult(
+                success=False, message=res["job_msg"], traceback=res["job_trace"]
+            ), None
 
     async def run_JAWS(self, job: models.Job, file_download_concurrency: int = 10) -> str:
         """
@@ -516,7 +541,7 @@ class NERSCManager:
         self, cli: AsyncClient, job: models.Job, concurrency: int
     ):
         manifest_files = generate_manifest_files(job)
-        manifest_file_paths = self._get_manifest_file_paths(job.id, len(manifest_files))
+        manifest_file_paths = self._get_manifest_file_paths(len(manifest_files))
         fmap = {m: _JOB_FILES / m.file for m in job.job_input.input_files}
         wdljson = wdl.generate_wdl(job, fmap, manifest_file_paths)
         pre = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id
@@ -544,7 +569,7 @@ class NERSCManager:
             for c in coros:
                 c.close()
 
-    def _get_manifest_file_paths(self, job_id: str, count: int) -> list[Path]:
+    def _get_manifest_file_paths(self, count: int) -> list[Path]:
         if count == 0:
             return []
         return [_JOB_MANIFESTS / f"{_MANIFEST_FILE_PREFIX}{c}" for c in range(1, count + 1)]

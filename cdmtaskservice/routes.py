@@ -23,6 +23,7 @@ from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
     get_job_complete_callback,
     get_upload_complete_callback,
+    get_error_log_upload_complete_callback,
 )
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.git_commit import GIT_COMMIT
@@ -300,6 +301,22 @@ async def upload_complete(
 ):
     runner, job = await _callback_handling(r, "Upload", job_id)
     await runner.upload_complete(job)
+
+
+@ROUTER_CALLBACKS.get(
+    f"/{get_error_log_upload_complete_callback()}/{{job_id}}",
+    summary="Report error log file upload complete",
+    description="Report that log file upload for a job in an errored state is complete. "
+        + "This method is not expected to be called by users.",
+    status_code = status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def error_log_upload_complete(
+    r: Request,
+    job_id: _ANN_JOB_ID
+):
+    runner, job = await _callback_handling(r, "Error log upload", job_id)
+    await runner.error_log_upload_complete(job)
 
 
 async def _callback_handling(

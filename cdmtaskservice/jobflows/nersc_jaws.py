@@ -6,7 +6,7 @@ import logging
 import os
 from pathlib import Path
 import traceback
-from typing import Any
+from typing import Any, Callable, Awaitable
 
 from cdmtaskservice import models
 from cdmtaskservice import timestamp
@@ -14,19 +14,26 @@ from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string 
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
     get_upload_complete_callback,
-    get_error_complete_callback,
+    get_error_log_upload_complete_callback,
 )
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidJobStateError
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.mongo import MongoDAO
-from cdmtaskservice.nersc.manager import NERSCManager
+from cdmtaskservice.nersc.manager import NERSCManager, TransferResult
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
 
 # Not sure how other flows would work and how much code they might share. For now just make
 # this work and pull it apart / refactor later.
+
+# TODO RELIABILITY will need a system for detecting NERSC downs, not putting jobs into an
+#                  error state while it's down, and resuming jobs when it's back up
+
+# TODO ENV SEPARATION make a server group ID and separate data based on that ID
+#                     e.g. may have different S3 envs with diffferent files at the same path,
+#                     need to keep separate
 
 
 class NERSCJAWSRunner:
@@ -84,15 +91,31 @@ class NERSCJAWSRunner:
             str(e),
             traceback.format_exc(),
         )
-        
-    async def _handle_transfer_exception(self, job: models.Job, op: str, err: (str, str)):
-        logging.getLogger(__name__).error(
-            f"{op} failed for job {job.id}: {err[0]}\n{err[1]}"
-        )
-        await self._handle_general_exc(
-            job.id, f"An unexpected error occurred during file {op.lower()}", err[0], err[1],
-        )
-        raise ValueError(f"{op} failed: {err[0]}")
+    
+    async def _get_transfer_result(
+        self,
+        trans_func: Callable[[models.Job], Awaitable[tuple[TransferResult, Any]]],
+        job: models.Job,
+        op: str,
+        err_type: str,
+    ) -> Any:
+        try:
+            res, data = await trans_func(job)
+        except Exception as e:
+            await self._handle_exception(e, job.id, err_type)
+            raise
+        if not res.success:
+            logging.getLogger(__name__).error(
+                f"{op} failed for job {job.id}: {res.message}\n{res.traceback}"
+            )
+            await self._handle_general_exc(
+                job.id,
+                f"An unexpected error occurred during file {op.lower()}",
+                res.message,
+                res.traceback,
+            )
+            raise ValueError(f"{op} failed: {res.message}")
+        return data
     
     async def _handle_general_exc(self, job_id: str, user_err: str, admin_err: str, traceback:str):
         # if this fails, well, then we're screwed
@@ -158,9 +181,11 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the download submitted state")
-        err = await self._nman.get_s3_download_result(job)
-        if err:
-            await self._handle_transfer_exception(job, "Download", err)
+        async def tfunc(job: models.Job):
+            return await self._nman.get_s3_download_result(job), None
+        await self._get_transfer_result(  # check for errors
+            tfunc, job, "Download", "getting download results for",
+        )
         await self._mongo.update_job_state(
             job.id,
             models.JobState.DOWNLOAD_SUBMITTED,
@@ -247,7 +272,7 @@ class NERSCJAWSRunner:
                 job,
                 jaws_info["output_dir"],
                 presign,
-                get_error_complete_callback(self._callback_root, job.id),
+                get_error_log_upload_complete_callback(self._callback_root, job.id),
                 insecure_ssl=self._s3insecure,
             )
             await self._mongo.add_NERSC_log_upload_task_id(
@@ -258,9 +283,6 @@ class NERSCJAWSRunner:
                 # TODO TEST will need a way to mock out timestamps
                 timestamp.utcdatetime(),
             )
-            logging.getLogger(__name__).info(f"Error task_id: {task_id}")
-            # TODO NEXT add error complete endpoint and change state to error
-            # and add log dir loc and error message based on the data field from the result.json
         except Exception as e:
             await self._handle_exception(e, job.id, "starting error processing for")
     
@@ -301,9 +323,11 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the upload submitted state")
-        err = await self._nman.get_presigned_upload_result(job)
-        if err:
-            await self._handle_transfer_exception(job, "Upload", err)
+        async def tfunc(job: models.Job):
+            return await self._nman.get_presigned_upload_result(job), None
+        await self._get_transfer_result(  # check for errors
+            tfunc, job, "Upload", "getting upload results for",
+        )
         await self._coman.run_coroutine(self._upload_complete(job))
     
     async def _upload_complete(self, job: models.AdminJobDetails):
@@ -332,3 +356,33 @@ class NERSCJAWSRunner:
             )
         except Exception as e:
             await self._handle_exception(e, job.id, "completing")
+
+
+    async def error_log_upload_complete(self, job: models.AdminJobDetails):
+        """
+        Complete an errored job after the log file upload is complete. The job is expected to
+        be in the error processing submitted state.
+        """
+        if _not_falsy(job, "job").state != models.JobState.ERROR_PROCESSING_SUBMITTED:
+            raise InvalidJobStateError("Job must be in the error processing submitted state")
+        data = await self._get_transfer_result(
+            self._nman.get_presigned_error_log_upload_result,
+            job,
+            "Error log upload",
+            "getting error log upload results for",
+        )
+        if {i[0] for i in data} != {0}:
+            err = (f"At least one container exited with a non-zero error code. "
+                   + "Please examine the logs for details.")
+        else:  # will probably need to expand this as we learn about JAWS errors
+            err = "An unexpected error occurred."
+        # if we can't talk to mongo there's not much to do
+        await self._mongo.set_job_error(
+            job.id,
+            err,
+            f"Example container error: {data[0][1]}",
+            models.JobState.ERROR,
+            # TODO TEST will need a way to mock out timestamps
+            timestamp.utcdatetime(),
+            logpath=os.path.join(self._s3logdir, job.id),
+        )
