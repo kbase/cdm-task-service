@@ -128,6 +128,15 @@ class NERSCJAWSRunner:
             timestamp.utcdatetime(),
             traceback=traceback,
         )
+    
+    async def _check_task_complete(self, task_id: str, job_id: str, tasktype: str):
+        try:
+            complete = await self._nman.is_task_complete(task_id)
+        except Exception as e:
+            await self._handle_exception(e, job_id, f"getting {tasktype.lower()} task status")
+            raise
+        if not complete:
+            raise InvalidJobStateError(f"{tasktype} task is not complete")
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
@@ -181,6 +190,7 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the download submitted state")
+        await self._check_task_complete(job.nersc_details.download_task_id[-1], job.id, "Download")
         async def tfunc(job: models.Job):
             return await self._nman.get_s3_download_result(job), None
         await self._get_transfer_result(  # check for errors
@@ -323,6 +333,7 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the upload submitted state")
+        await self._check_task_complete(job.nersc_details.upload_task_id[-1], job.id, "Upload")
         async def tfunc(job: models.Job):
             return await self._nman.get_presigned_upload_result(job), None
         await self._get_transfer_result(  # check for errors
@@ -365,6 +376,9 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.ERROR_PROCESSING_SUBMITTED:
             raise InvalidJobStateError("Job must be in the error processing submitted state")
+        await self._check_task_complete(
+            job.nersc_details.log_upload_task_id[-1], job.id, "Error log upload"
+        )
         data = await self._get_transfer_result(
             self._nman.get_presigned_error_log_upload_result,
             job,

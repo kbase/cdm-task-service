@@ -4,6 +4,7 @@ Handler for data transfer between CDM sources and NERSC.
 
 import asyncio
 from collections.abc import Callable
+from httpx import HTTPStatusError
 import io
 import inspect
 import json
@@ -286,6 +287,26 @@ class NERSCManager:
         asrp = AsyncRemotePath(path=target, compute=compute)
         asrp.perms = "-"  # hack to prevent an unnecessary network call
         return asrp
+
+    async def is_task_complete(self, task_id: str) -> bool:
+        """
+        Returns true if the the task is complete, signified by:
+        * The task data denoting it as complete, or
+        * The task not being available in the NERSC SFAPI (e.g. HTTP 404), as tasks are removed
+          10 minutes after completion.
+        The task may be in a successful or errored state.
+        
+        Note that if a task ID never existed, this method will return that it is
+        complete, as there is no way to tell the difference.
+        """
+        cli = self._client_provider()
+        try:
+            task = await cli.get(f"tasks/{task_id}")
+        except HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return True
+            raise
+        return task.json()["status"] == "completed"
 
     async def download_s3_files(
         self,
