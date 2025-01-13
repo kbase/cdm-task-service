@@ -13,9 +13,11 @@ import os
 import requests
 import sys
 import traceback
-from typing import Any
+from typing import Any, Callable
 
 from cdmtaskservice.s3.remote import process_data_transfer_manifest as s3_pdtm
+
+# TODO TEST add tests for this file and its dependency functions
 
 
 def _generate_md5s(path: str, files: list[dict[str, Any]]):
@@ -31,24 +33,29 @@ def _generate_md5s(path: str, files: list[dict[str, Any]]):
 
 def process_data_transfer_manifest(
         manifest_file_path: str,
-        result_file_path: str,
-        callback_url: str,
         md5_json_file_path: str = None,
     ):
     """
     Processes an upload manifest file.
     
     manifest_file_path - the path to to the transfer manifest file.
-    touch_on_complete - a path to a file to touch when the transfer is complete. Separate from
-        the manifest to guard against load issues.
+    md5_json_file_path - an optional path to write a JSON mapping of file path to MD4 for the
+        uploaded files. Only valid with an upload manifest.
     """
     # The manifest should be only used by the CDM task service and so we don't document
     # its structure.
     # Similarly, it should only be produced and consumed by the service, and so we don't
     # stress error checking too much.
-    # TODO TEST add tests for this and its dependency functions
     # Potential performance improvement could include a shared cross job cache for files
     #    only useful if jobs are reusing the same files, which seems def possible
+    with open(manifest_file_path) as f:
+        manifest = json.load(f)
+    if md5_json_file_path:  # assume that this is only present for uploads
+        _generate_md5s(md5_json_file_path, manifest["file-transfers"]["files"])
+    asyncio.run(s3_pdtm(manifest["file-transfers"]))
+
+
+def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callback_url: str):
     jex = None
     jext = None
     cex = None
@@ -56,11 +63,7 @@ def process_data_transfer_manifest(
     ctext = None
     ret = None
     try:
-        with open(manifest_file_path) as f:
-            manifest = json.load(f)
-        if md5_json_file_path:  # assume that this is only present for uploads
-            _generate_md5s(md5_json_file_path, manifest["file-transfers"]["files"])
-        asyncio.run(s3_pdtm(manifest["file-transfers"]))
+        func(*args)
     except Exception as jobexep:
         jex = jobexep
         jext = traceback.format_exc()
@@ -68,11 +71,11 @@ def process_data_transfer_manifest(
         try:
             # may want some retries here, halting on incorrect job state messages
             ret = requests.get(callback_url)
+            if ret.status_code < 200 or ret.status_code > 299:
+                ctext = ret.text
         except Exception as e:
             cex = e
             cext = traceback.format_exc()
-        if ret.status_code < 200 or ret.status_code > 299:
-            ctext = ret.text
     with open(result_file_path, "w") as f:
         if jex or cex or ctext:
             j = {
@@ -93,10 +96,21 @@ def process_data_transfer_manifest(
             json.dump({"result": "success"}, f)
 
 
+def main():
+    mode = os.environ["CTS_MODE"]
+    resfile = os.environ["CTS_RESULT_FILE_LOCATION"]
+    callback_url = os.environ["CTS_CALLBACK_URL"]
+    if mode == "manifest":
+        _error_wrapper(
+            process_data_transfer_manifest,
+            [os.environ["CTS_MANIFEST_LOCATION"], os.environ.get("CTS_MD5_FILE_LOCATION")],
+            resfile,
+            callback_url
+        )
+    # TDOO NEXT add errors.json parse mode
+    else:  # Should never happen
+        raise ValueError(f"unexpected mode: {mode}")
+
+
 if __name__ == "__main__":
-    process_data_transfer_manifest(
-        os.environ["CTS_MANIFEST_LOCATION"],
-        os.environ["CTS_RESULT_FILE_LOCATION"],
-        os.environ["CTS_CALLBACK_URL"],
-        os.environ.get("CTS_MD5_FILE_LOCATION"),
-    )
+    main()

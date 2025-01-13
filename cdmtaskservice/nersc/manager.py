@@ -77,14 +77,15 @@ _JAWS_INPUT_JSON = "input.json"
 # TODO PERF add start and end time to task output and log / record in db / put in result file)
 # TODO NERSCFEATURE if NERSC puts python 3.11 on the dtns revert to regular load 
 _PYTHON_LOAD_HACK = "module use /global/common/software/nersc/pe/modulefiles/latest"
-_PROCESS_DATA_XFER_MANIFEST_FILENAME = "process_data_transfer_manifest.sh"
-_PROCESS_DATA_XFER_MANIFEST = f"""
+_RUN_CTS_REMOTE_CODE_FILENAME = "run_cts_remote_code.sh"
+_RUN_CTS_REMOTE_CODE = f"""
 #!/usr/bin/env bash
 
 {_PYTHON_LOAD_HACK}
 module load python
 
 export PYTHONPATH=$CTS_CODE_LOCATION
+export CTS_MODE=$CTS_MODE
 export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
 export CTS_MD5_FILE_LOCATION=$CTS_MD5_FILE_LOCATION
 export CTS_RESULT_FILE_LOCATION=$CTS_RESULT_FILE_LOCATION
@@ -92,6 +93,7 @@ export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
 export SCRATCH=$SCRATCH
 
 echo "PYTHONPATH=[$PYTHONPATH]"
+echo "CTS_MODE=[$CTS_MODE]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
 echo "CTS_MD5_FILE_LOCATION=[$CTS_MD5_FILE_LOCATION]"
 echo "CTS_RESULT_FILE_LOCATION=[$CTS_RESULT_FILE_LOCATION]"
@@ -188,8 +190,8 @@ class NERSCManager:
                 )
             tg.create_task(self._upload_file_to_nersc(
                 perlmutter,
-                self._nersc_code_path / _PROCESS_DATA_XFER_MANIFEST_FILENAME,
-                bio=io.BytesIO(_PROCESS_DATA_XFER_MANIFEST.encode()),
+                self._nersc_code_path / _RUN_CTS_REMOTE_CODE_FILENAME,
+                bio=io.BytesIO(_RUN_CTS_REMOTE_CODE.encode()),
                 chmod="u+x",
             ))
             tg.create_task(self._upload_file_to_nersc(
@@ -246,8 +248,6 @@ class NERSCManager:
         if target.parent != Path("."):
             cmd = f"{dtw}mkdir -p {target.parent}"
             await compute.run(cmd)
-        # skip some API calls vs. the upload example in the NERSC docs
-        # don't use a directory as the target or it makes an API call
         asrp = self._get_async_path(compute, target)
         # TODO ERRORHANDLING throw custom errors
         if file:
@@ -260,6 +260,8 @@ class NERSCManager:
             await compute.run(cmd)
 
     def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
+        # skip some API calls vs. the upload example in the NERSC docs
+        # don't use a directory as the target or it makes an API call
         asrp = AsyncRemotePath(path=target, compute=compute)
         asrp.perms = "-"  # hack to prevent an unnecessary network call
         return asrp
@@ -338,12 +340,13 @@ class NERSCManager:
         await self._upload_file_to_nersc(dt, manifestpath, bio=manifest)
         command = [
             f"{_DT_WORKAROUND}; ",
+            f"export CTS_MODE=manifest; ",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_MANIFEST_LOCATION={manifestpath}; ",
             f"export CTS_RESULT_FILE_LOCATION={rootpath / task_type}_result.json; ",
             f"export CTS_CALLBACK_URL={callback_url}; ",
             f"export SCRATCH=$SCRATCH; ",
-            f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}',
+            f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
         ]
         if upload_md5s_file:
             command.insert(1, f"export CTS_MD5_FILE_LOCATION={rootpath / _MD5_JSON_FILE_NAME}; ")
