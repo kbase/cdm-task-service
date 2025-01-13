@@ -14,15 +14,21 @@ class JAWSClient:
     """ The JAWS client. """
     
     @classmethod
-    async def create(self, url: str, token: str):
+    async def create(self, url: str, token: str, expected_user: str):
         """
         Initialize the client.
         
         url - the JAWS Central URL.
         token - the JAWS token.
+        expected_user - the user for the token.
         """
         cli = JAWSClient(url, token)
         user = await cli._user()  # test connection & token
+        if user != expected_user:
+            await cli.close()
+            raise ValueError(
+                f"JAWS client expected user {expected_user} for token, but got {user}"
+            )
         logging.getLogger(__name__).info(f"Initialized JAWS client with user {user}")
         return cli
     
@@ -44,6 +50,8 @@ class JAWSClient:
             res.raise_for_status()
             if res.ok:  # assume here that if we get a 2XX we get JSON. Fix if necessary
                 return await res.json()
+            else:
+                raise ValueError("not sure how this is possible, how exciting")
 
     async def _user(self) -> str:
         res = await self._get("user")

@@ -24,8 +24,8 @@ services:
       - KBCTS_KBASE_AUTH2_ADMIN_ROLES=CDM_TASK_SERVICE_ADMIN
       - KBCTS_KBASE_STAFF_ROLE=KBASE_STAFF
       - KBCTS_HAS_NERSC_ACCOUNT_ROLE=HAS_NERSC_ACCOUNT
+      - KBCTS_NERSC_JAWS_USER=cdm_ts
       - KBCTS_SFAPI_CRED_PATH=/creds/sfapi_creds
-      - KBCTS_SFAPI_USER=cdm_ts
       - KBCTS_NERSC_REMOTE_CODE_DIR=/global/cfs/cdirs/kbase/cdm_task_service
       - KBCTS_JAWS_URL=https://jaws-api.jgi.doe.gov/api/v2
       # Don't commit your token to github please

@@ -7,6 +7,7 @@ import tomllib
 from typing import BinaryIO, TextIO
 
 _SEC_AUTH = "Authentication"
+_SEC_NERSC_JAWS = "NERSC_JAWS"
 _SEC_NERSC = "NERSC"
 _SEC_JAWS = "JAWS"
 _SEC_S3 = "S3"
@@ -27,10 +28,11 @@ class CDMTaskServiceConfig:
         a full admin for the CDM task service
     kbase_staff_role: str - the Auth2 custom role indicating a user is a member of KBase staff.
     has_nersc_account_role: str - the Auth2 custom role indicating a user has a NERSC account.
+    nersc_jaws_user: str - the user name of the user associated with the NERSC and JAWS
+        credentials.
     sfapi_cred_path: str - the path to a NERSC Superfacility API credential file. The file is
         expected to have the client ID as the first line and the client private key in PEM format
         as the remaining lines.
-    sfapi_user: str - the user name of the user accociated with the credentials.
     nersc_remote_code_dir: str - the location at NERSC to upload remote code.
     jaws_url: str - the URL of the JAWS Central service.
     jaws_token: str - the JAWS token used to run jobs.
@@ -76,8 +78,8 @@ class CDMTaskServiceConfig:
         self.has_nersc_account_role = _get_string_required(
             config, _SEC_AUTH, "has_nersc_account_role"
         )
+        self.nersc_jaws_user = _get_string_required(config, _SEC_NERSC_JAWS, "user")
         self.sfapi_cred_path = _get_string_required(config, _SEC_NERSC, "sfapi_cred_path")
-        self.sfapi_user = _get_string_required(config, _SEC_NERSC, "sfapi_user")
         self.nersc_remote_code_dir = _get_string_required(config, _SEC_NERSC, "remote_code_dir")
         self.jaws_url = _get_string_required(config, _SEC_JAWS, "url")
         self.jaws_token = _get_string_required(config, _SEC_JAWS, "token")
@@ -115,8 +117,8 @@ class CDMTaskServiceConfig:
             f"Authentication full admin roles: {self.auth_full_admin_roles}",
             f"Authentication KBase staff role: {self.kbase_staff_role}",
             f"Authentication has NERSC account role: {self.has_nersc_account_role}",
+            f"NERSC / JAWS user: {self.nersc_jaws_user}",
             f"NERSC client credential path: {self.sfapi_cred_path}",
-            f"NERSC client user: {self.sfapi_user}",
             f"NERSC remote code dir: {self.nersc_remote_code_dir}",
             f"JAWS Central URL: {self.jaws_url}",
             "JAWS token: REDACTED FOR THE NATIONAL SECURITY OF GONDWANALAND",

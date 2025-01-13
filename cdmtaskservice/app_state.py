@@ -66,37 +66,41 @@ async def build_app(
         full_admin_roles=cfg.auth_full_admin_roles
     )
     logr.info("Done")
-    logr.info("Initializing NERSC SFAPI client... ")
-    sfapi_client = await NERSCSFAPIClientProvider.create(Path(cfg.sfapi_cred_path), cfg.sfapi_user)
-    logr.info("Done")
-    logr.info("Setting up NERSC manager and installing code at NERSC...")
-    # TODO MULTICLUSTER service won't start if perlmutter is down, need to make it more dynamic
-    nerscman = await NERSCManager.create(
-        sfapi_client.get_client,
-        Path(cfg.nersc_remote_code_dir) / VERSION,
-        cfg.jaws_token,
-        cfg.jaws_group,
-    )
-    logr.info("Done")
-    logr.info("Initializing S3 client... ")
-    s3 = await S3Client.create(
-        cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
-    )
-    s3_external = await S3Client.create(
-        cfg.s3_external_url,
-        cfg.s3_access_key,
-        cfg.s3_access_secret,
-        insecure_ssl=cfg.s3_allow_insecure,
-        skip_connection_check=not cfg.s3_verify_external_url
-    )
-    logr.info("Done")
-    logr.info("Initializing MongoDB client...")
-    mongocli = await get_mongo_client(cfg)
-    logr.info("Done")
     jaws_client = None
+    sfapi_client = None
+    mongocli = None
     try:
+        logr.info("Initializing NERSC SFAPI client... ")
+        sfapi_client = await NERSCSFAPIClientProvider.create(
+            Path(cfg.sfapi_cred_path), cfg.nersc_jaws_user
+        )
+        logr.info("Done")
+        logr.info("Setting up NERSC manager and installing code at NERSC...")
+        # TODO MULTICLUSTER service won't start if perlmutter is down, need to make it more dynamic
+        nerscman = await NERSCManager.create(
+            sfapi_client.get_client,
+            Path(cfg.nersc_remote_code_dir) / VERSION,
+            cfg.jaws_token,
+            cfg.jaws_group,
+        )
+        logr.info("Done")
+        logr.info("Initializing S3 client... ")
+        s3 = await S3Client.create(
+            cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
+        )
+        s3_external = await S3Client.create(
+            cfg.s3_external_url,
+            cfg.s3_access_key,
+            cfg.s3_access_secret,
+            insecure_ssl=cfg.s3_allow_insecure,
+            skip_connection_check=not cfg.s3_verify_external_url
+        )
+        logr.info("Done")
+        logr.info("Initializing MongoDB client...")
+        mongocli = await get_mongo_client(cfg)
+        logr.info("Done")
         logr.info("Initializing JAWS Central client... ")
-        jaws_client = await JAWSClient.create(cfg.jaws_url, cfg.jaws_token)
+        jaws_client = await JAWSClient.create(cfg.jaws_url, cfg.jaws_token, cfg.nersc_jaws_user)
         logr.info("Done")
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
         nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
@@ -119,9 +123,12 @@ async def build_app(
             auth, sfapi_client, jaws_client, s3, job_state, images, runners
         )
     except:
-        mongocli.close()
+        if mongocli:
+            mongocli.close()
         if jaws_client:
             await jaws_client.close()
+        if sfapi_client:
+            await sfapi_client.destroy()
         raise
 
 
