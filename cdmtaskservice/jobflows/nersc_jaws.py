@@ -71,18 +71,35 @@ class NERSCJAWSRunner:
     async def _handle_exception(self, e: Exception, job_id: str, errtype: str):
         # TODO LOGGING figure out how logging it going to work etc.
         logging.getLogger(__name__).exception(f"Error {errtype} job {job_id}")
+        await self._handle_general_exc(
+            job_id,
+            # We'll need to see what kinds of errors happen and change the user message
+            # appropriately. Just provide a generic message for now, as most errors aren't
+            # going to be fixable by users
+            "An unexpected error occurred",
+            str(e),
+            traceback.format_exc(),
+        )
+        
+    async def _handle_transfer_exception(self, job: models.Job, op: str, err: (str, str)):
+        logging.getLogger(__name__).error(
+            f"{op} failed for job {job.id}: {err[0]}\n{err[1]}"
+        )
+        await self._handle_general_exc(
+            job.id, f"An unexpected error occurred during file {op.lower()}", err[0], err[1],
+        )
+        raise ValueError(f"{op} failed: {err[0]}")
+    
+    async def _handle_general_exc(self, job_id: str, user_err: str, admin_err: str, traceback:str):
         # if this fails, well, then we're screwed
         await self._mongo.set_job_error(
             job_id,
-            # We'll need to see what kinds of errors happen and change the user message appropriately.
-            # Just provide a generic message for now, as most errors aren't going to be fixable
-            # by users
-            "An unexpected error occurred",
-            str(e),
+            user_err,
+            admin_err,
             models.JobState.ERROR,
             # TODO TEST will need a way to mock out timestamps
             timestamp.utcdatetime(),
-            traceback=traceback.format_exc(),
+            traceback=traceback,
         )
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
@@ -138,12 +155,9 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the download submitted state")
-        # TODO ERRHANDLING IMPORTANT pull the task from the SFAPI. If it a) doesn't exist or b) has
-        #                  no errors, continue, otherwise put the job into an errored state.
-        # TODO ERRHANDLING IMPORTANT upload the output file from the download task and check for
-        #                  errors. If any exist, put the job into an errored state.
-        # TODO LOGGING Add any relevant logs from the task / download task output file in state
-        #                  call
+        err = await self._nman.get_s3_download_result(job)
+        if err:
+            await self._handle_transfer_exception(job, "Download", err)
         await self._mongo.update_job_state(
             job.id,
             models.JobState.DOWNLOAD_SUBMITTED,
@@ -237,13 +251,9 @@ class NERSCJAWSRunner:
         """
         if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the upload submitted state")
-        # TODO ERRHANDLING IMPORTANT pull the task from the SFAPI. If it a) doesn't exist or b) has
-        #                  no errors, continue, otherwise put the job into an errored state.
-        # TODO ERRHANDLING IMPORTANT upload the output file from the upload task and check for
-        #                  errors. If any exist, put the job into an errored state.
-        # TODO LOGGING Add any relevant logs from the task / download task output file in state
-        #                  call. Alternatively, just add code to fetch them from NERSC rather
-        #                  than storing them permanently. 99% of the time they'll be uninteresting
+        err = await self._nman.get_s3_upload_result(job)
+        if err:
+            await self._handle_transfer_exception(job, "Upload", err)
         await self._coman.run_coroutine(self._upload_complete(job))
     
     async def _upload_complete(self, job: models.AdminJobDetails):

@@ -16,7 +16,7 @@ from sfapi_client.paths import AsyncRemotePath
 from sfapi_client.compute import Machine, AsyncCompute
 import sys
 from types import ModuleType
-from typing import Self, Awaitable
+from typing import Self, Awaitable, Any
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
@@ -87,12 +87,14 @@ module load python
 export PYTHONPATH=$CTS_CODE_LOCATION
 export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
 export CTS_MD5_FILE_LOCATION=$CTS_MD5_FILE_LOCATION
+export CTS_RESULT_FILE_LOCATION=$CTS_RESULT_FILE_LOCATION
 export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
 export SCRATCH=$SCRATCH
 
 echo "PYTHONPATH=[$PYTHONPATH]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
 echo "CTS_MD5_FILE_LOCATION=[$CTS_MD5_FILE_LOCATION]"
+echo "CTS_RESULT_FILE_LOCATION=[$CTS_RESULT_FILE_LOCATION]"
 echo "CTS_CALLBACK_URL=[$CTS_CALLBACK_URL]"
 echo "SCRATCH=[$SCRATCH]"
 
@@ -338,6 +340,7 @@ class NERSCManager:
             f"{_DT_WORKAROUND}; ",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_MANIFEST_LOCATION={manifestpath}; ",
+            f"export CTS_RESULT_FILE_LOCATION={rootpath / task_type}_result.json; ",
             f"export CTS_CALLBACK_URL={callback_url}; ",
             f"export SCRATCH=$SCRATCH; ",
             f'"$CTS_CODE_LOCATION"/{_PROCESS_DATA_XFER_MANIFEST_FILENAME}',
@@ -412,6 +415,39 @@ class NERSCManager:
             "min-timeout-sec": _MIN_TIMEOUT_SEC,
             "sec-per-GB": _SEC_PER_GB,
         }
+    
+    async def _download_json_file_from_NERSC(self, machine: Machine, path: Path) -> dict[str, Any]:
+        cli = self._client_provider()
+        dtns = await cli.compute(machine)
+        result = await self._get_async_path(dtns, path).download()
+        return json.load(result)
+    
+    async def get_s3_download_result(self, job: models.Job) -> tuple[str, str] | None:
+        """
+        Get the results of downloading files to NERSC from s3.
+        
+        Returns a tuple of the error message and the error traceback or None if the upload was
+        successful.
+        """
+        return await self._get_s3_transfer_result(job, "download")
+
+    async def get_s3_upload_result(self, job: models.Job) -> tuple[str, str] | None:
+        """
+        Get the results of uploading files to NERSC from s3.
+        
+        Returns a tuple of the error message and the error traceback or None if the upload was
+        successful.
+        """
+        return await self._get_s3_transfer_result(job, "upload")
+
+    async def _get_s3_transfer_result(self, job: models.Job, op: str) -> tuple[str, str] | None:
+        _not_falsy(job, "job")
+        path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id / f"{op}_result.json"
+        res = await self._download_json_file_from_NERSC(Machine.dtns, path)
+        if res["result"] == "success":
+            return None
+        else:
+            return res["job_msg"], res["job_trace"]
 
     async def run_JAWS(self, job: models.Job, file_download_concurrency: int = 10) -> str:
         """
@@ -553,8 +589,5 @@ class NERSCManager:
         """
         _not_falsy(job, "job")
         path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id / _MD5_JSON_FILE_NAME
-        cli = self._client_provider()
-        dtns = await cli.compute(Machine.dtns)
-        md5s_json = await self._get_async_path(dtns, path).download()
-        file_to_md5 = json.load(md5s_json)
+        file_to_md5 = await self._download_json_file_from_NERSC(Machine.dtns, path)
         return {jaws_output.get_relative_file_path(f): md5 for f, md5 in file_to_md5.items()}
