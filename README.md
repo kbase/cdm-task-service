@@ -19,7 +19,7 @@ Enables running jobs on remote compute from the KBase CDM cluster.
 ### S3 requirements
 
 * Path style access is required.
-* Any objects provided to the servcie that were created with multipart uploads **must** use the
+* Any objects provided to the service that were created with multipart uploads **must** use the
   same part size for all parts except the last.
 * The service does not support objects encrypted with customer supplied keys or with the
   AWS key management service.
@@ -27,6 +27,12 @@ Enables running jobs on remote compute from the KBase CDM cluster.
   to check the host and credentials on startup
 * If using Minio, the minimum version is `2024-10-02T17-50-41Z` and the server must be run
   in `--compat` mode.
+  
+## Powered by
+
+<a href="https://jaws-docs.readthedocs.io" title="JGI JAWS">
+	<img src="images/JAWS.webp" alt='JGI JAWS' width="200" />
+</a>
 
 ## Development
 
