@@ -57,6 +57,7 @@ class CDMTaskServiceConfig:
     service_root_path: str  | None - if the service is behind a reverse proxy that rewrites the
         service path, the path to the service. The path is required in order for the OpenAPI
         documentation to function.
+    service_group: str - the group to which this service belongs.
     """
 
     def __init__(self, config_file: BinaryIO):
@@ -110,6 +111,7 @@ class CDMTaskServiceConfig:
         self.crane_path = _get_string_required(config, _SEC_IMAGE, "crane_path")
         self.service_root_url = _get_string_required(config, _SEC_SERVICE, "root_url")
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
+        self.service_group = _get_string_optional(config, _SEC_SERVICE, "group_id")
 
     def print_config(self, output: TextIO):
         """
@@ -143,6 +145,7 @@ class CDMTaskServiceConfig:
             f"crane executable path: {self.crane_path}",
             f"Service root URL: {self.service_root_url}",
             f"Service root path: {self.service_root_path}",
+            f"Service group: {self.service_group}",
             "*** End Service Configuration ***\n"
         ]])
 

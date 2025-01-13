@@ -31,10 +31,6 @@ from cdmtaskservice.s3.paths import S3Paths
 # TODO RELIABILITY will need a system for detecting NERSC downs, not putting jobs into an
 #                  error state while it's down, and resuming jobs when it's back up
 
-# TODO ENV SEPARATION make a server group ID and separate data based on that ID
-#                     e.g. may have different S3 envs with diffferent files at the same path,
-#                     need to keep separate
-
 
 class NERSCJAWSRunner:
     """
