@@ -62,7 +62,6 @@ _MD5_JSON_FILE_NAME = "upload_md5s.json"
 _JOB_LOGS = "logs"
 
 
-_JAWS_CONF_FILENAME = "jaws_cts.conf"
 _JAWS_CONF_TEMPLATE = """
 [USER]
 token = {token}
@@ -71,7 +70,7 @@ default_team = {group}
 _JAWS_COMMAND_TEMPLATE = f"""
 module use /global/cfs/projectdirs/kbase/jaws/modulefiles
 module load jaws
-export JAWS_USER_CONFIG=~/{_JAWS_CONF_FILENAME}
+export JAWS_USER_CONFIG=~/{{conf_file}}
 jaws submit --tag {{job_id}} {{wdlpath}} {{inputjsonpath}} {{site}}
 """
 _JAWS_SITE_PERLMUTTER = "kbase"  # add lawrencium later, maybe
@@ -192,6 +191,7 @@ class NERSCManager:
         self._client_provider = _not_falsy(client_provider, "client_provider")
         self._nersc_code_path = self._check_path(nersc_code_path, "nersc_code_path")
         self._scratchdir = Path("cdm_task_service") / service_group
+        self._jawscfg = f"jaws_cts_{service_group}.conf"
 
     def _check_path(self, path: Path, name: str):
         _not_falsy(path, name)
@@ -223,7 +223,7 @@ class NERSCManager:
             ))
             tg.create_task(self._upload_file_to_nersc(
                 perlmutter,
-                Path(_JAWS_CONF_FILENAME),  # No path puts it in the home dir
+                Path(self._jawscfg),  # No path puts it in the home dir
                 bio=io.BytesIO(
                     _JAWS_CONF_TEMPLATE.format(token=jaws_token, group=jaws_group).encode()
                 ),
@@ -540,7 +540,8 @@ class NERSCManager:
                 job_id=job.id,
                 wdlpath=pre / _JAWS_INPUT_WDL,
                 inputjsonpath=pre / _JAWS_INPUT_JSON,
-                site=_JAWS_SITE_PERLMUTTER
+                site=_JAWS_SITE_PERLMUTTER,
+                conf_file=self._jawscfg,
             ))
         except SfApiError as e:
             # TODO ERRORHANDLING if jaws provides valid json parse it and return just the detail

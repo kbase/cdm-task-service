@@ -21,8 +21,9 @@ has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"
 # This user must match the SFAPI credentials in the NERSC block below and the token in the JAWS
 # block.
 # The NERSC user's default shell must be bash.
-# If the client credentials are updated but the user doesn't match they will not be accepted.
+# If the SFAPI client credentials are updated but the user doesn't match they will not be accepted.
 # It is advised to create a collaboration user for the service.
+# All the services in a service group must use the same user.
 user = "{{ KBCTS_NERSC_JAWS_USER or "" }}"
 
 [NERSC]
@@ -46,6 +47,9 @@ remote_code_dir = "{{ KBCTS_NERSC_REMOTE_CODE_DIR or "/global/cfs/cdirs/kbase/cd
 url = "{{ KBCTS_JAWS_URL or "https://jaws-api.jgi.doe.gov/api/v2" }}"
 
 # The JGI JAWS token to use to run jobs. This can be obtained from a JAWS representative.
+# Note that all the services in a service group (see the Services block) should have the same
+# token, as they use the same JAWS config file, and will otherwise overwrite each other's
+# tokens.
 token = "{{ KBCTS_JAWS_TOKEN or "" }}"
 
 # The JAWS group to use to run jobs.
@@ -110,4 +114,6 @@ root_path = "{{ KBCTS_SERVICE_ROOT_PATH or "" }}"
 # The service group this instance of the service belongs to. This is used to separate files
 # on remote services so files from different S3 instances (say production and development)
 # don't collide.
+# MongoDB databases should not be split among different service groups or errors accessing
+# job files may occur.
 group_id = "{{ KBCTS_SERVICE_GROUP or "dev" }}"
