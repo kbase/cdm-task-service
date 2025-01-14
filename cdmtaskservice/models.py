@@ -419,19 +419,6 @@ class Cluster(str, Enum):
     # TODO LAWRENCIUM add when available
 
 
-FilesPerContainer = NamedTuple("FilesPerContainer", [
-    ("containers", int),
-    ("files", list[list[S3File | str]])
-])
-"""
-Information about splitting files to be processed among containers.
-
-containers - the number of containers expected to be run; this is the minimum of the specified
-    container count and the number of files.
-files - a list of lists of files, split up per container.
-"""
-
-
 class JobInput(BaseModel):
     """ Input to a Job. """
     
@@ -599,6 +586,14 @@ class JobInput(BaseModel):
                 + "data IDs must be supplied for all files"
             )
         return self
+    
+    @model_validator(mode="after")
+    def _check_num_containers(self) -> Self:
+        if self.num_containers > len(self.input_files):
+            raise ValueError(
+                "num_containers must be less than or equal to the number of input files"
+            )
+        return self
 
     def inputs_are_S3File(self) -> bool:
         """
@@ -606,20 +601,19 @@ class JobInput(BaseModel):
         """
         return isinstance(self.input_files[0], S3File)
         
-    def get_files_per_container(self) -> FilesPerContainer:
+    def get_files_per_container(self) -> list[list[S3File | str]]:
         """
-        Returns the container count and the files split up by container.
+        Returns the input files split up by container.
         """
-        containers = min(self.num_containers, len(self.input_files))
-        fpc, extra_files = divmod(len(self.input_files), containers)
+        fpc, extra_files = divmod(len(self.input_files), self.num_containers)
         infiles = list(self.input_files)
         files = []
-        for i in range(1, containers + 1):
+        for i in range(1, self.num_containers + 1):
             # this seems dumb. It works though, make it pretty later
             fcount = fpc + (1 if i <= extra_files else 0)
             files.append(infiles[:fcount])
             infiles = infiles[fcount:]
-        return FilesPerContainer(containers, files)
+        return files
 
 
 class JobState(str, Enum):

@@ -19,7 +19,7 @@ def generate_manifest_files(job: models.Job) -> list[str]:
     if not mani_spec or mani_spec.type is not models.ParameterType.MANIFEST_FILE:
         return manifests
     file_to_rel_path = determine_file_locations(job.job_input)
-    for files in job.job_input.get_files_per_container().files:
+    for files in job.job_input.get_files_per_container():
         manifest = ""
         if mani_spec.manifest_file_header:
             manifest = f"{mani_spec.manifest_file_header}\n"

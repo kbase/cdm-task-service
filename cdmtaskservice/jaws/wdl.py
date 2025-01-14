@@ -82,7 +82,7 @@ def generate_wdl(
     job_files = job.job_input.get_files_per_container()
     param = job.job_input.params.get_file_parameter()
     if param and param.type is ParameterType.MANIFEST_FILE and (
-        not manifest_file_list or job_files.containers != len(manifest_file_list)
+        not manifest_file_list or job.job_input.num_containers != len(manifest_file_list)
     ):
         raise ValueError(
             "If a manifest file is specified in the job parameters manifest_file_list "
@@ -94,8 +94,8 @@ def generate_wdl(
     relpaths = []
     environment = []
     cmdlines = []
-    mfl = [None] * job_files.containers if not manifest_file_list else manifest_file_list
-    for i, (files, manifest) in enumerate(zip(job_files.files, mfl)):
+    mfl = [None] * job.job_input.num_containers if not manifest_file_list else manifest_file_list
+    for i, (files, manifest) in enumerate(zip(job_files, mfl)):
         ins = []
         rels = []
         for f in files:
