@@ -238,9 +238,16 @@ class NERSCJAWSRunner:
                 get_error_complete_callback(self._callback_root, job.id),
                 insecure_ssl=self._s3insecure,
             )
+            await self._mongo.add_NERSC_log_upload_task_id(
+                job.id,
+                task_id,
+                models.JobState.ERROR_PROCESSING_SUBMITTING,
+                models.JobState.ERROR_PROCESSING_SUBMITTED,
+                # TODO TEST will need a way to mock out timestamps
+                timestamp.utcdatetime(),
+            )
             logging.getLogger(__name__).info(f"Error task_id: {task_id}")
-            # TODO NEXT add task Id to mongo & change state to error submitted
-            # TODO NEXT TEXT add error complete endpoint and change state to error
+            # TODO NEXT add error complete endpoint and change state to error
             # and add log dir loc and error message based on the data field from the result.json
         except Exception as e:
             await self._handle_exception(e, job.id, "starting error processing for")
