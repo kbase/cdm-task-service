@@ -16,6 +16,12 @@ from cdmtaskservice.arg_checkers import not_falsy, check_int, require_string
 from cdmtaskservice.s3.paths import S3Paths, validate_bucket_name
 
 
+_WRITE_TEST_FILENAME = (
+    "cdm_task_service_write_test_with_random_stuff_to_avoid_conflicts_"
+    + "jiaepjitgaihaiahgaqaijaeopatiaafaiezxvbmnxq"
+)
+
+
 class S3ObjectMeta:
     """ Metadata about an object in S3 storage. """
     
@@ -164,11 +170,12 @@ class S3Client:
             ) from e
         except ClientError as e:
             bucket = getattr(func, "bucket", None)
+            write = getattr(func, "write", False)
             path = getattr(func, "path", None)
             code = e.response["Error"]["Code"]
             if code == "SignatureDoesNotMatch":
                 raise S3ClientConnectError("s3 access credentials are invalid")
-            if code == "404":
+            if code == "404" or code == "NoSuchBucket":
                 if bucket:
                     raise S3BucketNotFoundError(
                         f"The bucket '{bucket}' was not found on the s3 system"
@@ -179,8 +186,9 @@ class S3Client:
             if code == "AccessDenied" or code == "403":  # why both? Both 403s
                 # may need to add other cases here
                 if bucket:
+                    op = "Write" if write else "Read"
                     raise S3BucketInaccessibleError(
-                        f"Access denied to bucket '{bucket}' on the s3 system"
+                        f"{op} access denied to bucket '{bucket}' on the s3 system"
                     )
                 elif path:
                     raise S3PathInaccessibleError(
@@ -220,18 +228,26 @@ class S3Client:
                 c.close()
         return [r.result() for r in results]
 
-    async def has_bucket(self, bucket: str):
+    async def has_bucket(self, bucket: str, is_writeable: bool = False):
         """
         Confirm a bucket exists and is accessible on the S3 system or throw an error otherwise.
         
         bucket - the name of the bucket.
+        is_writeable - check that the bucket is writable by writing a test file.
         """
         # TODO TEST add tests around invalid bucket names
         bucket = validate_bucket_name(require_string(bucket, "bucket"))
-        async def head(client, buk=bucket):
-            await client.head_bucket(Bucket=buk)
-        head.bucket = bucket
-        await self._run_commands([head], 1)
+        if is_writeable:
+            async def testfunc(client, buk=bucket):
+                # apparently this is how you check write access to a bucket. Yuck
+                await client.put_object(Bucket=buk, Key=_WRITE_TEST_FILENAME, Body="test")
+                await client.delete_object(Bucket=bucket, Key=_WRITE_TEST_FILENAME)
+            testfunc.write = True
+        else:
+            async def testfunc(client, buk=bucket):
+                await client.head_bucket(Bucket=buk)
+        testfunc.bucket = bucket
+        await self._run_commands([testfunc], 1)
 
     async def get_object_meta(self, paths: S3Paths, concurrency: int = 10) -> list[S3ObjectMeta]:
         """

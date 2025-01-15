@@ -2,7 +2,9 @@
 Also look in test_manual for more tests.
 """
 
+import json
 import random
+from pathlib import Path
 import pytest
 
 from cdmtaskservice.s3.client import (
@@ -74,8 +76,9 @@ async def test_has_bucket(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     s3c = await _client(minio)
-    # should pass without excption
+    # should pass without exception
     await s3c.has_bucket("test-bucket")
+    await s3c.has_bucket("test-bucket", is_writeable=True)
 
 # TODO TEST add tests for checking bucket format (None input etc.). For now just test functionality
 
@@ -87,6 +90,10 @@ async def test_has_bucket_fail_no_bucket(minio):
     s3c = await _client(minio)
     await _has_bucket_fail(s3c, "succeed-bucket", S3BucketNotFoundError(
         "The bucket 'succeed-bucket' was not found on the s3 system"))
+    await _has_bucket_fail(s3c, "succeed-bucket", S3BucketNotFoundError(
+        "The bucket 'succeed-bucket' was not found on the s3 system"),
+        is_writeable=True
+    )
 
 
 @pytest.mark.asyncio
@@ -97,12 +104,62 @@ async def test_has_bucket_fail_unauthed(minio, minio_unauthed_user):
     user, pwd = minio_unauthed_user
     s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
     await _has_bucket_fail(s3c, "fail-bucket", S3BucketInaccessibleError(
-        "Access denied to bucket 'fail-bucket' on the s3 system"))
+        "Read access denied to bucket 'fail-bucket' on the s3 system"))
+    await _has_bucket_fail(s3c, "fail-bucket", S3BucketInaccessibleError(
+        "Write access denied to bucket 'fail-bucket' on the s3 system"),
+        is_writeable=True
+    )
 
 
-async def _has_bucket_fail(s3c, bucket, expected, print_stacktrace=False):
+@pytest.mark.asyncio
+async def test_has_bucket_fail_readonly(minio, minio_unauthed_user):
+    await minio.clean()
+    await minio.create_bucket("fail-bucket-readonly")
+    user, pwd = minio_unauthed_user
+    
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "s3:ListBucket",
+                    "s3:GetObject",
+                    # Test will fail for unraised exception if these are uncommented
+                    #"s3:PutObject",
+                    #"s3:DeleteObject",
+                ],
+                "Resource": f"arn:aws:s3:::fail-bucket-readonly/*"
+            }
+        ]
+    }
+    polname = "s3_client_test_readonly"
+    # add some crap to the filename to prevent clobbers
+    polfile = Path("./temp_s3_client_test_policy_file_ipjiajgieajjaptya.json")
+    try:
+        with open(polfile, "w") as tf:
+            json.dump(policy, tf, indent=4)
+        # file must be closed or mc complains about missing content length headers
+        minio.run_mc("admin", "policy", "create", minio.mc_alias, polname, tf.name)
+        minio.run_mc("admin", "policy", "attach", minio.mc_alias, polname, "--user", user)
+    
+        s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
+        # check that reading works
+        await s3c.has_bucket("fail-bucket-readonly")
+    
+        await _has_bucket_fail(s3c, "fail-bucket-readonly", S3BucketInaccessibleError(
+            "Write access denied to bucket 'fail-bucket-readonly' on the s3 system"),
+            is_writeable=True
+        )
+    finally:
+        minio.run_mc("admin", "policy", "detach", minio.mc_alias, polname, "--user", user)
+        minio.run_mc("admin", "policy", "rm", minio.mc_alias, polname)
+        polfile.unlink(missing_ok=True)
+
+
+async def _has_bucket_fail(s3c, bucket, expected, print_stacktrace=False, is_writeable=False):
     with pytest.raises(Exception) as got:
-        await s3c.has_bucket(bucket)
+        await s3c.has_bucket(bucket, is_writeable=is_writeable)
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 

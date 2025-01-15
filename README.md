@@ -23,8 +23,8 @@ Enables running jobs on remote compute from the KBase CDM cluster.
   same part size for all parts except the last.
 * The service does not support objects encrypted with customer supplied keys or with the
   AWS key management service.
-* The provided credentials must enable listing buckets, as the service performs that operation
-  to check the host and credentials on startup
+* The provided credentials must enable listing all buckets, as the service performs that operation
+  to check the host and credentials on startup.
 * If using Minio, the minimum version is `2024-10-02T17-50-41Z` and the server must be run
   in `--compat` mode.
   
