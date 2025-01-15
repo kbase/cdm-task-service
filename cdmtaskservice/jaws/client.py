@@ -4,10 +4,29 @@ An minimal async client for the JAWS central server.
 
 import aiohttp
 import datetime
+from enum import Enum
 import logging
 from typing import Any
 
 from cdmtaskservice.arg_checkers import require_string as _require_string
+
+
+class JAWSResult(Enum):
+    """
+    An enum of the possible JAWS result states.
+    """
+    SUCCESS = 1
+    """
+    The job succeeded.
+    """
+    FAILED = 2
+    """
+    The job ran but failed.
+    """
+    SYSTEM_ERROR = 3
+    """
+    A JAWS system error prevented the job from running. Likely no output files are available.
+    """
 
 
 class JAWSClient:
@@ -91,11 +110,17 @@ def is_done(job: dict[str, Any]) -> bool:
     return job["status"] == "done"
 
 
-def succeeded(job: dict[str, Any]) -> bool:
+_JAWS_RES_TO_ENUM = {
+    "succeeded": JAWSResult.SUCCESS,
+    "failed": JAWSResult.FAILED,
+    None: JAWSResult.SYSTEM_ERROR,
+}
+
+def result(job: dict[str, Any]) -> JAWSResult:
     """
-    Given a JAWS status dictionary, determine if the job succeeded.
+    Given a JAWS status dictionary, determine the result of the job.
     """
-    return job["result"] == "succeeded"
+    return _JAWS_RES_TO_ENUM[job["result"]]
 
 
 class NoSuchJAWSJobError(Exception):
