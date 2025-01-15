@@ -50,6 +50,7 @@ FLD_JOB_OUTPUTS = "outputs"
 FLD_JOB_ERROR = "error"
 FLD_JOB_ADMIN_ERROR = "admin_error"
 FLD_JOB_TRACEBACK = "traceback"
+FLD_JOB_LOGPATH = "logpath"
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
@@ -716,6 +717,10 @@ class Job(BaseModel):
     error: Annotated[str | None, Field(
         example="The front fell off",
         description="A description of the error that occurred."
+    )] = None
+    logpath: Annotated[str | None, Field(
+        example="cts-logs/container_logs/e14a21ba-032d-42f2-b235-d82606675b17",
+        description="A location in S3 where the logfiles for the job containers can be viewed."
     )] = None
 
 

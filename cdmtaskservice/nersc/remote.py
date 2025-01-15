@@ -118,7 +118,7 @@ def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callb
             json.dump(j, f, indent=4)
             sys.exit(1)
         else:
-            json.dump({"result": "success", "data": data, "cts_env": cts_env}, f)
+            json.dump({"result": "success", "data": data, "cts_env": cts_env}, f, indent=4)
 
 
 def main():

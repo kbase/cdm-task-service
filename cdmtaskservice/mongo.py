@@ -305,6 +305,7 @@ class MongoDAO:
         state: models.JobState,
         time: datetime.datetime,
         traceback: str | None = None,
+        logpath: str | None = None,
     ):
         """
         Put the job into an error state.
@@ -315,12 +316,14 @@ class MongoDAO:
         state - the new state for the job.
         time - the time at which the job transitioned to the new state.
         traceback - the error traceback.
+        logpath - the path to any logs for the job.
         """
         # TODO RETRIES will need to clear the error fields when attempting a retry
         await self._update_job_state(job_id, state, time, set_={
             models.FLD_JOB_ERROR: user_error,
             models.FLD_JOB_ADMIN_ERROR: admin_error,
             models.FLD_JOB_TRACEBACK: traceback,
+            models.FLD_JOB_LOGPATH: logpath
         })
 
 
