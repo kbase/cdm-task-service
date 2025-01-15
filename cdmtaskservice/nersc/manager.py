@@ -41,6 +41,9 @@ from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
 # TODO ERRORHANDLING wrap sfapi errors in server specific errors
 
 # TODO CLEANUP clean up old code versions @NERSC somehow. Not particularly important
+#              actually this is impoosible to do safely - could be a different cluster of
+#              servers on a different version. Note in admin docs that old unused installs
+#              can be deleted. Server code is tiny anyway
 
 _DT_TARGET = Machine.dtns
 # TODO NERSCUPDATE delete the following line when DTN downloads work normally.
@@ -52,7 +55,6 @@ _COMMAND_PATH = "utilities/command"
 _MIN_TIMEOUT_SEC = 300
 _SEC_PER_GB = 2 * 60  # may want to make this configurable
 
-_CTS_SCRATCH_ROOT_DIR = Path("cdm_task_service")
 _JOB_FILES = Path("files")
 _JOB_MANIFESTS = Path("manifests")
 _MANIFEST_FILE_PREFIX = "manifest-"
@@ -162,6 +164,7 @@ class NERSCManager:
         nersc_code_path: Path,
         jaws_token: str,
         jaws_group: str,
+        service_group: str = "dev",
     ) -> Self:
         """
         Create the NERSC manager.
@@ -173,7 +176,7 @@ class NERSCManager:
         jaws_token - a token for the JGI JAWS system.
         jaws_group - the group to use for running JAWS jobs.
         """
-        nm = NERSCManager(client_provider, nersc_code_path)
+        nm = NERSCManager(client_provider, nersc_code_path, service_group)
         await nm._setup_remote_code(
             _require_string(jaws_token, "jaws_token"),
             _require_string(jaws_group, "jaws_group"),
@@ -184,9 +187,11 @@ class NERSCManager:
             self,
             client_provider: Callable[[], str],
             nersc_code_path: Path,
+            service_group: str,
         ):
         self._client_provider = _not_falsy(client_provider, "client_provider")
         self._nersc_code_path = self._check_path(nersc_code_path, "nersc_code_path")
+        self._scratchdir = Path("cdm_task_service") / service_group
 
     def _check_path(self, path: Path, name: str):
         _not_falsy(path, name)
@@ -377,7 +382,7 @@ class NERSCManager:
         container_logs_location: str = None,  # this is expected to be present if the above is
         upload_md5s_file: bool = False,
     ):
-        rootpath = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job_id
+        rootpath = self._dtn_scratch / self._scratchdir / job_id
         manifestpath = rootpath / filename
         cli = self._client_provider()
         dt = await cli.compute(_DT_TARGET)
@@ -435,7 +440,7 @@ class NERSCManager:
         return io.BytesIO(json.dumps({"file-transfers": manifest}).encode())
     
     def _localize_s3_path(self, job_id: str, s3path: str) -> str:
-        return str(self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR/ job_id / _JOB_FILES / s3path)
+        return str(self._dtn_scratch / self._scratchdir/ job_id / _JOB_FILES / s3path)
     
     def _create_upload_manifest(
         self,
@@ -503,7 +508,7 @@ class NERSCManager:
 
     async def _get_transfer_result(self, job: models.Job, op: str) -> tuple[str, str] | None:
         _not_falsy(job, "job")
-        path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id / f"{op}_result.json"
+        path = self._dtn_scratch / self._scratchdir / job.id / f"{op}_result.json"
         res = await self._download_json_file_from_NERSC(Machine.dtns, path)
         if res["result"] == "success":
             return TransferResult(), res["data"]
@@ -525,7 +530,7 @@ class NERSCManager:
         cli = self._client_provider()
         await self._generate_and_load_job_files_to_nersc(cli, job, file_download_concurrency)
         perl = await cli.compute(Machine.perlmutter)
-        pre = self._perlmutter_scratch / _CTS_SCRATCH_ROOT_DIR / job.id
+        pre = self._perlmutter_scratch / self._scratchdir / job.id
         try:
             # TODO PERF this copies all the files to the jaws staging area, and so could take
             #           a long time. Hardlink them in first to avoid the copy. Also look into
@@ -565,7 +570,7 @@ class NERSCManager:
         manifest_file_paths = self._get_manifest_file_paths(len(manifest_files))
         fmap = {m: _JOB_FILES / m.file for m in job.job_input.input_files}
         wdljson = wdl.generate_wdl(job, fmap, manifest_file_paths)
-        pre = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id
+        pre = self._dtn_scratch / self._scratchdir / job.id
         downloads = {pre / fp: f for fp, f in zip(manifest_file_paths, manifest_files)}
         downloads[pre / _JAWS_INPUT_WDL] = wdljson.wdl
         downloads[pre / _JAWS_INPUT_JSON] = json.dumps(wdljson.input_json, indent=4)
@@ -651,7 +656,7 @@ class NERSCManager:
         Expects that the upload_JAWS_job_files function has been run, and will error otherwise.
         """
         _not_falsy(job, "job")
-        path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id / _MD5_JSON_FILE_NAME
+        path = self._dtn_scratch / self._scratchdir / job.id / _MD5_JSON_FILE_NAME
         file_to_md5 = await self._download_json_file_from_NERSC(Machine.dtns, path)
         return {jaws_output.get_relative_file_path(f): md5 for f, md5 in file_to_md5.items()}
 
@@ -692,7 +697,7 @@ class NERSCManager:
             logs.extend(get_filenames_for_container(i))
         presigns = await files_to_urls(logs)
         
-        rootpath = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id
+        rootpath = self._dtn_scratch / self._scratchdir / job.id
         remotelogs = [rootpath / _JOB_LOGS / f for f in logs]
         
         manifest = self._create_upload_manifest(remotelogs, presigns, concurrency, insecure_ssl)

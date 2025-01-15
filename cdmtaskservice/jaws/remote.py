@@ -1,5 +1,5 @@
 """
-Code for parsing JAWS output expected to be run at a remote location, .e.g on NERSC.
+Code for parsing JAWS output expected to be run at a remote location, e.g. on NERSC.
 
 In particular, non-standard lib dependency imports should be kept to a minimum and the newest
 python features should be avoided to make setup on the remote cluster simple and allow for older
@@ -35,7 +35,7 @@ def parse_errors_json(errors_json: io.BytesIO, logpath: Path) -> list[tuple[int,
     """
     Parses a JAWS errors.json file and writes the return code, stdout, and stderr files
     to the given path, with the names of the files as
-    `container-{container number}-[rc | stdout | stderr].txt`
+    `container-{container number}-[rc | stdout | stderr].txt`.
     
     Assumes there's only one container name in the json, which is the case for CTS jobs.
     
