@@ -14,7 +14,8 @@ Enables running jobs on remote compute from the KBase CDM cluster.
 
 * Python 3.11+
 * [crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md)
-* An s3 instance for use as a file store, but see "S3 requirements" below
+* An S3 instance for use as a file store, but see "S3 requirements" below
+* MongoDB 7+
 
 ### S3 requirements
 

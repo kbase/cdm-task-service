@@ -637,7 +637,6 @@ class NERSCManager:
         outputs = jaws_output.parse_outputs_json(outputs_json)
         container_files = list(outputs.output_files.keys())
         presigns = await files_to_urls(container_files)
-        # TODO LOGGING upload job stdout and stderr logs
         return await self.upload_presigned_files(
             job.id,
             [os.path.join(jaws_output_dir, outputs.output_files[f]) for f in container_files],
