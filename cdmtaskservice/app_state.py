@@ -59,7 +59,8 @@ async def build_app(
     # This method is getting pretty long but it's stupid simple so...
     # May want to parallelize some of this for faster startups. would need to rework prints
     logr = logging.getLogger(__name__)
-    validate_path(cfg.container_s3_log_dir)  # check that the path is a valid path
+    # check that the path is a valid path
+    logbuk = validate_path(cfg.container_s3_log_dir).split("/", 1)[0]
     coman = CoroutineWrangler()
     logr.info("Connecting to KBase auth service... ")
     auth = await KBaseAuth.create(
@@ -90,6 +91,7 @@ async def build_app(
         s3 = await S3Client.create(
             cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
         )
+        await s3.is_bucket_writeable(logbuk)
         s3_external = await S3Client.create(
             cfg.s3_external_url,
             cfg.s3_access_key,
@@ -119,7 +121,7 @@ async def build_app(
         runners = {models.Cluster.PERLMUTTER_JAWS: nerscjawsflow}
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         images = Images(mongodao, imginfo)
-        job_state = JobState(mongodao, s3, images, coman, runners)
+        job_state = JobState(mongodao, s3, images, coman, runners, logbuk)
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._cdmstate = AppState(
