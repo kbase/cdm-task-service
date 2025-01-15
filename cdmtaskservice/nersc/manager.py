@@ -28,6 +28,7 @@ from cdmtaskservice.jaws import (
     wdl,
     output as jaws_output
 )
+from cdmtaskservice.jaws.remote import get_filenames_for_container, ERRORS_JSON_FILE
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
 from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
@@ -55,6 +56,7 @@ _JOB_FILES = Path("files")
 _JOB_MANIFESTS = Path("manifests")
 _MANIFEST_FILE_PREFIX = "manifest-"
 _MD5_JSON_FILE_NAME = "upload_md5s.json"
+_JOB_LOGS = "logs"
 
 
 _JAWS_CONF_FILENAME = "jaws_cts.conf"
@@ -78,6 +80,8 @@ _JAWS_INPUT_JSON = "input.json"
 # TODO NERSCFEATURE if NERSC puts python 3.11 on the dtns revert to regular load 
 _PYTHON_LOAD_HACK = "module use /global/common/software/nersc/pe/modulefiles/latest"
 _RUN_CTS_REMOTE_CODE_FILENAME = "run_cts_remote_code.sh"
+# Might want to make a shared constants module for all these env var names and update this
+# file and remote.py
 _RUN_CTS_REMOTE_CODE = f"""
 #!/usr/bin/env bash
 
@@ -87,6 +91,8 @@ module load python
 export PYTHONPATH=$CTS_CODE_LOCATION
 export CTS_MODE=$CTS_MODE
 export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
+export CTS_ERRORS_JSON_LOCATION=$CTS_ERRORS_JSON_LOCATION
+export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
 export CTS_MD5_FILE_LOCATION=$CTS_MD5_FILE_LOCATION
 export CTS_RESULT_FILE_LOCATION=$CTS_RESULT_FILE_LOCATION
 export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
@@ -95,6 +101,8 @@ export SCRATCH=$SCRATCH
 echo "PYTHONPATH=[$PYTHONPATH]"
 echo "CTS_MODE=[$CTS_MODE]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
+echo "CTS_ERRORS_JSON_LOCATION=[$CTS_ERRORS_JSON_LOCATION]"
+echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
 echo "CTS_MD5_FILE_LOCATION=[$CTS_MD5_FILE_LOCATION]"
 echo "CTS_RESULT_FILE_LOCATION=[$CTS_RESULT_FILE_LOCATION]"
 echo "CTS_CALLBACK_URL=[$CTS_CALLBACK_URL]"
@@ -330,6 +338,9 @@ class NERSCManager:
         callback_url: str,
         filename: str,
         task_type: str,
+        mode="manifest",
+        error_json_file_location: str = None,
+        container_logs_location: str = None,  # this is expected to be present if the above is
         upload_md5s_file: bool = False,
     ):
         rootpath = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job_id
@@ -340,7 +351,7 @@ class NERSCManager:
         await self._upload_file_to_nersc(dt, manifestpath, bio=manifest)
         command = [
             f"{_DT_WORKAROUND}; ",
-            f"export CTS_MODE=manifest; ",
+            f"export CTS_MODE={mode}; ",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_MANIFEST_LOCATION={manifestpath}; ",
             f"export CTS_RESULT_FILE_LOCATION={rootpath / task_type}_result.json; ",
@@ -349,9 +360,12 @@ class NERSCManager:
             f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
         ]
         if upload_md5s_file:
-            command.insert(1, f"export CTS_MD5_FILE_LOCATION={rootpath / _MD5_JSON_FILE_NAME}; ")
+            command.insert(2, f"export CTS_MD5_FILE_LOCATION={rootpath / _MD5_JSON_FILE_NAME}; ")
+        if error_json_file_location:
+            command.insert(2, f"export CTS_ERRORS_JSON_LOCATION={error_json_file_location}; ")
+            command.insert(3, f"export CTS_CONTAINER_LOGS_LOCATION={container_logs_location}; ")
         command = "".join(command)
-        task_id  = (await self._run_command(cli, _DT_TARGET, command))["task_id"]
+        task_id = (await self._run_command(cli, _DT_TARGET, command))["task_id"]
         # TODO LOGGING figure out how to handle logging, see other logging todos
         logging.getLogger(__name__).info(
             f"Created {task_type} task with id {task_id} for job {job_id}")
@@ -594,3 +608,55 @@ class NERSCManager:
         path = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id / _MD5_JSON_FILE_NAME
         file_to_md5 = await self._download_json_file_from_NERSC(Machine.dtns, path)
         return {jaws_output.get_relative_file_path(f): md5 for f, md5 in file_to_md5.items()}
+
+    async def upload_JAWS_log_files_on_error(
+        self,
+        job: models.Job,
+        jaws_output_dir: Path,
+        files_to_urls: Callable[[list[Path]], Awaitable[list[PresignedPost]]],
+        callback_url: str,
+        concurrency: int = 10,
+        insecure_ssl: bool = False
+    ) -> str:
+        """
+        Upload the return code, stdout, and stderr files from a failed JAWS run to
+        presigned URLs. The run must be completed with a failed result, otherwise unspecified
+        errors may occur.
+        
+        job - the job being processed. No other transfers should be occurring for the job.
+        jaws_output_dir - the NERSC output directory of the JAWS job containing the output files,
+            manifests, etc.
+        files_to_urls - an async function that provides a list of presigned upload urls
+            given log file names. The returned list must be in the same order as the input
+            list.
+        callback_url - the URL to GET as a callback for when the upload is complete.
+        concurrency - the number of simultaneous uploads to process.
+        insecure_ssl - whether to skip the cert check for the S3 URL.
+        
+        Returns the NERSC task ID for the upload.
+        """
+        _not_falsy(job, "job")
+        _not_falsy(files_to_urls, "files_to_urls")
+        cburl = _require_string(callback_url, "callback_url")
+        _check_int(concurrency, "concurrency")
+        errfilepath = Path(
+            _require_string(jaws_output_dir, "jaws_output_dir")) / ERRORS_JSON_FILE
+        logs = []
+        for i in range(job.job_input.num_containers):
+            logs.extend(get_filenames_for_container(i))
+        presigns = await files_to_urls(logs)
+        
+        rootpath = self._dtn_scratch / _CTS_SCRATCH_ROOT_DIR / job.id
+        remotelogs = [rootpath / _JOB_LOGS / f for f in logs]
+        
+        manifest = self._create_upload_manifest(remotelogs, presigns, concurrency, insecure_ssl)
+        return await self._process_manifest(
+            manifest,
+            job.id,
+            cburl,
+            "error_log_upload_manifest.json",
+            "error_log",
+            mode="errorsjson",
+            error_json_file_location=errfilepath,
+            container_logs_location=str(rootpath / _JOB_LOGS)
+        )
