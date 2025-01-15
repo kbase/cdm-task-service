@@ -91,5 +91,12 @@ def is_done(job: dict[str, Any]) -> bool:
     return job["status"] == "done"
 
 
+def succeeded(job: dict[str, Any]) -> bool:
+    """
+    Given a JAWS status dictionary, determine if the job succeeded.
+    """
+    return job["result"] == "succeeded"
+
+
 class NoSuchJAWSJobError(Exception):
     """ Thrown when a a jaws run ID does not exist. """

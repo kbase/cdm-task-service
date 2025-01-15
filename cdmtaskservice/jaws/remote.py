@@ -41,6 +41,8 @@ def parse_errors_json(errors_json: io.BytesIO, logpath: Path) -> list[tuple[int,
     """
     # may need to use an iterative parsing strategy with `ijson` or something
     # These files could be really big
+    # Pretty sure there are error conditions that may occur where this parser will choke,
+    # will deal with them as they happen
     _not_falsy(logpath, "logpath")
     j = json.load(_not_falsy(errors_json, "errors_json"))
     if not j:

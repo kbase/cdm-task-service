@@ -194,24 +194,33 @@ class NERSCJAWSRunner:
         if _not_falsy(job, "job").state != models.JobState.JOB_SUBMITTED:
             raise InvalidJobStateError("Job must be in the job submitted state")
         # We assume this is a jaws job if it was mapped to this runner
-        # TODO RETRIES this line might need changes 
+        # TODO RETRIES this line might need changes
         jaws_info = await self._jaws.status(job.jaws_details.run_id[-1])
         await self._job_complete(job, jaws_info)
     
     async def _job_complete(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
         if not jaws_client.is_done(jaws_info):
             raise InvalidJobStateError("JAWS run is incomplete")
-        # TODO ERRHANDLING IMPORTANT if in an error state, use https://github.com/ICRAR/ijson
-        #                  to pull data out of the the erros.json file at NERSC (since it could
-        #                  be huge. Store the stderr/out files... where? Check their Etags
-        #                  and set job to error 
-        await self._mongo.update_job_state(
-            job.id,
-            models.JobState.JOB_SUBMITTED,
-            models.JobState.UPLOAD_SUBMITTING,
-            timestamp.utcdatetime()
-        )
-        await self._coman.run_coroutine(self._upload_files(job, jaws_info))
+        if jaws_client.succeeded(jaws_info):
+            await self._mongo.update_job_state(
+                job.id,
+                models.JobState.JOB_SUBMITTED,
+                models.JobState.UPLOAD_SUBMITTING,
+                timestamp.utcdatetime()
+            )
+            await self._coman.run_coroutine(self._upload_files(job, jaws_info))
+        else:
+            await self._mongo.update_job_state(
+                job.id,
+                models.JobState.JOB_SUBMITTED,
+                models.JobState.ERROR_PROCESSING,
+                timestamp.utcdatetime()
+            )
+            await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
+    
+    async def _upload_container_logs(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
+        logging.getLogger(__name__).info(f"Well crap: {job.id}")
+        # TODO NEXT upload job logs to S3. First get expected files and make presigned urls
     
     async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
 
