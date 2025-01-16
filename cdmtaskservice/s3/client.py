@@ -228,26 +228,22 @@ class S3Client:
                 c.close()
         return [r.result() for r in results]
 
-    async def has_bucket(self, bucket: str, is_writeable: bool = False):
+    async def is_bucket_writeable(self, bucket: str):
         """
-        Confirm a bucket exists and is accessible on the S3 system or throw an error otherwise.
+        Confirm a bucket exists and is writeable on the S3 system or throw an error otherwise.
+        Writes a test file to the bucket.
         
         bucket - the name of the bucket.
-        is_writeable - check that the bucket is writable by writing a test file.
         """
         # TODO TEST add tests around invalid bucket names
         bucket = validate_bucket_name(require_string(bucket, "bucket"))
-        if is_writeable:
-            async def testfunc(client, buk=bucket):
-                # apparently this is how you check write access to a bucket. Yuck
-                await client.put_object(Bucket=buk, Key=_WRITE_TEST_FILENAME, Body="test")
-                await client.delete_object(Bucket=bucket, Key=_WRITE_TEST_FILENAME)
-            testfunc.write = True
-        else:
-            async def testfunc(client, buk=bucket):
-                await client.head_bucket(Bucket=buk)
-        testfunc.bucket = bucket
-        await self._run_commands([testfunc], 1)
+        async def write(client, buk=bucket):
+            # apparently this is how you check write access to a bucket. Yuck
+            await client.put_object(Bucket=buk, Key=_WRITE_TEST_FILENAME, Body="test")
+            await client.delete_object(Bucket=bucket, Key=_WRITE_TEST_FILENAME)
+        write.write = True
+        write.bucket = bucket
+        await self._run_commands([write], 1)
 
     async def get_object_meta(self, paths: S3Paths, concurrency: int = 10) -> list[S3ObjectMeta]:
         """

@@ -72,49 +72,42 @@ async def _create_fail(host, akey, skey, expected, config=None, print_stacktrace
 
 
 @pytest.mark.asyncio
-async def test_has_bucket(minio):
+async def test_is_bucket_writeable(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     s3c = await _client(minio)
     # should pass without exception
-    await s3c.has_bucket("test-bucket")
-    await s3c.has_bucket("test-bucket", is_writeable=True)
+    await s3c.is_bucket_writeable("test-bucket")
 
 # TODO TEST add tests for checking bucket format (None input etc.). For now just test functionality
 
 
 @pytest.mark.asyncio
-async def test_has_bucket_fail_no_bucket(minio):
+async def test_is_bucket_writeable_fail_no_bucket(minio):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
     s3c = await _client(minio)
-    await _has_bucket_fail(s3c, "succeed-bucket", S3BucketNotFoundError(
-        "The bucket 'succeed-bucket' was not found on the s3 system"))
-    await _has_bucket_fail(s3c, "succeed-bucket", S3BucketNotFoundError(
-        "The bucket 'succeed-bucket' was not found on the s3 system"),
-        is_writeable=True
+    await _is_bucket_writeable_fail(s3c, "succeed-bucket", S3BucketNotFoundError(
+        "The bucket 'succeed-bucket' was not found on the s3 system")
     )
 
 
 @pytest.mark.asyncio
-async def test_has_bucket_fail_unauthed(minio, minio_unauthed_user):
+async def test_is_bucket_writeable_fail_unauthed(minio, minio_unauthed_user):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
     
     user, pwd = minio_unauthed_user
     s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
-    await _has_bucket_fail(s3c, "fail-bucket", S3BucketInaccessibleError(
-        "Read access denied to bucket 'fail-bucket' on the s3 system"))
-    await _has_bucket_fail(s3c, "fail-bucket", S3BucketInaccessibleError(
-        "Write access denied to bucket 'fail-bucket' on the s3 system"),
-        is_writeable=True
-    )
+    await _is_bucket_writeable_fail(s3c, "fail-bucket", S3BucketInaccessibleError(
+        "Write access denied to bucket 'fail-bucket' on the s3 system"))
 
 
 @pytest.mark.asyncio
-async def test_has_bucket_fail_readonly(minio, minio_unauthed_user):
+async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
     await minio.clean()
     await minio.create_bucket("fail-bucket-readonly")
+    await minio.upload_file("fail-bucket-readonly/test_file", b"abcdefghij")
     user, pwd = minio_unauthed_user
     
     policy = {
@@ -123,7 +116,6 @@ async def test_has_bucket_fail_readonly(minio, minio_unauthed_user):
             {
                 "Effect": "Allow",
                 "Action": [
-                    "s3:ListBucket",
                     "s3:GetObject",
                     # Test will fail for unraised exception if these are uncommented
                     #"s3:PutObject",
@@ -145,11 +137,10 @@ async def test_has_bucket_fail_readonly(minio, minio_unauthed_user):
     
         s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
         # check that reading works
-        await s3c.has_bucket("fail-bucket-readonly")
+        await s3c.get_object_meta(S3Paths(["fail-bucket-readonly/test_file"]))
     
-        await _has_bucket_fail(s3c, "fail-bucket-readonly", S3BucketInaccessibleError(
+        await _is_bucket_writeable_fail(s3c, "fail-bucket-readonly", S3BucketInaccessibleError(
             "Write access denied to bucket 'fail-bucket-readonly' on the s3 system"),
-            is_writeable=True
         )
     finally:
         minio.run_mc("admin", "policy", "detach", minio.mc_alias, polname, "--user", user)
@@ -157,9 +148,9 @@ async def test_has_bucket_fail_readonly(minio, minio_unauthed_user):
         polfile.unlink(missing_ok=True)
 
 
-async def _has_bucket_fail(s3c, bucket, expected, print_stacktrace=False, is_writeable=False):
+async def _is_bucket_writeable_fail(s3c, bucket, expected, print_stacktrace=False):
     with pytest.raises(Exception) as got:
-        await s3c.has_bucket(bucket, is_writeable=is_writeable)
+        await s3c.is_bucket_writeable(bucket)
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 

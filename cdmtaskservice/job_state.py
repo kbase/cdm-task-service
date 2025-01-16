@@ -13,7 +13,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.images import Images
 from cdmtaskservice.mongo import MongoDAO
-from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.s3.client import S3Client, S3BucketInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
 
@@ -29,6 +29,7 @@ class JobState:
         images: Images,
         coro_manager: CoroutineWrangler,
         job_runners: dict[models.Cluster, Any],  # Make abstract class if necessary
+        log_bucket: str,
     ):
         """
         mongo - a MongoDB DAO object.
@@ -36,12 +37,14 @@ class JobState:
         images - a handler for getting images.
         coro_manager - a coroutine manager.
         job_runners - a mapping of remote compute cluster to the job runner for that cluster.
+        log_bucket - the bucket in which logs are stored. Disallowed for writing for other cases.
         """
         self._images = _not_falsy(images, "images")
         self._s3 = _not_falsy(s3client, "s3client")
         self._mongo = _not_falsy(mongo, "mongo")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._runners = _not_falsy(job_runners, "job_runners")
+        self._logbuk = _require_string(log_bucket, "log_bucket")
         
     async def submit(self, job_input: models.JobInput, user: kb_auth.KBaseUser) -> str:
         """
@@ -56,7 +59,10 @@ class JobState:
         _not_falsy(user, "user")
         # Could parallelize these ops but probably not worth it
         image = await self._images.get_image(job_input.image)
-        await self._s3.has_bucket(job_input.output_dir.split("/", 1)[0])
+        bucket = job_input.output_dir.split("/", 1)[0]
+        if bucket == self._logbuk:
+            raise S3BucketInaccessibleError(f"Jobs may not write to bucket {self._logbuk}")
+        await self._s3.is_bucket_writeable(bucket)
         paths = [f.file if isinstance(f, models.S3File) else f for f in job_input.input_files]
         # TODO PERF may want to make concurrency configurable here
         # TODO PERF this checks the file path syntax again, consider some way to avoid
