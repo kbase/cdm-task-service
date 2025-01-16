@@ -14,7 +14,7 @@ from fastapi import (
     Path as FastPath
 )
 from pydantic import BaseModel, Field
-from typing import Annotated, Any
+from typing import Annotated
 
 from cdmtaskservice import app_state
 from cdmtaskservice import kb_auth
@@ -28,6 +28,7 @@ from cdmtaskservice.callback_url_paths import (
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
+from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import timestamp, utcdatetime
 
@@ -243,6 +244,8 @@ async def get_nersc_client_info(
 ) -> NERSCClientInfo:
     _ensure_admin(user, "Only service administrators may view NERSC client information.")
     nersc_cli = app_state.get_app_state(r).sfapi_client
+    if not nersc_cli:
+        raise ValueError("NERSC is currently unavailable")
     expires = nersc_cli.expiration()
     expires_in = expires - utcdatetime()
     if require_lifetime and expires_in < require_lifetime:
@@ -321,13 +324,13 @@ async def error_log_upload_complete(
 
 async def _callback_handling(
     r: Request, operation: str, job_id: str
-) -> (Any, models.AdminJobDetails):
+) -> (JobFlow, models.AdminJobDetails):
     # Any in the tuple is the job flow runner. Would need to make an abstract class to type it
     # YAGNI
     logging.getLogger(__name__).info(f"{operation} reported as complete for job {job_id}")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, _SERVICE_USER, as_admin=True)
-    return appstate.runners[job.job_input.cluster], job
+    return appstate.jobflow_manager.get_flow(job.job_input.cluster), job
 
 
 class ClientLifeTimeError(Exception):

@@ -4,7 +4,6 @@ Manages job state.
 
 import logging
 import uuid
-from typing import Any
 
 from cdmtaskservice import models
 from cdmtaskservice import kb_auth
@@ -12,6 +11,7 @@ from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string 
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.images import Images
+from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.s3.client import S3Client, S3BucketInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
@@ -28,7 +28,7 @@ class JobState:
         s3client: S3Client,
         images: Images,
         coro_manager: CoroutineWrangler,
-        job_runners: dict[models.Cluster, Any],  # Make abstract class if necessary
+        flow_manager: JobFlowManager,
         log_bucket: str,
     ):
         """
@@ -36,14 +36,14 @@ class JobState:
         s3Client - an S3Client pointed at the S3 storage system to use.
         images - a handler for getting images.
         coro_manager - a coroutine manager.
-        job_runners - a mapping of remote compute cluster to the job runner for that cluster.
+        flow_manager- the job flow manager.
         log_bucket - the bucket in which logs are stored. Disallowed for writing for other cases.
         """
         self._images = _not_falsy(images, "images")
         self._s3 = _not_falsy(s3client, "s3client")
         self._mongo = _not_falsy(mongo, "mongo")
         self._coman = _not_falsy(coro_manager, "coro_manager")
-        self._runners = _not_falsy(job_runners, "job_runners")
+        self._flowman = _not_falsy(flow_manager, "flow_manager")
         self._logbuk = _require_string(log_bucket, "log_bucket")
         
     async def submit(self, job_input: models.JobInput, user: kb_auth.KBaseUser) -> str:
@@ -81,6 +81,8 @@ class JobState:
             new_input.append(models.S3File.model_construct(
                 file=m.path, etag=m.e_tag, data_id=data_id)
             )
+        # check the flow is available before we make any changes
+        flow = self._flowman.get_flow(job_input.cluster)
         ji = job_input.model_copy(update={"input_files": new_input})
         job_id = str(uuid.uuid4())  # TODO TEST for testing we'll need to set up a mock for this
         job = models.Job(
@@ -96,7 +98,7 @@ class JobState:
         # TDDO JOBSUBMIT if reference data is required, is it staged?
         await self._mongo.save_job(job)
         # Pass in the meta to avoid potential race conditions w/ etag changes
-        await self._coman.run_coroutine(self._runners[job.job_input.cluster].start_job(job, meta))
+        await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
 
     async def get_job(

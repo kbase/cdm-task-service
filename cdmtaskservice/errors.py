@@ -84,6 +84,9 @@ class ErrorType(Enum):
     IMAGE_DIGEST_EXISTS =        (50010, "Image digest exists")  # noqa: E222 @IgnorePep
     """ The digest for the image already exists in the system. """
 
+    JOB_FLOW_INACTIVE =          (60000, "Job flow inactive")  # noqa: E222 @IgnorePep
+    """ The requested job flow is not currently active. """
+
     UNSUPPORTED_OP =             (100000, "Unsupported operation")  # noqa: E222 @IgnorePep8
     """ The requested operation is not supported. """
 
