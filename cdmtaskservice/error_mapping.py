@@ -6,7 +6,11 @@ from fastapi import status
 from typing import NamedTuple
 
 from cdmtaskservice.errors import ErrorType
-from cdmtaskservice.exceptions import UnauthorizedError, InvalidJobStateError
+from cdmtaskservice.exceptions import (
+    IllegalParameterError,
+    InvalidJobStateError,
+    UnauthorizedError,
+)
 from cdmtaskservice.http_bearer import MissingTokenError, InvalidAuthHeaderError
 from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
@@ -64,6 +68,7 @@ _ERR_MAP = {
     NoSuchJobError: ErrorMapping(ErrorType.NO_SUCH_JOB, _H404),
     InvalidJobStateError: ErrorMapping(ErrorType.INVALID_JOB_STATE, _H400),
     InactiveJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_INACTIVE, _H400),
+    IllegalParameterError: ErrorMapping(ErrorType.ILLEGAL_PARAMETER, _H400),
 }
 
 

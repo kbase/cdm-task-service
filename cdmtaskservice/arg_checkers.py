@@ -33,19 +33,16 @@ def require_string(string: str, name: str):
     return string.strip()
 
 
-def check_int(num: int, name: str, minimum: int = 1):
+def check_num(num: int | float, name: str, minimum: int | float = 1) -> int | float:
     """
-    Check an integer argument is not None and is greater than some value.
+    Check an integer or float argument is not None and is greater than some value.
     
-    num - the number to check. Must None or an integer.
+    num - the number to check. Must None, a float, or an integer.
     name - the name of the argument to use in exceptions.
-    minimum - the minimum allowed value of the integer.
+    minimum - the minimum allowed value of the number.
     
-    returns the integer.
+    returns the number.
     """
-    # Converted this to float as well but realized we just want ints in all the current use
-    # cases. Leave it as it for now. Not typechecking since we assume the programmer is reading
-    # the type hints
     if num is None:
         raise ValueError(f"{name} is required")
     if num < minimum:

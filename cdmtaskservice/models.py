@@ -4,7 +4,6 @@ Pydantic models for the CTS.
 
 import datetime
 from enum import Enum
-import math
 from pathlib import Path
 from pydantic import (
     BaseModel,
@@ -15,7 +14,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing import Annotated, Self, NamedTuple
+from typing import Annotated, Self
 
 from cdmtaskservice.arg_checkers import contains_control_characters
 from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathSyntaxError
@@ -616,6 +615,13 @@ class JobInput(BaseModel):
             files.append(infiles[:fcount])
             infiles = infiles[fcount:]
         return files
+    
+    def get_total_compute_time_sec(self) -> float:
+        """
+        Return the total compute time as seconds for the job, calculated as
+        cpus * containers * runtime.
+        """ 
+        return self.cpus * self.num_containers * self.runtime.total_seconds()
 
 
 class JobState(str, Enum):

@@ -108,7 +108,7 @@ async def build_app(
             flowman.register_flow(models.Cluster.PERLMUTTER_JAWS, nerscjawsflow)
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         images = Images(mongodao, imginfo)
-        job_state = JobState(mongodao, s3, images, coman, flowman, logbuk)
+        job_state = JobState(mongodao, s3, images, coman, flowman, logbuk, cfg.job_max_cpu_hours)
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._jaws_cli = jaws_client

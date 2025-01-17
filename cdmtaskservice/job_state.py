@@ -7,9 +7,13 @@ import uuid
 
 from cdmtaskservice import models
 from cdmtaskservice import kb_auth
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
+from cdmtaskservice.arg_checkers import (
+    not_falsy as _not_falsy,
+    require_string as _require_string,
+    check_num as _check_num
+)
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import UnauthorizedError
+from cdmtaskservice.exceptions import UnauthorizedError, IllegalParameterError
 from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.mongo import MongoDAO
@@ -23,6 +27,7 @@ class JobState:
     """
     
     def __init__(
+        # getting too many args here...
         self,
         mongo: MongoDAO,
         s3client: S3Client,
@@ -30,6 +35,7 @@ class JobState:
         coro_manager: CoroutineWrangler,
         flow_manager: JobFlowManager,
         log_bucket: str,
+        job_max_cpu_hours: float,
     ):
         """
         mongo - a MongoDB DAO object.
@@ -38,6 +44,7 @@ class JobState:
         coro_manager - a coroutine manager.
         flow_manager- the job flow manager.
         log_bucket - the bucket in which logs are stored. Disallowed for writing for other cases.
+        job_max_cpu_hours - the maximum CPU hours allows for a job on submit.
         """
         self._images = _not_falsy(images, "images")
         self._s3 = _not_falsy(s3client, "s3client")
@@ -45,6 +52,7 @@ class JobState:
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._flowman = _not_falsy(flow_manager, "flow_manager")
         self._logbuk = _require_string(log_bucket, "log_bucket")
+        self._cpu_hrs = _check_num(job_max_cpu_hours, "job_max_cpu_hours")
         
     async def submit(self, job_input: models.JobInput, user: kb_auth.KBaseUser) -> str:
         """
@@ -57,6 +65,12 @@ class JobState:
         """
         _not_falsy(job_input, "job_input")
         _not_falsy(user, "user")
+        compute_time = job_input.get_total_compute_time_sec() / 3600
+        if compute_time > self._cpu_hrs:
+            raise IllegalParameterError(
+                f"Job compute time of {compute_time} CPU hours is greater than the limit of "
+                + f"{self._cpu_hrs}"
+        )
         # Could parallelize these ops but probably not worth it
         image = await self._images.get_image(job_input.image)
         bucket = job_input.output_dir.split("/", 1)[0]

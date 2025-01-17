@@ -78,13 +78,6 @@ access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
 # to Man in the Middle attacks.
 allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
 
-[Logging]
-
-# An S3 path, starting with the bucket, to where container log files should be uploaded from jobs.
-# Must contain a key. Must be writable by the service and readable by users who need to see
-# their job logs.
-container_s3_log_dir = "{{ KBCTS_CONTAINER_S3_LOG_DIR or "" }}"
-
 [MongoDB]
 
 # The connection parameters for MongoDB. User and password are optional. Retry writes
@@ -96,6 +89,19 @@ mongo_db = "{{ KBCTS_MONGO_DB or "cdmtaskservice" }}"
 mongo_user = "{{ KBCTS_MONGO_USER or "" }}"
 mongo_pwd = "{{ KBCTS_MONGO_PWD or "" }}"
 mongo_retrywrites = "{{ KBCTS_MONGO_RETRYWRITES or "" }}"
+
+[Jobs]
+
+# The maximum CPU hours allowed per job, calculated as
+# the number of CPUs * the number of containers * the time per container.
+max_cpu_hours = {{ KBCTS_JOB_MAX_CPU_HOURS or 100 }}
+
+[Logging]
+
+# An S3 path, starting with the bucket, to where container log files should be uploaded from jobs.
+# Must contain a key. Must be writable by the service and readable by users who need to see
+# their job logs.
+container_s3_log_dir = "{{ KBCTS_CONTAINER_S3_LOG_DIR or "" }}"
 
 [Images]
 

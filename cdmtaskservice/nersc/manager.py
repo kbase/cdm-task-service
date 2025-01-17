@@ -23,7 +23,7 @@ from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
     require_string as _require_string,
-    check_int as _check_int,
+    check_num as _check_num,
 )
 from cdmtaskservice.jaws import (
     wdl,
@@ -466,7 +466,7 @@ class NERSCManager:
     def _base_manifest(self, op: str, concurrency: int, insecure_ssl: bool):
         return {
             "op": op,
-            "concurrency": _check_int(concurrency, "concurrency"),
+            "concurrency": _check_num(concurrency, "concurrency"),
             "insecure-ssl": insecure_ssl,
             "min-timeout-sec": _MIN_TIMEOUT_SEC,
             "sec-per-GB": _SEC_PER_GB,
@@ -524,7 +524,7 @@ class NERSCManager:
         job - the job to process
         file_download_concurrency - the number of files at one time to download to NERSC.
         """
-        _check_int(file_download_concurrency, "file_download_concurrency")
+        _check_num(file_download_concurrency, "file_download_concurrency")
         if not _not_falsy(job, "job").job_input.inputs_are_S3File():
             raise ValueError("Job files must be S3File objects")
         cli = self._client_provider()
@@ -628,7 +628,7 @@ class NERSCManager:
         _not_falsy(job, "job")
         _not_falsy(files_to_urls, "files_to_urls")
         cburl = _require_string(callback_url, "callback_url")
-        _check_int(concurrency, "concurrency")
+        _check_num(concurrency, "concurrency")
         outfilepath = Path(
             _require_string(jaws_output_dir, "jaws_output_dir")) / jaws_output.OUTPUTS_JSON_FILE
         cli = self._client_provider()
@@ -689,7 +689,7 @@ class NERSCManager:
         _not_falsy(job, "job")
         _not_falsy(files_to_urls, "files_to_urls")
         cburl = _require_string(callback_url, "callback_url")
-        _check_int(concurrency, "concurrency")
+        _check_num(concurrency, "concurrency")
         errfilepath = Path(
             _require_string(jaws_output_dir, "jaws_output_dir")) / ERRORS_JSON_FILE
         logs = []
