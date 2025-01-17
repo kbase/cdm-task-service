@@ -352,7 +352,7 @@ class NERSCJAWSRunner(JobFlow):
                         f"Expected Etag {filemd5s[o.path]} but got {o.e_tag} for uploaded "
                         + f"file {o.path}"
                     )
-                outfiles.append(models.S3FileOutput(file=o.path, etag=o.e_tag))
+                outfiles.append(models.S3File(file=o.path, etag=o.e_tag))
             # TODO DISKSPACE will need to clean up job results @ NERSC
             await self._mongo.add_output_files_to_job(
                 job.id,

@@ -280,7 +280,7 @@ class MongoDAO:
     async def add_output_files_to_job(
         self,
         job_id: str,
-        output: list[models.S3FileOutput],
+        output: list[models.S3File],
         current_state: models.JobState,
         state: models.JobState,
         time: datetime.datetime
