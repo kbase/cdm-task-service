@@ -42,7 +42,11 @@ class JAWSClient:
         expected_user - the user for the token.
         """
         cli = JAWSClient(url, token)
-        user = await cli._user()  # test connection & token
+        try:
+            user = await cli._user()  # test connection & token
+        except Exception:
+            await cli.close()
+            raise
         if user != expected_user:
             await cli.close()
             raise ValueError(
