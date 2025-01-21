@@ -13,7 +13,6 @@ def test_systems_available():
     _test_systems_available(None, dt2, dt2)
     _test_systems_available(dt1, dt2, dt2)
     _test_systems_available(dt2, dt1, dt2)
-    
 
 
 def _test_systems_available(
