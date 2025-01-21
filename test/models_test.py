@@ -37,13 +37,13 @@ def _files_per_container(containers: int, files: int, expfiles: list[list[int]])
         image="fakeimage",
         params=models.Parameters(),
         num_containers=containers,
-        input_files=[models.S3File(file=f"foo/bar{i}") for i in range(1, files + 1)],
+        input_files=[models.S3FileWithDataID(file=f"foo/bar{i}") for i in range(1, files + 1)],
         output_dir="foo/bar"
     )
     fpc = ji.get_files_per_container()
     exp = []
     for lst in expfiles:
-        exp.append([models.S3File(file=f"foo/bar{i}") for i in lst])
+        exp.append([models.S3FileWithDataID(file=f"foo/bar{i}") for i in lst])
     assert fpc == exp
 
 

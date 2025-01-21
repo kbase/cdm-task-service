@@ -8,10 +8,10 @@ import math
 import os
 from pathlib import Path
 
-from cdmtaskservice.models import JobInput, S3File
+from cdmtaskservice.models import JobInput, S3FileWithDataID
 
 
-def determine_file_locations(job_input: JobInput) -> dict[S3File | str, Path]:
+def determine_file_locations(job_input: JobInput) -> dict[S3FileWithDataID | str, Path]:
     """
     Given job input, determine where files should be placed given a set of input roots.
     
@@ -24,7 +24,7 @@ def determine_file_locations(job_input: JobInput) -> dict[S3File | str, Path]:
     ret = {}
     seen = {}
     for i, f in enumerate(job_input.input_files):
-        fstr = f.file if isinstance(f, S3File) else f
+        fstr = f.file if isinstance(f, S3FileWithDataID) else f
         # if the trie is empty or only contains "" could speed things up by not translating the
         # path
         idpath = _path_to_id_string(fstr, pathseg_to_id)
@@ -58,7 +58,7 @@ def _setup_trie(job_input: JobInput) -> (marisa_trie.Trie, bidict[str, str]):
             else:
                 id_ = _process_path(ir, id_, pathseg_to_id)
     for f in job_input.input_files:
-        id_ = _process_path(f.file if isinstance(f, S3File) else f, id_, pathseg_to_id)
+        id_ = _process_path(f.file if isinstance(f, S3FileWithDataID) else f, id_, pathseg_to_id)
     # Make all IDs the same length so an ID of 2 can't prefix and ID of 22, etc.
     # Could probably save some space using base64 or something... YAGNI for now
     digits = int(math.log10(len(pathseg_to_id))) + 1

@@ -77,14 +77,17 @@ class JobState:
         if bucket == self._logbuk:
             raise S3BucketInaccessibleError(f"Jobs may not write to bucket {self._logbuk}")
         await self._s3.is_bucket_writeable(bucket)
-        paths = [f.file if isinstance(f, models.S3File) else f for f in job_input.input_files]
+        paths = [
+            f.file if isinstance(f, models.S3FileWithDataID) else f
+                 for f in job_input.input_files
+        ]
         # TODO PERF may want to make concurrency configurable here
         # TODO PERF this checks the file path syntax again, consider some way to avoid
         meta = await self._s3.get_object_meta(S3Paths(paths))
         new_input = []
         for m, f in zip(meta, job_input.input_files):
             data_id = None
-            if isinstance(f, models.S3File):
+            if isinstance(f, models.S3FileWithDataID):
                 data_id = f.data_id
                 if f.etag and f.etag != m.e_tag:
                     raise ETagMismatchError(
@@ -92,7 +95,7 @@ class JobState:
                         + f"the actual ETag '{m.e_tag}'"
                     )
             # no need to validate the path again
-            new_input.append(models.S3File.model_construct(
+            new_input.append(models.S3FileWithDataID.model_construct(
                 file=m.path, etag=m.e_tag, data_id=data_id)
             )
         # check the flow is available before we make any changes

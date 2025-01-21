@@ -376,12 +376,8 @@ class S3File(BaseModel):
         min_length=3 + 1 + 1,  # 3 for bucket + / + 1 char
         max_length=63 + 1 + 1024,  # 63 for bucket + / + 1024 bytes
     )]
-    data_id: Annotated[str | None, Field(
-        example="GCA_000146795.3",
-        description="An arbitrary string representing the ID of the data in the file.",
-        min_length=1,
-        max_length=255,
-    )] = None
+    # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
+    # the way in and will come from S3 on the way out
     etag: Annotated[str | None, Field(
         example="a70a4d1732484e75434df2c08570e1b2-3",
         description="The S3 e-tag of the file. Weak e-tags are not supported. "
@@ -395,15 +391,25 @@ class S3File(BaseModel):
     @classmethod
     def _check_file(cls, v):
         return _validate_s3_path(v)
+    
+    model_config = ConfigDict(frozen=True)
+
+
+class S3FileWithDataID(S3File):
+    """ A file in an S3 instance, optionally with a data ID. """
+    
+    data_id: Annotated[str | None, Field(
+        example="GCA_000146795.3",
+        description="An arbitrary string representing the ID of the data in the file.",
+        min_length=1,
+        max_length=255,
+    )] = None
 
     @field_validator("data_id", mode="after")
     @classmethod
     def _check_data_id(cls, v):
         return _err_on_control_chars(v)
 
-    # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
-    # the way in and will come from S3 on the way out
-    
     model_config = ConfigDict(frozen=True)
     
 # TODO FEATURE How to handle all vs all? Current model is splitting file list between containers
@@ -477,7 +483,7 @@ class JobInput(BaseModel):
         # TODO LAWRENCIUM can handle 3 days, need to check per site. same for CPU
         le=2 * 24 * 60 * 60 - (15 * 60),  # max JAWS runtime
     )] = datetime.timedelta(seconds=60)
-    input_files: Annotated[list[str] | list[S3File], Field(
+    input_files: Annotated[list[str] | list[S3FileWithDataID], Field(
         example=[  # TODO EXAMPLES add a string example if examples works
             {
                 "file": "mybucket/foo/bat",
@@ -535,7 +541,7 @@ class JobInput(BaseModel):
     @field_validator("input_files", mode="after")
     @classmethod
     def _check_data_ids(cls, v):
-        if not isinstance(v[0], S3File):
+        if not isinstance(v[0], S3FileWithDataID):
             return v
         data_ids = bool(v[0].data_id)
         for f in v:
@@ -578,7 +584,7 @@ class JobInput(BaseModel):
             and fp.type is ParameterType.MANIFEST_FILE
             and fp.manifest_file_format is ManifestFileFormat.DATA_IDS
             and (
-                not isinstance(self.input_files[0], S3File)
+                not isinstance(self.input_files[0], S3FileWithDataID)
                 or not self.input_files[0].data_id
             )
         ):
@@ -598,11 +604,11 @@ class JobInput(BaseModel):
 
     def inputs_are_S3File(self) -> bool:
         """
-        Returns True if the inputfiles are of type S3File, False otherwise.
+        Returns True if the inputfiles are of type S3FileWithDataID, False otherwise.
         """
-        return isinstance(self.input_files[0], S3File)
+        return isinstance(self.input_files[0], S3FileWithDataID)
         
-    def get_files_per_container(self) -> list[list[S3File | str]]:
+    def get_files_per_container(self) -> list[list[S3FileWithDataID | str]]:
         """
         Returns the input files split up by container.
         """
@@ -684,20 +690,6 @@ class Image(BaseModel):
         return f"{self.name}@{self.digest}"
 
 
-class S3FileOutput(BaseModel):
-    """ An output file in an S3 instance. """
-
-    # no validators since this is an outgoing data structure only
-    file: Annotated[str, Field(
-        example="mybucket/foo/bar/baz.jpg",
-        description="A path to an object in an S3 instance, starting with the bucket.",
-    )]
-    etag: Annotated[str, Field(
-        example="a70a4d1732484e75434df2c08570e1b2-3",
-        description="The S3 e-tag of the file. Weak e-tags are not supported. "
-    )]
-
-
 class Job(BaseModel):
     """
     Information about a job.
@@ -719,7 +711,8 @@ class Job(BaseModel):
         ],
         description="A list of tuples of (job_state, time_job_state_entered)."
     )]
-    outputs: list[S3FileOutput] | None = None
+    # May need to assemble jobs manually if path validation is too expensive.
+    outputs: list[S3File] | None = None
     error: Annotated[str | None, Field(
         example="The front fell off",
         description="A description of the error that occurred."
@@ -760,6 +753,7 @@ class JAWSDetails(BaseModel):
     run_id: Annotated[list[str], Field(
         description="Run IDs for a JGI JAWS job. Multiple run IDs indicate job retries after "
             + "failures.")]
+
 
 class AdminJobDetails(Job):
     """

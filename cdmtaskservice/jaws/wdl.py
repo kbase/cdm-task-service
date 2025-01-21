@@ -14,7 +14,7 @@ from typing import NamedTuple, Any
 
 from cdmtaskservice.models import (
     Job,
-    S3File,
+    S3FileWithDataID,
     Parameter,
     ParameterType,
     InputFilesFormat,
@@ -58,7 +58,7 @@ class JawsInput(NamedTuple):
 
 def generate_wdl(
     job: Job,
-    file_mapping: dict[S3File, Path],
+    file_mapping: dict[S3FileWithDataID, Path],
     manifest_file_list: list[Path] = None,
 ) -> JawsInput:
     """
@@ -75,7 +75,8 @@ def generate_wdl(
     """
     # It'd be nice if there were a programmatic WDL writer but I haven't been able to find one
     # This fn is a little long but not too hard to read yet I think
-    # If the manifest file name / path changes that'll break the JAWS cache, need to think about that
+    # If the manifest file name / path changes that'll break the JAWS cache, need to think
+    # about that
     # How often will jobs run with identical manifest files though? Maybe MD5 based caching?
     if not job.job_input.inputs_are_S3File():
         raise ValueError("input files must be S3 files with the E-tag")
@@ -233,8 +234,8 @@ task run_container {{
 def _process_flag_args(
     job: Job,
     container_num: int,
-    files: list[S3File],
-    file_to_rel_path: dict[S3File, Path],
+    files: list[S3FileWithDataID],
+    file_to_rel_path: dict[S3FileWithDataID, Path],
     manifest: Path | None,
 ) -> list[str]:
     cmd = []
@@ -249,8 +250,8 @@ def _process_flag_args(
 def _process_pos_args(
     job: Job,
     container_num: int,
-    files: list[S3File],
-    file_to_rel_path: dict[S3File, Path],
+    files: list[S3FileWithDataID],
+    file_to_rel_path: dict[S3FileWithDataID, Path],
     manifest: Path | None,
 ) -> list[str]:
     cmd = []
@@ -265,8 +266,8 @@ def _process_pos_args(
 def _process_environment(
     job: Job,
     container_num: int,
-    files: list[S3File],
-    file_to_rel_path: dict[S3File, Path],
+    files: list[S3FileWithDataID],
+    file_to_rel_path: dict[S3FileWithDataID, Path],
     manifest: Path | None,
 ) -> list[str]:
     env = []
@@ -283,8 +284,8 @@ def _process_parameter(
     param: str | Parameter,
     job: Job,
     container_num: int,
-    files: list[S3File],
-    file_to_rel_path: dict[S3File, Path],
+    files: list[S3FileWithDataID],
+    file_to_rel_path: dict[S3FileWithDataID, Path],
     manifest: Path | None,
     as_list: bool = False,  # flag space separated files imply as list
     flag: str = None,
@@ -342,10 +343,10 @@ def _handle_manifest(job: Job, manifest: Path, flag: str) -> str | list[str]:
 
 # this is a bit on the complex side...
 def _join_files(
-    files: list[S3File],
+    files: list[S3FileWithDataID],
     format_: InputFilesFormat,
     job: Job,
-    file_to_rel_path: dict[S3File, Path],
+    file_to_rel_path: dict[S3FileWithDataID, Path],
     flag: str,
 ) -> str | list[str]:
     imp = job.job_input.params.input_mount_point
@@ -387,7 +388,11 @@ def _join_files(
     return fileret
 
 
-def _join_path(imp: str, file_to_rel_path: dict[S3File, Path], f: S3File, quote: bool = False
+def _join_path(
+        imp: str,
+        file_to_rel_path: dict[S3FileWithDataID, Path],
+        f: S3FileWithDataID,
+        quote: bool = False
 ) -> str:
     p = os.path.join(imp, file_to_rel_path[f])
     return shlex.quote(p) if quote else p
