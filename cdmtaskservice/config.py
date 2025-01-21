@@ -11,8 +11,9 @@ _SEC_NERSC_JAWS = "NERSC_JAWS"
 _SEC_NERSC = "NERSC"
 _SEC_JAWS = "JAWS"
 _SEC_S3 = "S3"
-_SEC_LOGGING = "Logging"
 _SEC_MONGODB = "MongoDB"
+_SEC_JOBS = "Jobs"
+_SEC_LOGGING = "Logging"
 _SEC_IMAGE = "Images"
 _SEC_SERVICE = "Service"
 
@@ -46,12 +47,13 @@ class CDMTaskServiceConfig:
     s3_access_secret: str - the S3 access secret.
     s3_allow_insecure: bool - whether to skip SSL cert validation, leaving the service vulnerable
         to MITM attacks.
-    container_s3_log_dir: str - where to store container logs in S3.
     mongo_host: str - the MongoDB host.
     mongo_db: str - the MongoDB database.
     mongo_user: str | None - the MongoDB user name.
     mongo_user: str | None - the MongoDB password.
     mongo_user: bool - whether to set the MongoDB retry writes parameter on.
+    job_max_cpu_hours: float - the maximum number of cpu hours per job.
+    container_s3_log_dir: str - where to store container logs in S3.
     crane_path: str - the path to a `crane` executable.
     service_root_url: str - the URL for the service root.
     service_root_path: str  | None - if the service is behind a reverse proxy that rewrites the
@@ -96,9 +98,6 @@ class CDMTaskServiceConfig:
         self.s3_allow_insecure = _get_string_optional(config, _SEC_S3, "allow_insecure") == "true"
         # If needed, we could add an S3 region parameter. YAGNI
         # If needed we could add sub sections to support > 1 S3 instance per service. YAGNI
-        self.container_s3_log_dir = _get_string_required(
-            config, _SEC_LOGGING, "container_s3_log_dir"
-        )
         self.mongo_host = _get_string_required(config, _SEC_MONGODB, "mongo_host")
         self.mongo_db = _get_string_required(config, _SEC_MONGODB, "mongo_db")
         self.mongo_user = _get_string_optional(config, _SEC_MONGODB, "mongo_user")
@@ -108,6 +107,10 @@ class CDMTaskServiceConfig:
         if bool(self.mongo_user) != bool(self.mongo_pwd):
             raise ValueError("Either both or neither of the mongo user and password must "
                              + "be provided")
+        self.job_max_cpu_hours = _get_float_required(config, _SEC_JOBS, "max_cpu_hours", minimum=1)
+        self.container_s3_log_dir = _get_string_required(
+            config, _SEC_LOGGING, "container_s3_log_dir"
+        )
         self.crane_path = _get_string_required(config, _SEC_IMAGE, "crane_path")
         self.service_root_url = _get_string_required(config, _SEC_SERVICE, "root_url")
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
@@ -136,12 +139,13 @@ class CDMTaskServiceConfig:
             f"S3 access key: {self.s3_access_key}",
             "S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT",
             f"S3 allow insecure: {self.s3_allow_insecure}",
-            f"Directory in S3 for container logs: {self.container_s3_log_dir}",
             f"MongoDB host: {self.mongo_host}",
             f"MongoDB database: {self.mongo_db}",
             f"MongoDB user: {self.mongo_user}",
             f"MongoDB password: {pwd}",
             f"MongoDB retry writes: {self.mongo_retrywrites}",
+            f"Max CPU hours per job: {self.job_max_cpu_hours}",
+            f"Directory in S3 for container logs: {self.container_s3_log_dir}",
             f"crane executable path: {self.crane_path}",
             f"Service root URL: {self.service_root_url}",
             f"Service root path: {self.service_root_path}",
@@ -152,6 +156,17 @@ class CDMTaskServiceConfig:
 def _check_missing_section(config, section):
     if section not in config:
         raise ValueError(f"Missing section {section}")
+
+
+def _get_float_required(config, section, key, minimum: float = None) -> float:
+    putative = config[section].get(key)
+    if type(putative) not in {int, float}:
+        raise ValueError(
+            f"Expected float value for key {key} in section {section}, got {putative}")
+    if minimum is not None and putative < minimum:
+        raise ValueError(
+            f"Expected value >= {minimum} for key {key} in section {section}, got {putative}")
+    return putative
 
 
 # assumes section exists

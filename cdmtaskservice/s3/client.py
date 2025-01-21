@@ -12,7 +12,11 @@ from botocore.parsers import ResponseParserError
 import logging
 from typing import Any, Self
 
-from cdmtaskservice.arg_checkers import not_falsy, check_int, require_string
+from cdmtaskservice.arg_checkers import (
+    not_falsy as _not_falsy,
+    check_num as _check_num,
+    require_string as _require_string,
+)
 from cdmtaskservice.s3.paths import S3Paths, validate_bucket_name
 
 
@@ -136,9 +140,9 @@ class S3Client:
         config: dict[str, Any],
         insecure_ssl: bool,
     ):
-        self._url = require_string(endpoint_url, "endpoint_url")
-        self._ak = require_string(access_key, "access_key")
-        self._sk = require_string(secret_key, "secret_key")
+        self._url = _require_string(endpoint_url, "endpoint_url")
+        self._ak = _require_string(access_key, "access_key")
+        self._sk = _require_string(secret_key, "secret_key")
         self._config = Config(**config) if config else None
         self._sess = get_session()
         self._insecure_ssl = insecure_ssl
@@ -236,7 +240,7 @@ class S3Client:
         bucket - the name of the bucket.
         """
         # TODO TEST add tests around invalid bucket names
-        bucket = validate_bucket_name(require_string(bucket, "bucket"))
+        bucket = validate_bucket_name(_require_string(bucket, "bucket"))
         async def write(client, buk=bucket):
             # apparently this is how you check write access to a bucket. Yuck
             await client.put_object(Bucket=buk, Key=_WRITE_TEST_FILENAME, Body="test")
@@ -252,8 +256,8 @@ class S3Client:
         paths - the paths to query
         concurrency - the number of simultaneous connections to S3
         """
-        not_falsy(paths, "paths")
-        check_int(concurrency, "concurrency")
+        _not_falsy(paths, "paths")
+        _check_num(concurrency, "concurrency")
         funcs = []
         for buk, key, path in paths.split_paths(include_full_path=True):
             async def head(client, buk=buk, key=key):  # bind the current value of the variables
@@ -284,8 +288,8 @@ class S3Client:
         paths - the paths in question.
         expiration_sec - the expiration time of the urls.
         """
-        not_falsy(paths, "paths")
-        check_int(expiration_sec, "expiration_sec")
+        _not_falsy(paths, "paths")
+        _check_num(expiration_sec, "expiration_sec")
         results = []
         async with self._client() as client:
             for buk, key in paths.split_paths():
@@ -308,8 +312,8 @@ class S3Client:
         paths - the paths in question.
         expiration_sec - the expiration time of the urls.
         """
-        not_falsy(paths, "paths")
-        check_int(expiration_sec, "expiration_sec")
+        _not_falsy(paths, "paths")
+        _check_num(expiration_sec, "expiration_sec")
         results = []
         async with self._client() as client:
             for buk, key in paths.split_paths():
