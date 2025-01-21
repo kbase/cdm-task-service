@@ -271,6 +271,8 @@ class NERSCManager:
         bio: io.BytesIO = None,
         chmod: str = None,
     ):
+        logr = logging.getLogger(__name__)
+        logr.info(f"Uploading file {target} to NERSC.")
         dtw = f"{_DT_WORKAROUND}; " if compute.name == Machine.dtns else ""
         if target.parent != Path("."):
             cmd = f"{dtw}mkdir -p {target.parent}"
@@ -282,9 +284,11 @@ class NERSCManager:
                 await asrp.upload(f)
         else:
             await asrp.upload(bio)
+        logr.info(f"Upload of file {target} to NERSC complete.")
         if chmod:
             cmd = f"{dtw}chmod {chmod} {target}"
             await compute.run(cmd)
+            logr.info(f"chmod of uploaded file {target} complete.")
 
     def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
         # skip some API calls vs. the upload example in the NERSC docs
