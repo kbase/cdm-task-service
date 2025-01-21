@@ -216,6 +216,7 @@ async def get_mongo_client(cfg: CDMTaskServiceConfig) -> AsyncIOMotorClient:
         username=cfg.mongo_user,
         password=cfg.mongo_pwd,
         retryWrites=cfg.mongo_retrywrites,
+        tz_aware=True,
     )
     # Test connnection cheaply, doesn't need auth.
     # Just throw the exception as is
