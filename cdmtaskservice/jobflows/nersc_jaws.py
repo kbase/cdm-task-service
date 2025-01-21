@@ -20,6 +20,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidJobStateError
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
+from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, PresignedPost
@@ -32,7 +33,7 @@ from cdmtaskservice.s3.paths import S3Paths
 #                  error state while it's down, and resuming jobs when it's back up
 
 
-class NERSCJAWSRunner:
+class NERSCJAWSRunner(JobFlow):
     """
     Runs jobs at NERSC using JAWS.
     """

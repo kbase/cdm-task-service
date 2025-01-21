@@ -26,6 +26,7 @@ from cdmtaskservice.s3.client import (
     S3PathNotFoundError,
 )
 from cdmtaskservice.s3.paths import S3PathSyntaxError
+from cdmtaskservice.jobflows.flowmanager import InactiveJobFlowError
 
 _H400 = status.HTTP_400_BAD_REQUEST
 _H401 = status.HTTP_401_UNAUTHORIZED
@@ -62,6 +63,7 @@ _ERR_MAP = {
     NoSuchImageError: ErrorMapping(ErrorType.NO_SUCH_IMAGE, _H404),
     NoSuchJobError: ErrorMapping(ErrorType.NO_SUCH_JOB, _H404),
     InvalidJobStateError: ErrorMapping(ErrorType.INVALID_JOB_STATE, _H400),
+    InactiveJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_INACTIVE, _H400),
 }
 
 
