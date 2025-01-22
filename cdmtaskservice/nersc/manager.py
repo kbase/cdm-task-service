@@ -4,6 +4,7 @@ Handler for data transfer between CDM sources and NERSC.
 
 import asyncio
 from collections.abc import Callable
+from enum import Enum
 from httpx import HTTPStatusError
 import io
 import inspect
@@ -138,11 +139,24 @@ def _get_dependencies(mod: ModuleType, cts_dep: set[ModuleType], pip_dep: set[Mo
 _get_dependencies(remote, _CTS_DEPENDENCIES, _PIP_DEPENDENCIES)
 
 
+class TransferState(Enum):
+    """ The state of the transfer. """
+    
+    SUCCESS = 1
+    """ The transfer was successful. """
+
+    FAIL = 2
+    """ The transfer failed. """
+    
+    INCOMPLETE = 3
+    """ The transfer is ongoing. """
+
+
 class TransferResult(NamedTuple):
     """ Results of a file transfer between NERSC and another location. """
     
-    success: bool = True
-    """ True if the file transfer succeeded. """
+    state: TransferState = TransferState.SUCCESS
+    """ The state of the transfer. """
     
     message: str | None = None
     """ If the transfer failed, contains an error message about the transfer. """
@@ -486,10 +500,17 @@ class NERSCManager:
             "sec-per-GB": _SEC_PER_GB,
         }
     
-    async def _download_json_file_from_NERSC(self, machine: Machine, path: Path) -> dict[str, Any]:
+    async def _download_json_file_from_NERSC(
+        self, machine: Machine, path: Path, no_exception_on_missing_file=False
+    ) -> dict[str, Any]:
         cli = self._client_provider()
         dtns = await cli.compute(machine)
-        result = await self._get_async_path(dtns, path).download()
+        try:
+            result = await self._get_async_path(dtns, path).download()
+        except SfApiError as e:
+            if no_exception_on_missing_file and "no such file" in e.message.lower():
+                    return None
+            raise
         return json.load(result)
     
     async def get_s3_download_result(self, job: models.Job) -> TransferResult:
@@ -520,15 +541,19 @@ class NERSCManager:
         """
         return await self._get_transfer_result(job, "error_log")
 
-    async def _get_transfer_result(self, job: models.Job, op: str) -> tuple[str, str] | None:
+    async def _get_transfer_result(self, job: models.Job, op: str) -> tuple[TransferResult, Any]:
         _not_falsy(job, "job")
         path = self._dtn_scratch / self._scratchdir / job.id / f"{op}_result.json"
-        res = await self._download_json_file_from_NERSC(Machine.dtns, path)
+        res = await self._download_json_file_from_NERSC(
+            Machine.dtns, path, no_exception_on_missing_file=True
+        )
+        if not res:
+            return TransferResult(state=TransferState.INCOMPLETE), None
         if res["result"] == "success":
             return TransferResult(), res["data"]
         else:
             return TransferResult(
-                success=False, message=res["job_msg"], traceback=res["job_trace"]
+                state=TransferState.FAIL, message=res["job_msg"], traceback=res["job_trace"]
             ), None
 
     async def run_JAWS(self, job: models.Job, file_download_concurrency: int = 10) -> str:
