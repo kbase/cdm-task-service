@@ -297,25 +297,35 @@ class NERSCManager:
         asrp.perms = "-"  # hack to prevent an unnecessary network call
         return asrp
 
-    async def is_task_complete(self, task_id: str) -> bool:
+    async def is_task_complete(self, task_id: str, max_retries=10) -> bool:
         """
         Returns true if the the task is complete, signified by:
         * The task data denoting it as complete, or
         * The task not being available in the NERSC SFAPI (e.g. HTTP 404), as tasks are removed
           10 minutes after completion.
-        The task may be in a successful or errored state.
+        The task may be in a successful or errored state. Polls the task 1/s up to `max_retries`.
         
         Note that if a task ID never existed, this method will return that it is
         complete, as there is no way to tell the difference.
         """
+        logr = logging.getLogger(__name__)
         cli = self._client_provider()
-        try:
-            task = await cli.get(f"tasks/{task_id}")
-        except HTTPStatusError as e:
-            if e.response.status_code == 404:
+        retries = 1
+        while True:
+            try:
+                task = await cli.get(f"tasks/{task_id}")
+            except HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    return True
+                raise
+            if task.json()["status"] == "completed":
                 return True
-            raise
-        return task.json()["status"] == "completed"
+            elif retries > max_retries:
+                return False
+            else:
+                logr.info(f"Polling state of task {task_id} in 1s, retry attempt {retries}")
+                retries += 1
+                await asyncio.sleep(1)
 
     async def download_s3_files(
         self,
