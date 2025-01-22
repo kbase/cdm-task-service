@@ -4,8 +4,9 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+# TODO Updating aiobotocore causes tests to fail, investigate
 aiobotocore = "==2.15.2"
-aiohttp = "==3.11.10"
+aiohttp = "==3.11.11"
 bidict = "==0.23.1"
 cacheout = "==0.16.0"
 docker-image-py = "==0.1.13"
@@ -14,14 +15,14 @@ jinja-cli = "==1.2.2"
 marisa-trie = "==1.2.1"
 motor = "==3.6.0"
 requests = "==2.32.3"
-sfapi-client = "==0.3.1"
-uvicorn = {extras = ["standard"], version = "==0.32.1"}
+sfapi-client = "==0.3.2"
+uvicorn = {version = "==0.34.0", extras = ["standard"]}
 
 [dev-packages]
-coverage = "==7.6.9"
-ipython = "==8.30.0"
+coverage = "==7.6.10"
+ipython = "==8.31.0"
 pytest = "==8.3.4"
-pytest-asyncio = "==0.24.0"
+pytest-asyncio = "==0.25.2"
 pytest-cov = "==6.0.0"
 
 [requires]
