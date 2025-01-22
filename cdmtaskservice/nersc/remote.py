@@ -80,45 +80,47 @@ def process_errorsjson(
 
 
 def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callback_url: str):
-    jex = None
-    jext = None
-    cex = None
-    cext = None
-    ctext = None
-    ret = None
+    failed = False
     cts_env = {k: v for k, v in os.environ.items() if k.startswith("CTS_")}
     try:
         data = func(*args)
-    except Exception as jobexep:
-        jex = jobexep
+        with open(result_file_path, "w") as f:
+            json.dump({"result": "success", "data": data, "cts_env": cts_env}, f, indent=4)
+    except Exception as e:
+        failed = True
         jext = traceback.format_exc()
-    finally:
-        try:
-            # may want some retries here, halting on incorrect job state messages
-            ret = requests.get(callback_url)
-            if ret.status_code < 200 or ret.status_code > 299:
-                ctext = ret.text
-        except Exception as e:
-            cex = e
-            cext = traceback.format_exc()
-    with open(result_file_path, "w") as f:
-        if jex or cex or ctext:
+        with open(result_file_path, "w") as f:
+            j = {"result": "fail", "job_msg": str(e), "job_trace": jext, "cts_env": cts_env}
+            json.dump(j, f, indent=4)
+    cf = Path(result_file_path)
+    callback_file = cf.parent / f"{cf.stem}.callback_error{cf.suffix}"
+    try:
+        # may want some retries here, halting on incorrect job state messages
+        ret = requests.get(callback_url)
+        if ret.status_code < 200 or ret.status_code > 299:
+            failed = True
+            # log callback errors for debugging purposes, service will never see this
+            # since it's written post callback
+            with open(callback_file, "w") as f:
+                j = {
+                    "result": "fail",
+                    "callback_text": ret.text,
+                    "callback_code": ret.status_code,
+                    "cts_env": cts_env
+                }
+                json.dump(j, f, indent=4)
+    except Exception as e:
+        failed = True
+        with open(callback_file, "w") as f:
             j = {
                 "result": "fail",
-                "job_msg": str(jex) if jex else None,
-                "job_trace": jext,
-                # callback error info is mostly for debugging since the service won't be pinged
-                # if the callback fails
-                "callback_msg": str(cex) if cex else None,
-                "callback_trace": cext,
-                "callback_text": ctext,
-                "callback_code": ret.status_code if ret else None,
+                "callback_msg": str(e),
+                "callback_trace": traceback.format_exc(),
                 "cts_env": cts_env,
             }
             json.dump(j, f, indent=4)
-            sys.exit(1)
-        else:
-            json.dump({"result": "success", "data": data, "cts_env": cts_env}, f, indent=4)
+    if failed:
+        sys.exit(1)
 
 
 def main():

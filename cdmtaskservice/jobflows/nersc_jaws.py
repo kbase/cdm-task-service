@@ -22,7 +22,7 @@ from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.mongo import MongoDAO
-from cdmtaskservice.nersc.manager import NERSCManager, TransferResult
+from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
 
@@ -96,12 +96,17 @@ class NERSCJAWSRunner(JobFlow):
         op: str,
         err_type: str,
     ) -> Any:
+        # can't check that the NERSC task is complete first because the task
+        # won't complete until the callback request returns, which won't happen
+        # if we wait for the task to complete. IOW, deadlock
         try:
             res, data = await trans_func(job)
         except Exception as e:
             await self._handle_exception(e, job.id, err_type)
             raise
-        if not res.success:
+        if res.state == TransferState.INCOMPLETE:
+            raise InvalidJobStateError(f"{op} task is not complete")
+        elif res.state == TransferState.FAIL:
             logging.getLogger(__name__).error(
                 f"{op} failed for job {job.id}: {res.message}\n{res.traceback}"
             )
@@ -112,7 +117,8 @@ class NERSCJAWSRunner(JobFlow):
                 res.traceback,
             )
             raise ValueError(f"{op} failed: {res.message}")
-        return data
+        else:
+            return data
     
     async def _handle_general_exc(self, job_id: str, user_err: str, admin_err: str, traceback:str):
         # if this fails, well, then we're screwed
@@ -125,15 +131,6 @@ class NERSCJAWSRunner(JobFlow):
             timestamp.utcdatetime(),
             traceback=traceback,
         )
-    
-    async def _check_task_complete(self, task_id: str, job_id: str, tasktype: str):
-        try:
-            complete = await self._nman.is_task_complete(task_id)
-        except Exception as e:
-            await self._handle_exception(e, job_id, f"getting {tasktype.lower()} task status")
-            raise
-        if not complete:
-            raise InvalidJobStateError(f"{tasktype} task is not complete")
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
@@ -187,7 +184,6 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the download submitted state")
-        await self._check_task_complete(job.nersc_details.download_task_id[-1], job.id, "Download")
         async def tfunc(job: models.Job):
             return await self._nman.get_s3_download_result(job), None
         await self._get_transfer_result(  # check for errors
@@ -330,7 +326,6 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the upload submitted state")
-        await self._check_task_complete(job.nersc_details.upload_task_id[-1], job.id, "Upload")
         async def tfunc(job: models.Job):
             return await self._nman.get_presigned_upload_result(job), None
         await self._get_transfer_result(  # check for errors
@@ -373,9 +368,6 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.ERROR_PROCESSING_SUBMITTED:
             raise InvalidJobStateError("Job must be in the error processing submitted state")
-        await self._check_task_complete(
-            job.nersc_details.log_upload_task_id[-1], job.id, "Error log upload"
-        )
         data = await self._get_transfer_result(
             self._nman.get_presigned_error_log_upload_result,
             job,
