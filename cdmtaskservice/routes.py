@@ -180,7 +180,7 @@ async def get_image(
     response_model=models.Image,
     summary="Approve an image",
     description="Approve a Docker image for use with this service. "
-        + "The image must be publicly acessible and have an entrypoint. "
+        + "The image must be publicly accessible and have an entrypoint. "
         + "The image may not already exist in the system."
         
 )
@@ -192,6 +192,30 @@ async def approve_image(
     _ensure_admin(user, "Only service administrators can approve images.")
     images = app_state.get_app_state(r).images
     return await images.register(image_id, user.user)
+
+
+@ROUTER_ADMIN.post(
+    "/refdata/",
+    response_model=models.ReferenceData,
+    summary="Create reference data",
+    description="Define an S3 file as containing reference data necessary for one or more "
+        + "containers and start the reference data staging process."
+)
+async def create_refdata(
+    r: Request,
+    refdata: models.ReferenceDataInput,
+    user: kb_auth.KBaseUser=Depends(_AUTH)
+) -> models.Image:
+    _ensure_admin(user, "Only service administrators can create reference data.")
+    # TODO REFDATA implement
+    return models.ReferenceData(
+        id="foo",
+        file=refdata.file,
+        unpack=refdata.unpack,
+        registered_by="bar",
+        registered_on=datetime.datetime.now(),
+        statuses=[],
+    )
 
 
 @ROUTER_ADMIN.get(

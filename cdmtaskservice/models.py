@@ -24,6 +24,8 @@ from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathS
 # TODO EXAMPLES try using examples instead of the deprecated example. Last time I tried no joy
 #               still doesn't seem to work as of 24/11/11
 #               https://github.com/fastapi/fastapi/discussions/11137
+# TODO USEREX fail if an unknown key is in model input - error on typos
+#              https://docs.pydantic.dev/latest/api/config/#pydantic.config.ConfigDict.extra
 
 # WARNNING: Model field names also define field names in the MOngo database.
 # As such, field names cannot change without creating a mapping for field names in the mongo
@@ -419,7 +421,7 @@ class Cluster(str, Enum):
     """
     The location where a job should run.
     
-    perlmutter-jaws: The Perlmutter cluster at NESRC run via JAWS.
+    perlmutter-jaws: The Perlmutter cluster at NERSC run via JAWS.
     """
 
     PERLMUTTER_JAWS = "perlmutter-jaws"
@@ -646,7 +648,21 @@ class JobState(str, Enum):
     ERROR = "error"
 
 
-class Image(BaseModel):
+class RegistrationInfo(BaseModel):
+    """
+    Information about when and by whom something was registered.
+    """
+    registered_by: Annotated[str, Field(
+        example="aparkin",
+        description="The username of the user that performed the registration."
+    )]
+    registered_on: Annotated[datetime.datetime, Field(
+        example="2024-10-24T22:35:40Z",
+        description="The time of registration."
+    )]
+
+
+class Image(RegistrationInfo):
     """
     Information about a Docker image.
     """
@@ -669,14 +685,6 @@ class Image(BaseModel):
         description="The image tag at registration time. "
             + "The tag may no longer point to the same image."
     )] = None
-    registered_by: Annotated[str, Field(
-        example="aparkin",
-        description="The username of the user that registered this image."
-    )]
-    registered_on: Annotated[datetime.datetime, Field(
-        example="2024-10-24T22:35:40Z",
-        description="The time of registration."
-    )]
     # TODO REFERENCEDATA add reference data ID
     
     @property
@@ -767,3 +775,67 @@ class AdminJobDetails(Job):
             + "admins, potentially including more details."
     )] = None
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
+
+
+class ReferenceDataState(str, Enum):
+    """
+    The state of a reference data staging process.
+    """
+    CREATED = "created"
+    DOWNLOAD_SUBMITTED = "download_submitted"
+    COMPLETE = "complete"
+    ERROR = "error"
+
+
+class ReferenceDataInput(BaseModel):
+    """
+    Information necessary to stage reference data at a remote site. If multiple files are required,
+    they must be compressed into a single tarfile.
+    """
+    # TODO REFDATA will need a force toggle if file is overwritten after reg
+    file: S3File
+    unpack: Annotated[bool, Field(
+        description="Whether to unpack the file after download. *.tar.gz, *.tgz, and *.gz "
+            + "files are supported."
+    )] = False
+
+
+class ReferenceDataStatus(BaseModel):
+    """
+    Status of a reference data staging process at a particular remote compute location.
+    """
+    # This is an outgoing structure only so we don't add validators
+    cluster: Annotated[Cluster, Field(example=Cluster.PERLMUTTER_JAWS.value)]
+    state: Annotated[ReferenceDataState, Field(
+        example=ReferenceDataState.COMPLETE.value,
+        description="The state of the reference data staging process."
+    )]
+    transition_times: Annotated[list[tuple[ReferenceDataState, datetime.datetime]], Field(
+            example=[
+                (ReferenceDataState.CREATED.value, "2024-10-24T22:35:40Z"),
+                (ReferenceDataState.DOWNLOAD_SUBMITTED.value, "2024-10-24T22:35:41Z"),
+            ],
+            description="A list of tuples of (staging_state, time_staging_state_entered)."
+        )
+    ]
+    error: Annotated[str | None, Field(
+        example="The front fell off",
+        description="A description of the error that occurred."
+    )] = None
+    # TODO REFDATA will need to add a nersc task ID, admin errpr/trace in an admin model
+
+
+class ReferenceData(ReferenceDataInput, RegistrationInfo):
+    """
+    Information about reference data that is, or will be, available for containers.
+    """
+    # This is an outgoing structure only so we don't add validators
+    id: Annotated[str, Field(
+        description="An opaque, unique string that serves as the reference data's ID.",
+    )]
+    # TODO LAWRENCIUM how do deal with this? sync process from NERSC, not a separate D/L
+    # TODO FUTURESITES will need to be able to stage to sites that down't exist currently
+    #                  ... if that ever happens
+    statuses: Annotated[list[ReferenceDataStatus], Field(
+        description="The states of reference data staging processes at remote compute locations.",
+    )]
