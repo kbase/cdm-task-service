@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "ca462e48522ad29a370f43bc2f6aace728692848cb3f234809d6aa31f3132e3c"
+            "sha256": "7b33c56d3e3d613945074ee1642257cae050fa96c92d792c50163699ef6c959b"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -1028,11 +1028,11 @@
         },
         "pydantic": {
             "hashes": [
-                "sha256:278b38dbbaec562011d659ee05f63346951b3a248a6f3642e1bc68894ea2b4ff",
-                "sha256:4dd4e322dbe55472cb7ca7e73f4b63574eecccf2835ffa2af9021ce113c83c53"
+                "sha256:427d664bf0b8a2b34ff5dd0f5a18df00591adcee7198fbd71981054cef37b584",
+                "sha256:ca5daa827cce33de7a42be142548b0096bf05a7e7b365aebfa5f8eeec7128236"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==2.10.5"
+            "version": "==2.10.6"
         },
         "pydantic-core": {
             "hashes": [
@@ -1437,11 +1437,11 @@
         },
         "sfapi-client": {
             "hashes": [
-                "sha256:408f2b27530cbc3f06e5bbe2873b48a03a10c047c06aa47f0f1030a8bc4184f9",
-                "sha256:ea6080cf113ba93ccccdaebd2ebdab288241f3e9d969ab9954fca588361b35f7"
+                "sha256:a15b220e1de6eea6148bde9ffb46e0fabfffe4117d40d2c3d4014262bcdf23c3",
+                "sha256:a8e74108c257106ddb956f17eda856c46e0d6f4003c5f9e2bff276f9a24e6340"
             ],
             "index": "pypi",
-            "version": "==0.3.2"
+            "version": "==0.4.1"
         },
         "shellingham": {
             "hashes": [
@@ -1979,11 +1979,11 @@
         },
         "executing": {
             "hashes": [
-                "sha256:8d63781349375b5ebccc3142f4b30350c0cd9c79f921cde38be2be4637e98eaf",
-                "sha256:8ea27ddd260da8150fa5a708269c4a10e76161e2496ec3e587da9e3c0fe4b9ab"
+                "sha256:11387150cad388d62750327a53d3339fad4888b39a6fe233c3afbb54ecffd3aa",
+                "sha256:5d108c028108fe2551d1a7b2e8b713341e2cb4fc0aa7dcf966fa4327a5226755"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==2.1.0"
+            "version": "==2.2.0"
         },
         "iniconfig": {
             "hashes": [

@@ -3,7 +3,7 @@ Get the status of the NERSC perlmutter and DTN systems without authentication.
 """
 
 import datetime
-from sfapi_client import AsyncClient, StatusValue
+from sfapi_client import AsyncClient, StatusValue, OutageStatusValue
 from sfapi_client.compute import Machine
 from typing import NamedTuple
 import asyncio
@@ -72,7 +72,7 @@ class NERSCStatus:
         if ac.status != StatusValue.active:
             outages = await self._cli.resources.outages(ac.name)
             for o in outages:
-                if o.status == "Active":
+                if o.status == OutageStatusValue.Active:
                     return False, o.end_at, o.description
             raise ValueError(f"NERSC resource {m} is inactive but found no outage")
         return True, None, None
