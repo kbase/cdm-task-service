@@ -119,6 +119,9 @@ _JAWS_RES_TO_ENUM = {
     "failed": JAWSResult.FAILED,
     None: JAWSResult.SYSTEM_ERROR,
 }
+# TODO RELIABILITY cancelled is a possible result, but can be cancelled and still be null.
+#                  if null, check the jaws logs for a cancelled state
+
 
 def result(job: dict[str, Any]) -> JAWSResult:
     """
