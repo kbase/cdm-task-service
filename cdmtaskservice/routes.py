@@ -252,7 +252,7 @@ class NERSCClientInfo(BaseModel):
     response_model=NERSCClientInfo,
     summary="NERSC SFAPI client info",
     description="Get information about the NERSC Superfacility API client "
-        + "including the expiration time,\n"
+        + "including the expiration time.\n\n"
         + "Administrator credentials are required."
 )
 async def get_nersc_client_info(
