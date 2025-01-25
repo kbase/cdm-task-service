@@ -203,19 +203,12 @@ async def approve_image(
 )
 async def create_refdata(
     r: Request,
-    refdata: models.ReferenceDataInput,
+    refdata_input: models.ReferenceDataInput,
     user: kb_auth.KBaseUser=Depends(_AUTH)
 ) -> models.Image:
     _ensure_admin(user, "Only service administrators can create reference data.")
-    # TODO REFDATA implement
-    return models.ReferenceData(
-        id="foo",
-        file=refdata.file,
-        unpack=refdata.unpack,
-        registered_by="bar",
-        registered_on=datetime.datetime.now(),
-        statuses=[],
-    )
+    refdata = app_state.get_app_state(r).refdata
+    return await refdata.create_refdata(refdata_input, user)
 
 
 @ROUTER_ADMIN.get(

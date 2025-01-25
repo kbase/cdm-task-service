@@ -3,8 +3,8 @@ General exceptions used by multiple modules.
 """
 
 
-class UnauthorizedError(Exception):
-    """ An exception thrown when a user attempts a forbidden action. """
+class ETagMismatchError(Exception):
+    """ Thrown when an specified ETag does not match the expected ETag. """
 
 
 class IllegalParameterError(Exception):
@@ -13,3 +13,7 @@ class IllegalParameterError(Exception):
 
 class InvalidJobStateError(Exception):
     """ An exception thrown when a job is in an invalid state to perform an operation. """
+
+
+class UnauthorizedError(Exception):
+    """ An exception thrown when a user attempts a forbidden action. """
