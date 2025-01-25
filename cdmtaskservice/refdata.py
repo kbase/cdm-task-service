@@ -6,7 +6,7 @@ import uuid
 
 from cdmtaskservice import kb_auth
 from cdmtaskservice import models
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import ETagMismatchError
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
@@ -83,6 +83,21 @@ class Refdata:
             registered_on=utcdatetime(),
             statuses=statuses,
         )
-        # TODO REFDATA save to mongo
+        await self._mongo.save_refdata(rd)
         # TODO REFDATA start a coroutine to stage the data
         return rd
+
+    async def get_refdata(
+        self,
+        refdata_id: str,
+        as_admin: bool = False, # TODO REFDATA make use of the admin toggle
+    ) -> models.ReferenceData:
+        """
+        Get reference data based on its ID.
+        
+        refdata_id - the reference data ID
+        as_admin - True if the user should be able to access additional details about the data.
+        """
+        return await self._mongo.get_refdata(
+            _require_string(refdata_id, "refdata_id"), as_admin=as_admin
+        )

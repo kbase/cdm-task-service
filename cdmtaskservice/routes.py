@@ -38,6 +38,7 @@ SERVICE_NAME = "CDM Task Service Prototype"
 ROUTER_GENERAL = APIRouter(tags=["General"])
 ROUTER_JOBS = APIRouter(tags=["Jobs"], prefix="/jobs")
 ROUTER_IMAGES = APIRouter(tags=["Images"], prefix="/images")
+ROUTER_REFDATA = APIRouter(tags=["Reference Data"], prefix="/refdata")
 ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
 ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 
@@ -173,6 +174,27 @@ async def get_image(
     # Public for now - any reason for these to be private to KBase staff?
 ):
     return await app_state.get_app_state(r).images.get_image(image_id)
+
+
+@ROUTER_REFDATA.get(
+    "/{refdata_id}",
+    response_model=models.ReferenceData,
+    summary="Get reference data information.",
+    description="Get information about reference data available for containers, including its "
+        + "location and staging status."
+)
+async def get_refdata(
+    r: Request,
+    refdata_id: Annotated[str, FastPath(
+        example="f0c24820-d792-4efa-a38b-2458ed8ec88f",
+        description="The reference data ID.",
+        pattern=r"^[\w-]+$",
+        min_length=1,
+        max_length=50,
+    )],
+) -> models.ReferenceData:
+    refdata = app_state.get_app_state(r).refdata
+    return await refdata.get_refdata(refdata_id)
 
 
 @ROUTER_ADMIN.post(

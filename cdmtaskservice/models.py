@@ -52,6 +52,7 @@ FLD_JOB_ERROR = "error"
 FLD_JOB_ADMIN_ERROR = "admin_error"
 FLD_JOB_TRACEBACK = "traceback"
 FLD_JOB_LOGPATH = "logpath"
+FLD_REFDATA_ID = "id"
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations

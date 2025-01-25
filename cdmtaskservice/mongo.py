@@ -40,6 +40,7 @@ class MongoDAO:
         self._db = db
         self._col_images = self._db.images
         self._col_jobs = self._db.jobs
+        self._col_refdata = self._db.refdata
         
     async def _create_indexes(self):
         # TODO DATAINTEGRITY test unique index builds throw an error if there are non-unique
@@ -67,6 +68,9 @@ class MongoDAO:
         # Only need and want a single unique index for jobs so they can be sharded
         await self._col_jobs.create_indexes([
             IndexModel([(models.FLD_JOB_ID, ASCENDING)], unique=True)
+        ])
+        await self._col_refdata.create_indexes([
+            IndexModel([(models.FLD_REFDATA_ID, ASCENDING)], unique=True)
         ])
 
     async def save_image(self, image: models.Image):
@@ -325,6 +329,32 @@ class MongoDAO:
             models.FLD_JOB_TRACEBACK: traceback,
             models.FLD_JOB_LOGPATH: logpath
         })
+
+
+    async def save_refdata(self, refdata: models.ReferenceData):
+        """ Save reference data state. Reference data IDs are expected to be unique."""
+        _not_falsy(refdata, "refdata")
+        # don't bother checking for duplicate key exceptions since the service is supposed
+        # to ensure unique IDs
+        await self._col_refdata.insert_one(refdata.model_dump())
+
+
+    async def get_refdata(
+        # TODO REFDATA make use of the as admin toggle
+        self, refdata_id: str, as_admin: bool = False
+    ) -> models.ReferenceData:
+        """
+        Get reference data by its ID.
+        
+        refdata_id - the reference data ID.
+        as_admin - get additional details about the reference data.
+        """
+        doc = await self._col_refdata.find_one(
+            {models.FLD_REFDATA_ID: _require_string(refdata_id, "refdata_id")}
+        )
+        if not doc:
+            raise NoSuchJobError(f"No reference data with ID '{refdata_id}' exists")
+        return models.ReferenceData(**doc)
 
 
 class NoSuchImageError(Exception):
