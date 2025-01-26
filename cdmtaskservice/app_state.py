@@ -97,6 +97,7 @@ async def build_app(
             flowman.mark_flow_inactive(models.Cluster.PERLMUTTER_JAWS, failreason)
         else:
             nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
+                models.Cluster.PERLMUTTER_JAWS,
                 nerscman,
                 jaws_client,
                 mongodao,

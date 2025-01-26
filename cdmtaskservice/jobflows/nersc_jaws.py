@@ -15,9 +15,10 @@ from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
+    get_refdata_download_complete_callback,
 )
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import InvalidJobStateError
+from cdmtaskservice.exceptions import InvalidJobStateError, InvalidReferenceDataStateError
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
@@ -40,6 +41,7 @@ class NERSCJAWSRunner(JobFlow):
     
     def __init__(
         self,
+        cluster: models.Cluster,
         nersc_manager: NERSCManager,
         jaws_client: jaws_client.JAWSClient,
         mongodao: MongoDAO,
@@ -53,6 +55,7 @@ class NERSCJAWSRunner(JobFlow):
         """
         Create the runner.
         
+        cluster - the cluster this job flow manages.
         nersc_manager - the NERSC manager.
         jaws_client - a JAWS Central client.
         mongodao - the Mongo DAO object.
@@ -66,6 +69,7 @@ class NERSCJAWSRunner(JobFlow):
         s3_insecure_url - whether to skip checking the SSL certificate for the S3 instance,
             leaving the service open to MITM attacks.
         """
+        self._cluster = _not_falsy(cluster, "cluster")
         self._nman = _not_falsy(nersc_manager, "nersc_manager")
         self._jaws = _not_falsy(jaws_client, "jaws_client")
         self._mongo = _not_falsy(mongodao, "mongodao")
@@ -76,17 +80,22 @@ class NERSCJAWSRunner(JobFlow):
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")
         
-    async def _handle_exception(self, e: Exception, job_id: str, errtype: str):
+    async def _handle_exception(
+        self, e: Exception, entity_id: str, errtype: str, refdata: bool = False
+    ):
         # TODO LOGGING figure out how logging it going to work etc.
-        logging.getLogger(__name__).exception(f"Error {errtype} job {job_id}")
-        await self._handle_general_exc(
-            job_id,
+        logging.getLogger(__name__).exception(
+            f"Error {errtype} {'refdata' if refdata else 'job'}: {entity_id}"
+        )
+        await self._save_err_to_mongo(
+            entity_id,
             # We'll need to see what kinds of errors happen and change the user message
             # appropriately. Just provide a generic message for now, as most errors aren't
             # going to be fixable by users
             "An unexpected error occurred",
             str(e),
             traceback.format_exc(),
+            refdata=refdata,
         )
     
     async def _get_transfer_result(
@@ -110,7 +119,7 @@ class NERSCJAWSRunner(JobFlow):
             logging.getLogger(__name__).error(
                 f"{op} failed for job {job.id}: {res.message}\n{res.traceback}"
             )
-            await self._handle_general_exc(
+            await self._save_err_to_mongo(
                 job.id,
                 f"An unexpected error occurred during file {op.lower()}",
                 res.message,
@@ -120,17 +129,32 @@ class NERSCJAWSRunner(JobFlow):
         else:
             return data
     
-    async def _handle_general_exc(self, job_id: str, user_err: str, admin_err: str, traceback:str):
+    async def _save_err_to_mongo(
+        self, entity_id: str, user_err: str, admin_err: str, traceback:str, refdata=False,
+    ):
         # if this fails, well, then we're screwed
-        await self._mongo.set_job_error(
-            job_id,
-            user_err,
-            admin_err,
-            models.JobState.ERROR,
-            # TODO TEST will need a way to mock out timestamps
-            timestamp.utcdatetime(),
-            traceback=traceback,
-        )
+        # could probably simplify this with a partial fn to hold the cluster arg.. meh
+        if refdata:
+            await self._mongo.set_refdata_error(
+                self._cluster,
+                entity_id,
+                user_err,
+                admin_err,
+                models.ReferenceDataState.ERROR,
+                # TODO TEST will need a way to mock out timestamps
+                timestamp.utcdatetime(),
+                traceback=traceback,
+            )
+        else:
+            await self._mongo.set_job_error(
+                entity_id,
+                user_err,
+                admin_err,
+                models.JobState.ERROR,
+                # TODO TEST will need a way to mock out timestamps
+                timestamp.utcdatetime(),
+                traceback=traceback,
+            )
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
@@ -389,3 +413,42 @@ class NERSCJAWSRunner(JobFlow):
             timestamp.utcdatetime(),
             logpath=os.path.join(self._s3logdir, job.id),
         )
+
+    async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):
+        """
+        Start staging reference data. It is expected that the ReferenceData has been persisted to
+        the data storage system and is in the created state.
+        
+        refdata - the reference data
+        objmeta - the S3 object metadata for the reference data file.
+        """
+        refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self._cluster)
+        if refstate.state != models.ReferenceDataState.CREATED:
+            raise InvalidReferenceDataStateError("Reference data must be in the created state")
+        # Could check that the s3 and refdata path / etag match... YAGNI
+        # TODO PERF this validates the file paths yet again.
+        paths = S3Paths([objmeta.path])
+        try:
+            presigned = await self._s3ext.presign_get_urls(paths)
+            callback_url = get_refdata_download_complete_callback(self._callback_root, refdata.id)
+            # TODO DISKSPACE clean up no longer used refdata @ NERSC
+            #                keep the refdata mongo record so it can be restaged if necessary
+            task_id = await self._nman.download_s3_files(
+                refdata.id,
+                [objmeta],
+                presigned,
+                callback_url,
+                insecure_ssl=self._s3insecure,
+                refdata=True,
+            )
+            await self._mongo.add_NERSC_refdata_download_task_id(
+                self._cluster,
+                refdata.id,
+                task_id,
+                models.ReferenceDataState.CREATED,
+                models.ReferenceDataState.DOWNLOAD_SUBMITTED,
+                # TODO TEST will need a way to mock out timestamps
+                timestamp.utcdatetime(),
+            )
+        except Exception as e:
+            await self._handle_exception(e, refdata.id, "starting file download for", refdata=True)
