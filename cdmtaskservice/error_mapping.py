@@ -10,6 +10,7 @@ from cdmtaskservice.exceptions import (
     ETagMismatchError,
     IllegalParameterError,
     InvalidJobStateError,
+    InvalidReferenceDataStateError,
     UnauthorizedError,
 )
 from cdmtaskservice.http_bearer import MissingTokenError, InvalidAuthHeaderError
@@ -21,6 +22,7 @@ from cdmtaskservice.mongo import (
     ImageDigestExistsError,
     NoSuchImageError,
     NoSuchJobError,
+    NoSuchReferenceDataError,
 )
 from cdmtaskservice.routes import ClientLifeTimeError
 from cdmtaskservice.s3.client import (
@@ -66,7 +68,9 @@ _ERR_MAP = {
     ImageDigestExistsError: ErrorMapping(ErrorType.IMAGE_DIGEST_EXISTS, _H400),
     NoSuchImageError: ErrorMapping(ErrorType.NO_SUCH_IMAGE, _H404),
     NoSuchJobError: ErrorMapping(ErrorType.NO_SUCH_JOB, _H404),
+    NoSuchReferenceDataError: ErrorMapping(ErrorType.NO_SUCH_REFDATA, _H404),
     InvalidJobStateError: ErrorMapping(ErrorType.INVALID_JOB_STATE, _H400),
+    InvalidReferenceDataStateError: ErrorMapping(ErrorType.INVALID_REFDATA_STATE, _H400),
     InactiveJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_INACTIVE, _H400),
     IllegalParameterError: ErrorMapping(ErrorType.ILLEGAL_PARAMETER, _H400),
 }

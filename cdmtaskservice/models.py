@@ -53,6 +53,14 @@ FLD_JOB_ADMIN_ERROR = "admin_error"
 FLD_JOB_TRACEBACK = "traceback"
 FLD_JOB_LOGPATH = "logpath"
 FLD_REFDATA_ID = "id"
+FLD_REFDATA_STATUSES = "statuses"
+FLD_REFDATA_CLUSTER = "cluster"
+FLD_REFDATA_TRANS_TIMES = "transition_times"
+FLD_REFDATA_STATE = "state"
+FLD_REFDATA_ERROR = "error"
+FLD_REFDATA_ADMIN_ERROR = "admin_error"
+FLD_REFDATA_TRACEBACK = "traceback"
+FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
@@ -825,17 +833,53 @@ class ReferenceDataStatus(BaseModel):
     # TODO REFDATA will need to add a nersc task ID, admin errpr/trace in an admin model
 
 
-class ReferenceData(ReferenceDataInput, RegistrationInfo):
+class AdminReferenceDataStatus(ReferenceDataStatus):
     """
-    Information about reference data that is, or will be, available for containers.
+    Information about reference data status with added details of interest to service
+    administrators.
     """
+    nersc_download_task_id: Annotated[list[str], Field(
+        description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
+            + "instance to NERSC. Note that task details only persist for ~10 minutes past "
+            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
+            + "Only present if the refdata is being downloaded to NERSC."
+    )] = None
+    admin_error: Annotated[str | None, Field(
+        example="The back fell off",
+        description="A description of the error that occurred oriented towards service "
+            + "admins, potentially including more details."
+    )] = None
+    traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
+
+
+class ReferenceDataRoot(ReferenceDataInput, RegistrationInfo):
     # This is an outgoing structure only so we don't add validators
     id: Annotated[str, Field(
         description="An opaque, unique string that serves as the reference data's ID.",
     )]
+
+
+class ReferenceData(ReferenceDataRoot):
+    """
+    Information about reference data that is, or will be, available for containers.
+    """
+    # This is an outgoing structure only so we don't add validators
     # TODO LAWRENCIUM how do deal with this? sync process from NERSC, not a separate D/L
     # TODO FUTURESITES will need to be able to stage to sites that down't exist currently
     #                  ... if that ever happens
     statuses: Annotated[list[ReferenceDataStatus], Field(
+        description="The states of reference data staging processes at remote compute locations.",
+    )]
+
+
+class AdminReferenceData(ReferenceDataRoot):
+    """
+    Information about reference data that is, or will be, available for containers.
+    """
+    # This is an outgoing structure only so we don't add validators
+    # TODO LAWRENCIUM how do deal with this? sync process from NERSC, not a separate D/L
+    # TODO FUTURESITES will need to be able to stage to sites that down't exist currently
+    #                  ... if that ever happens
+    statuses: Annotated[list[AdminReferenceDataStatus], Field(
         description="The states of reference data staging processes at remote compute locations.",
     )]

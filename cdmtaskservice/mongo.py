@@ -167,8 +167,9 @@ class MongoDAO:
             },
         )
         if not res.matched_count:
+            cs = f"in state {current_state.value} " if current_state else ""
             raise NoSuchJobError(
-                f"No job with ID '{job_id}' in state {current_state.value} exists"
+                f"No job with ID '{job_id}' {cs}exists"
             )
     
     async def update_job_state(
@@ -358,6 +359,121 @@ class MongoDAO:
             raise NoSuchJobError(f"No reference data with ID '{refdata_id}' exists")
         return models.ReferenceData(**doc)
 
+    async def _update_refdata_state(
+        self,
+        cluster: models.Cluster,
+        refdata_id: str,
+        state: models.ReferenceDataState,
+        time: datetime.datetime,
+        push: dict[str, Any] | None = None,
+        set_: dict[str, Any] | None = None,
+        current_state: models.JobState | None = None,
+    ):
+        sub = f"{models.FLD_REFDATA_STATUSES}."
+        subs = f"{sub}$."
+        query = {
+            models.FLD_REFDATA_ID: _require_string(refdata_id, "refdata_id"),
+            f"{sub}{models.FLD_REFDATA_CLUSTER}": _not_falsy(cluster, "cluster").value
+        }
+        set_ = {f"{subs}{k}": v for k, v in set_.items()} if set_ else set_
+        push = {f"{subs}{k}": v for k, v in push.items()} if push else push
+        if current_state:
+            query[f"{sub}{models.FLD_REFDATA_STATE}"] = current_state.value
+        res = await self._col_refdata.update_one(
+            query,
+            {
+                "$push": (push if push else {}) | {
+                    f"{subs}{models.FLD_JOB_TRANS_TIMES}":
+                          (_not_falsy(state, "state").value, _not_falsy(time, "time")
+                    )
+                },
+                "$set": (set_ if set_ else {}) | 
+                    {f"{subs}{models.FLD_REFDATA_STATE}": state.value}
+            },
+        )
+        if not res.matched_count:
+            cs = f"in state {current_state.value} " if current_state else ""
+            raise NoSuchReferenceDataError(
+                f"No reference data with ID '{refdata_id}' for cluster {cluster.value} {cs}exits"
+            )
+
+    async def update_refdata_state(
+        self,
+        cluster: models.Cluster,
+        refdata_id: str,
+        current_state: models.JobState,
+        state: models.JobState,
+        time: datetime.datetime,
+    ):
+        """
+        Update the reference data state.
+        
+        cluster - the cluster to which this update applies.
+        refdata_id - the reference data ID.
+        current_state - the expected current state of the reference data. If the reference
+            data is not in this state an error is thrown.
+        state - the new state for the reference data.
+        time - the time at which the reference data transitioned to the new state.
+        """
+        await self._update_refdata_state(
+            cluster, refdata_id, state, time, current_state=current_state
+        )
+
+    async def add_NERSC_refdata_download_task_id(
+        self,
+        cluster: models.Cluster,
+        refdata_id: str,
+        task_id: str,
+        current_state: models.ReferenceDataState,
+        state: models.ReferenceDataState,
+        time: datetime.datetime
+    ):
+        """
+        Add a task_id to the NERSC section of a reference data download and update the state.
+        
+        Arguments are as update_refdata_state except for the addition of:
+        
+        task_id - the NERSC task ID.
+        """
+        # may need to make this more generic where the cluster is passed in and mapped to
+        # a job structure location or something if we support more than NERSC
+        await self._update_refdata_state(
+            cluster,
+            refdata_id,
+            state,
+            time,
+            current_state=current_state,
+            push={models.FLD_REFDATA_NERSC_DL_TASK_ID: _require_string(task_id, "task_id")}
+        )
+
+    async def set_refdata_error(
+        self,
+        cluster: models.Cluster,
+        refdata_id: str,
+        user_error: str,
+        admin_error: str,
+        state: models.ReferenceDataState,
+        time: datetime.datetime,
+        traceback: str | None = None,
+    ):
+        """
+        Put the reference data operation into an error state.
+        
+        cluster - the cluster to which this update applies.
+        refdata_id - the reference data ID.
+        user_error - an error message targeted towards a service user.
+        admin_error - an error message targeted towards a service admin.
+        state - the new state for the reference data operation.
+        time - the time at which the operation transitioned to the new state.
+        traceback - the error traceback.
+        """
+        # TODO RETRIES will need to clear the error fields when attempting a retry
+        await self._update_refdata_state(cluster, refdata_id, state, time, set_={
+            models.FLD_REFDATA_ERROR: user_error,
+            models.FLD_REFDATA_ADMIN_ERROR: admin_error,
+            models.FLD_REFDATA_TRACEBACK: traceback,
+        })
+
 
 class NoSuchImageError(Exception):
     """ The image does not exist in the system. """
@@ -365,6 +481,10 @@ class NoSuchImageError(Exception):
 
 class NoSuchJobError(Exception):
     """ The job does not exist in the system. """
+
+
+class NoSuchReferenceDataError(Exception):
+    """ The reference data does not exist in the system. """
 
 
 class ImageTagExistsError(Exception):
