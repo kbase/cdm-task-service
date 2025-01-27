@@ -62,6 +62,9 @@ class ErrorType(Enum):
     
     INVALID_JOB_STATE =          (30300, "Invalid job state")  # noqa: E222 @IgnorePep8
     """ The job is not in the correct state for the requested operation. """
+    
+    INVALID_REFDATA_STATE =      (30400, "Invalid reference data state")  # noqa: E222 @IgnorePep8
+    """ The reference data is not in the correct state for the requested operation. """
 
     NOT_FOUND =                  (40000, "Not Found")  # noqa: E222 @IgnorePep8
     """ The requested resource was not found. """
@@ -77,6 +80,9 @@ class ErrorType(Enum):
 
     NO_SUCH_JOB =                (40040, "No such job")  # noqa: E222 @IgnorePep8
     """ The job was not found in the system. """
+    
+    NO_SUCH_REFDATA =            (40040, "No such reference data")  # noqa: E222 @IgnorePep8
+    """ The reference data was not found in the system. """
 
     IMAGE_TAG_EXISTS =           (50000, "Image tag exists")  # noqa: E222 @IgnorePep
     """ The tag for the image already exists in the system. """
