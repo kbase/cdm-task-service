@@ -787,13 +787,12 @@ class ReferenceDataState(str, Enum):
     ERROR = "error"
 
 
-class ReferenceDataInput(BaseModel):
+class ReferenceDataInput(S3File):
     """
     Information necessary to stage reference data at a remote site. If multiple files are required,
     they must be compressed into a single tarfile.
     """
     # TODO REFDATA will need a force toggle if file is overwritten after reg
-    file: S3File
     unpack: Annotated[bool, Field(
         description="Whether to unpack the file after download. *.tar.gz, *.tgz, and *.gz "
             + "files are supported."

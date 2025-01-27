@@ -13,7 +13,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num
 )
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import UnauthorizedError, IllegalParameterError
+from cdmtaskservice.exceptions import UnauthorizedError, IllegalParameterError, ETagMismatchError
 from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.mongo import MongoDAO
@@ -38,6 +38,8 @@ class JobState:
         job_max_cpu_hours: float,
     ):
         """
+        Create the job state manager.
+        
         mongo - a MongoDB DAO object.
         s3Client - an S3Client pointed at the S3 storage system to use.
         images - a handler for getting images.
@@ -46,9 +48,9 @@ class JobState:
         log_bucket - the bucket in which logs are stored. Disallowed for writing for other cases.
         job_max_cpu_hours - the maximum CPU hours allows for a job on submit.
         """
-        self._images = _not_falsy(images, "images")
-        self._s3 = _not_falsy(s3client, "s3client")
         self._mongo = _not_falsy(mongo, "mongo")
+        self._s3 = _not_falsy(s3client, "s3client")
+        self._images = _not_falsy(images, "images")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._flowman = _not_falsy(flow_manager, "flow_manager")
         self._logbuk = _require_string(log_bucket, "log_bucket")
@@ -143,7 +145,3 @@ class JobState:
             msg = f"Admin user {user} accessed {job.user}'s job {job_id}"
         logging.getLogger(__name__).info(msg)
         return job
-
-
-class ETagMismatchError(Exception):
-    """ Thrown when an specified ETag does not match the expected ETag. """

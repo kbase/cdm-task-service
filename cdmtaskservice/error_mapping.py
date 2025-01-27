@@ -7,6 +7,7 @@ from typing import NamedTuple
 
 from cdmtaskservice.errors import ErrorType
 from cdmtaskservice.exceptions import (
+    ETagMismatchError,
     IllegalParameterError,
     InvalidJobStateError,
     UnauthorizedError,
@@ -14,7 +15,6 @@ from cdmtaskservice.exceptions import (
 from cdmtaskservice.http_bearer import MissingTokenError, InvalidAuthHeaderError
 from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
-from cdmtaskservice.job_state import ETagMismatchError
 from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError
 from cdmtaskservice.mongo import (
     ImageTagExistsError,

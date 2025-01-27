@@ -27,6 +27,7 @@ from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.nersc.status import NERSCStatus
 from cdmtaskservice.nersc.manager import NERSCManager
+from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import validate_path
 from cdmtaskservice.version import VERSION
@@ -41,6 +42,7 @@ class AppState(NamedTuple):
     sfapi_client: NERSCSFAPIClientProvider
     s3_client: S3Client  # may be None if NERSC is unavailable at startup
     job_state: JobState
+    refdata: Refdata
     images: Images
     jobflow_manager: JobFlowManager
 
@@ -109,10 +111,11 @@ async def build_app(
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         images = Images(mongodao, imginfo)
         job_state = JobState(mongodao, s3, images, coman, flowman, logbuk, cfg.job_max_cpu_hours)
+        refdata = Refdata(mongodao, s3, coman, flowman)
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._jaws_cli = jaws_client
-        app.state._cdmstate = AppState(auth, sfapi_client, s3, job_state, images, flowman)
+        app.state._cdmstate = AppState(auth, sfapi_client, s3, job_state, refdata, images, flowman)
     except:
         if mongocli:
             mongocli.close()
