@@ -375,20 +375,17 @@ class MongoDAO:
             models.FLD_REFDATA_ID: _require_string(refdata_id, "refdata_id"),
             f"{sub}{models.FLD_REFDATA_CLUSTER}": _not_falsy(cluster, "cluster").value
         }
-        set_ = {f"{subs}{k}": v for k, v in set_.items()} if set_ else set_
-        push = {f"{subs}{k}": v for k, v in push.items()} if push else push
+        set_ = {f"{subs}{k}": v for k, v in set_.items()} if set_ else {}
+        push = {f"{subs}{k}": v for k, v in push.items()} if push else {}
         if current_state:
             query[f"{sub}{models.FLD_REFDATA_STATE}"] = current_state.value
         res = await self._col_refdata.update_one(
             query,
             {
-                "$push": (push if push else {}) | {
-                    f"{subs}{models.FLD_JOB_TRANS_TIMES}":
-                          (_not_falsy(state, "state").value, _not_falsy(time, "time")
-                    )
+                "$push": push | {f"{subs}{models.FLD_JOB_TRANS_TIMES}":
+                        (_not_falsy(state, "state").value, _not_falsy(time, "time"))
                 },
-                "$set": (set_ if set_ else {}) | 
-                    {f"{subs}{models.FLD_REFDATA_STATE}": state.value}
+                "$set": set_ | {f"{subs}{models.FLD_REFDATA_STATE}": state.value}
             },
         )
         if not res.matched_count:
