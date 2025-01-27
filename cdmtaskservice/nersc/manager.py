@@ -74,6 +74,7 @@ module load jaws
 export JAWS_USER_CONFIG=~/{{conf_file}}
 jaws submit --tag {{job_id}} {{wdlpath}} {{inputjsonpath}} {{site}}
 """
+# This hardcodes the service to the kbase install at NERSC. May need to make configurable... YAGNI
 _JAWS_SITE_PERLMUTTER = "kbase"  # add lawrencium later, maybe
 _JAWS_INPUT_WDL = "input.wdl"
 _JAWS_INPUT_JSON = "input.json"
@@ -177,6 +178,7 @@ class NERSCManager:
         nersc_code_path: Path,
         jaws_token: str,
         jaws_group: str,
+        jaws_refdata_root_dir: Path,
         service_group: str = "dev",
     ) -> Self:
         """
@@ -188,8 +190,9 @@ class NERSCManager:
             include version information in the path to avoid code conflicts.
         jaws_token - a token for the JGI JAWS system.
         jaws_group - the group to use for running JAWS jobs.
+        jaws_refdata_root_dir - the root directory for refdata configured for the JAWS instance.
         """
-        nm = NERSCManager(client_provider, nersc_code_path, service_group)
+        nm = NERSCManager(client_provider, nersc_code_path, service_group, jaws_refdata_root_dir)
         await nm._setup_remote_code(
             _require_string(jaws_token, "jaws_token"),
             _require_string(jaws_group, "jaws_group"),
@@ -201,11 +204,14 @@ class NERSCManager:
             client_provider: Callable[[], str],
             nersc_code_path: Path,
             service_group: str,
+            jaws_refdata_root_dir: str,
         ):
         self._client_provider = _not_falsy(client_provider, "client_provider")
         self._nersc_code_path = self._check_path(nersc_code_path, "nersc_code_path")
         self._scratchdir = Path("cdm_task_service") / service_group
         self._jawscfg = f"jaws_cts_{service_group}.conf"
+        self._refdata_root = self._check_path(jaws_refdata_root_dir, "jaws_refdata_root_dir"
+                                              ) / "cdm_task_service" / service_group
 
     def _check_path(self, path: Path, name: str):
         _not_falsy(path, name)

@@ -158,6 +158,7 @@ async def _build_NERSC_flow_deps(
             Path(cfg.nersc_remote_code_dir) / VERSION,
             cfg.jaws_token,
             cfg.jaws_group,
+            Path(cfg.jaws_refdata_root_dir),
             service_group=cfg.service_group,
         )
         logr.info("Done")

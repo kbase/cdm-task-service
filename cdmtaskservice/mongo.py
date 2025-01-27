@@ -69,6 +69,8 @@ class MongoDAO:
         await self._col_jobs.create_indexes([
             IndexModel([(models.FLD_JOB_ID, ASCENDING)], unique=True)
         ])
+        # TODO REFDATA etag and file indexes
+        #          should etag be unique?
         await self._col_refdata.create_indexes([
             IndexModel([(models.FLD_REFDATA_ID, ASCENDING)], unique=True)
         ])

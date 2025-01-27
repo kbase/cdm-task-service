@@ -32,6 +32,7 @@ class CDMTaskServiceConfig:
     has_nersc_account_role: str - the Auth2 custom role indicating a user has a NERSC account.
     nersc_jaws_user: str - the user name of the user associated with the NERSC and JAWS
         credentials.
+    jaws_refdata_root_dir: str - the JAWS refdata root directory to use for refdata storage
     sfapi_cred_path: str - the path to a NERSC Superfacility API credential file. The file is
         expected to have the client ID as the first line and the client private key in PEM format
         as the remaining lines.
@@ -83,6 +84,9 @@ class CDMTaskServiceConfig:
         self.has_nersc_account_role = _get_string_required(
             config, _SEC_AUTH, "has_nersc_account_role"
         )
+        self.jaws_refdata_root_dir = _get_string_required(
+            config, _SEC_NERSC_JAWS, "refdata_root_dir"
+        )
         self.nersc_jaws_user = _get_string_required(config, _SEC_NERSC_JAWS, "user")
         self.sfapi_cred_path = _get_string_required(config, _SEC_NERSC, "sfapi_cred_path")
         self.nersc_remote_code_dir = _get_string_required(config, _SEC_NERSC, "remote_code_dir")
@@ -128,6 +132,7 @@ class CDMTaskServiceConfig:
             f"Authentication KBase staff role: {self.kbase_staff_role}",
             f"Authentication has NERSC account role: {self.has_nersc_account_role}",
             f"NERSC / JAWS user: {self.nersc_jaws_user}",
+            f"NERSC / JAWS refdata root dir: {self.jaws_refdata_root_dir}",
             f"NERSC client credential path: {self.sfapi_cred_path}",
             f"NERSC remote code dir: {self.nersc_remote_code_dir}",
             f"JAWS Central URL: {self.jaws_url}",

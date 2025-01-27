@@ -25,6 +25,7 @@ services:
       - KBCTS_KBASE_STAFF_ROLE=KBASE_STAFF
       - KBCTS_HAS_NERSC_ACCOUNT_ROLE=HAS_NERSC_ACCOUNT
       - KBCTS_NERSC_JAWS_USER=cdm_ts
+      - KBCTS_NERSC_JAWS_REFDATA_DIR=/global/dna/kbase/reference/jaws
       - KBCTS_SFAPI_CRED_PATH=/creds/sfapi_creds
       - KBCTS_NERSC_REMOTE_CODE_DIR=/global/cfs/cdirs/kbase/cdm_task_service
       - KBCTS_JAWS_URL=https://jaws-api.jgi.doe.gov/api/v2

@@ -38,7 +38,7 @@ def process_data_transfer_manifest(
         md5_json_file_path: str = None,
     ):
     """
-    Processes an upload manifest file.
+    Processes a data transfer manifest file.
     
     manifest_file_path - the path to to the transfer manifest file.
     md5_json_file_path - an optional path to write a JSON mapping of file path to MD4 for the
