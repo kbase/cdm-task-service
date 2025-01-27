@@ -62,7 +62,8 @@ class Refdata:
                 + f"'{refdata_input.file}' does not match the actual ETag '{meta.e_tag}'"
             )
         statuses = []
-        for c in self._flowman.list_clusters():
+        clusters = self._flowman.list_clusters()
+        for c in  clusters:
             # TODO LAWRENCIUM REFDATA will need to do something special here since refdata is
             #                         xferred from NERSC
             statuses.append(models.ReferenceDataStatus(
@@ -84,7 +85,11 @@ class Refdata:
             statuses=statuses,
         )
         await self._mongo.save_refdata(rd)
-        # TODO REFDATA start a coroutine to stage the data
+        for c in clusters:
+            # theoretically a race condition here but not much we can do about it
+            flow = self._flowman.get_flow(c)
+            # Pass in the meta to avoid potential race conditions w/ etag changes
+            await self._coman.run_coroutine(flow.stage_refdata(rd, meta))
         return rd
 
     async def get_refdata(

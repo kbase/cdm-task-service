@@ -61,6 +61,8 @@ _JOB_MANIFESTS = Path("manifests")
 _MANIFEST_FILE_PREFIX = "manifest-"
 _MD5_JSON_FILE_NAME = "upload_md5s.json"
 _JOB_LOGS = "logs"
+_JOBS_DIR = "jobs"
+_REFDATA_DIR = "refdata"
 
 
 _JAWS_CONF_TEMPLATE = """
@@ -279,6 +281,16 @@ class NERSCManager:
         logging.getLogger(__name__).info(f"NERSC DTN scratch path: {scratch}")
         return Path(scratch)
     
+    def _get_job_scratch(self, job_id, perlmutter=False):
+        sc = self._perlmutter_scratch if perlmutter else self._dtn_scratch
+        return sc / self._scratchdir / _JOBS_DIR / job_id
+    
+    def _get_refdata_scratch(self, refdata_id):
+        return self._dtn_scratch / self._scratchdir / _REFDATA_DIR / refdata_id
+    
+    def _get_refdata_root(self, refdata_id):
+        return self._refdata_root / refdata_id
+    
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
         return (await client.post(f"{_COMMAND_PATH}/{machine}", data={"executable": exe})).json()
@@ -349,31 +361,41 @@ class NERSCManager:
 
     async def download_s3_files(
         self,
-        job_id: str,
+        download_id: str,
         objects: list[S3ObjectMeta],
         presigned_urls: list[str],
         callback_url: str,
         concurrency: int = 10,
-        insecure_ssl: bool = False
+        insecure_ssl: bool = False,
+        refdata: bool = False,
     ) -> str:
         """
         Download a set of files to NERSC from an S3 instance.
         
-        job_id - the ID of the job for which the files are being transferred. 
-            This must be a unique ID, and no other transfers should be occurring for the job.
+        download_id - the ID of the job or reference data for which the files are being
+            transferred. This must be a unique ID, and no other transfers should be occurring
+            for the id.
         objects - the S3 files to download.
         presigned_urls - the presigned download URLs for each object, in the same order as
             the objects.
         callback_url - the URL to GET as a callback for when the download is complete.
         concurrency - the number of simultaneous downloads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
+        refdata - whether this is a refdata download and files should be stored in the NERSC
+            refdata location.
         
         Returns the NERSC task ID for the download.
         """
         maniio = self._create_download_manifest(
-            job_id, objects, presigned_urls, concurrency, insecure_ssl)
+            download_id, objects, presigned_urls, concurrency, insecure_ssl, refdata)
         return await self._process_manifest(
-            maniio, job_id, callback_url, "download_manifest.json", "download")
+            maniio,
+            download_id,
+            callback_url,
+            "download_manifest.json",
+            "download",
+            refdata=refdata,
+        )
     
     async def upload_presigned_files(
         self,
@@ -407,7 +429,7 @@ class NERSCManager:
     async def _process_manifest(
         self,
         manifest: io.BytesIO,
-        job_id: str,
+        entity_id: str,
         callback_url: str,
         filename: str,
         task_type: str,
@@ -415,8 +437,12 @@ class NERSCManager:
         error_json_file_location: str = None,
         container_logs_location: str = None,  # this is expected to be present if the above is
         upload_md5s_file: bool = False,
+        refdata: bool = False
     ):
-        rootpath = self._dtn_scratch / self._scratchdir / job_id
+        if refdata:
+            rootpath = self._get_refdata_scratch(entity_id)
+        else:
+            rootpath = self._get_job_scratch(entity_id)
         manifestpath = rootpath / filename
         cli = self._client_provider()
         dt = await cli.compute(_DT_TARGET)
@@ -440,24 +466,30 @@ class NERSCManager:
         command = "".join(command)
         task_id = (await self._run_command(cli, _DT_TARGET, command))["task_id"]
         # TODO LOGGING figure out how to handle logging, see other logging todos
+        op = "refdata" if refdata else "job"
         logging.getLogger(__name__).info(
-            f"Created {task_type} task with id {task_id} for job {job_id}")
+            f"Created {task_type} task with id {task_id} for {op} {entity_id}")
         return task_id
     
     def _create_download_manifest(
         self,
-        job_id: str,
+        download_id: str,
         objects: list[S3ObjectMeta],
         presigned_urls: list[str],
         concurrency: int,
         insecure_ssl: bool,
+        refdata: bool,
     ) -> io.BytesIO:
-        _require_string(job_id, "job_id")
+        _require_string(download_id, "download_id")
         _not_falsy(objects, "objects")
         _not_falsy(presigned_urls, "presigned_urls")
         if len(objects) != len(presigned_urls):
             raise ValueError("Must provide same number of paths and urls")
         manifest = self._base_manifest("download", concurrency, insecure_ssl)
+        if refdata:
+            sc = self._get_refdata_root(download_id)
+        else:
+            sc = self._get_job_scratch(download_id) / _JOB_FILES
         manifest["files"] = [
             {
                 "url": url,
@@ -465,16 +497,13 @@ class NERSCManager:
                 #              job ID and the minio path and have it handle the rest.
                 #              This allows JAWS / Cromwell to cache the files if they have the
                 #              same path, which they won't if there's a job ID in the mix
-                "outputpath": self._localize_s3_path(job_id, meta.path),
+                "outputpath": str(sc / Path(meta.path).name if refdata else sc / meta.path),
                 "etag": meta.e_tag,
                 "partsize": meta.effective_part_size,
                 "size": meta.size,
             } for url, meta in zip(presigned_urls, objects)
         ]
         return io.BytesIO(json.dumps({"file-transfers": manifest}).encode())
-    
-    def _localize_s3_path(self, job_id: str, s3path: str) -> str:
-        return str(self._dtn_scratch / self._scratchdir/ job_id / _JOB_FILES / s3path)
     
     def _create_upload_manifest(
         self,
@@ -549,7 +578,7 @@ class NERSCManager:
 
     async def _get_transfer_result(self, job: models.Job, op: str) -> tuple[TransferResult, Any]:
         _not_falsy(job, "job")
-        path = self._dtn_scratch / self._scratchdir / job.id / f"{op}_result.json"
+        path = self._get_job_scratch(job.id) / f"{op}_result.json"
         res = await self._download_json_file_from_NERSC(
             Machine.dtns, path, no_exception_on_missing_file=True
         )
@@ -575,7 +604,7 @@ class NERSCManager:
         cli = self._client_provider()
         await self._generate_and_load_job_files_to_nersc(cli, job, file_download_concurrency)
         perl = await cli.compute(Machine.perlmutter)
-        pre = self._perlmutter_scratch / self._scratchdir / job.id
+        pre = self._get_job_scratch(job.id, perlmutter=True)
         try:
             # TODO PERF this copies all the files to the jaws staging area, and so could take
             #           a long time. Hardlink them in first to avoid the copy. Also look into
@@ -616,7 +645,7 @@ class NERSCManager:
         manifest_file_paths = self._get_manifest_file_paths(len(manifest_files))
         fmap = {m: _JOB_FILES / m.file for m in job.job_input.input_files}
         wdljson = wdl.generate_wdl(job, fmap, manifest_file_paths)
-        pre = self._dtn_scratch / self._scratchdir / job.id
+        pre = self._get_job_scratch(job.id)
         downloads = {pre / fp: f for fp, f in zip(manifest_file_paths, manifest_files)}
         downloads[pre / _JAWS_INPUT_WDL] = wdljson.wdl
         downloads[pre / _JAWS_INPUT_JSON] = json.dumps(wdljson.input_json, indent=4)
@@ -701,7 +730,7 @@ class NERSCManager:
         Expects that the upload_JAWS_job_files function has been run, and will error otherwise.
         """
         _not_falsy(job, "job")
-        path = self._dtn_scratch / self._scratchdir / job.id / _MD5_JSON_FILE_NAME
+        path = self._get_job_scratch(job.id) / _MD5_JSON_FILE_NAME
         file_to_md5 = await self._download_json_file_from_NERSC(Machine.dtns, path)
         return {jaws_output.get_relative_file_path(f): md5 for f, md5 in file_to_md5.items()}
 
@@ -742,7 +771,7 @@ class NERSCManager:
             logs.extend(get_filenames_for_container(i))
         presigns = await files_to_urls(logs)
         
-        rootpath = self._dtn_scratch / self._scratchdir / job.id
+        rootpath = self._get_job_scratch(job.id)
         remotelogs = [rootpath / _JOB_LOGS / f for f in logs]
         
         manifest = self._create_upload_manifest(remotelogs, presigns, concurrency, insecure_ssl)

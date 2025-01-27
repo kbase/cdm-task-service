@@ -16,7 +16,11 @@ from pydantic import (
 )
 from typing import Annotated, Self
 
-from cdmtaskservice.arg_checkers import contains_control_characters
+from cdmtaskservice.arg_checkers import (
+    contains_control_characters as _contains_control_characters,
+    not_falsy as _not_falsy,
+)
+from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathSyntaxError
 
 
@@ -87,7 +91,7 @@ def _validate_s3_path(s3path: str, index: int = None) -> str:
 def _err_on_control_chars(s: str, allowed_chars: list[str] = None):
     if s is None:
         return s
-    pos = contains_control_characters(s, allowed_chars=allowed_chars)
+    pos = _contains_control_characters(s, allowed_chars=allowed_chars)
     if pos > -1: 
         raise ValueError(f"contains a disallowed control character at position {pos}")
     return s
@@ -838,7 +842,7 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
     Information about reference data status with added details of interest to service
     administrators.
     """
-    nersc_download_task_id: Annotated[list[str], Field(
+    nersc_download_task_id: Annotated[list[str] | None, Field(
         description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
             + "instance to NERSC. Note that task details only persist for ~10 minutes past "
             + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
@@ -852,14 +856,26 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
 
 
-class ReferenceDataRoot(ReferenceDataInput, RegistrationInfo):
+class _ReferenceDataRoot(ReferenceDataInput, RegistrationInfo):
     # This is an outgoing structure only so we don't add validators
     id: Annotated[str, Field(
         description="An opaque, unique string that serves as the reference data's ID.",
     )]
+    
+    def get_status_for_cluster(self, cluster: Cluster) -> ReferenceDataStatus:
+        """
+        Get the status of a cluster for this reference data.
+        """ 
+        _not_falsy(cluster, "cluster")
+        for s in self.statuses:
+            if s.cluster == cluster:
+                return s
+        raise InvalidReferenceDataStateError(
+            f"No status for cluster {cluster.value} for reference data {self.id}"
+        )
 
 
-class ReferenceData(ReferenceDataRoot):
+class ReferenceData(_ReferenceDataRoot):
     """
     Information about reference data that is, or will be, available for containers.
     """
@@ -872,7 +888,7 @@ class ReferenceData(ReferenceDataRoot):
     )]
 
 
-class AdminReferenceData(ReferenceDataRoot):
+class AdminReferenceData(_ReferenceDataRoot):
     """
     Information about reference data that is, or will be, available for containers.
     """
