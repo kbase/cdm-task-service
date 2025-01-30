@@ -69,7 +69,6 @@ class MongoDAO:
         await self._col_jobs.create_indexes([
             IndexModel([(models.FLD_JOB_ID, ASCENDING)], unique=True)
         ])
-        # TODO REFDATA get by file and etag
         await self._col_refdata.create_indexes([
             IndexModel([(models.FLD_REFDATA_ID, ASCENDING)], unique=True),
             # Non unique as files can be overwritten
@@ -356,11 +355,11 @@ class MongoDAO:
                 f"A reference data record for S3 path {refdata.file} already exists"
             )
 
-    async def get_refdata(
+    async def get_refdata_by_id(
         self, refdata_id: str, as_admin: bool = False
     ) -> models.ReferenceData | models.AdminReferenceData:
         """
-        Get reference data by its ID.
+        Get reference data by its unique ID.
         
         refdata_id - the reference data ID.
         as_admin - get additional details about the reference data.
@@ -370,6 +369,31 @@ class MongoDAO:
         )
         if not doc:
             raise NoSuchJobError(f"No reference data with ID '{refdata_id}' exists")
+        return self._to_refdata(doc, as_admin=as_admin)
+
+    async def get_refdata_by_path(self, s3_path: str) -> list[models.ReferenceData]:
+        """
+        Get reference data by the refdata file. Returns at most 1000 records.
+        """
+        return await self._get_refdata(
+            models.FLD_REFDATA_FILE, _require_string(s3_path, "s3_path"),
+        )
+
+        
+    async def get_refdata_by_etag(self, etag: str) -> list[models.ReferenceData]:
+        """
+        Get reference data by the refdata Etag. Returns at most 1000 records.
+        """
+        return await self._get_refdata(
+            models.FLD_REFDATA_ETAG, _require_string(etag, "etag"),
+        )
+
+    # sorts by field ascending, so make sure there's an index for that field
+    async def _get_refdata(self, field: str, value: Any) -> list[models.ReferenceData]:
+        cursor = self._col_refdata.find({field: value}).sort(field, 1).limit(1000)
+        return await cursor.to_list()
+
+    def _to_refdata(self, doc: dict[str, Any], as_admin: bool = False):
         return models.AdminReferenceData(**doc) if as_admin else models.ReferenceData(**doc)
 
     async def _update_refdata_state(

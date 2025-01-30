@@ -39,8 +39,7 @@ from cdmtaskservice.version import VERSION
 class AppState(NamedTuple):
     """ Holds application state. """
     auth: KBaseAuth
-    sfapi_client: NERSCSFAPIClientProvider
-    s3_client: S3Client  # may be None if NERSC is unavailable at startup
+    sfapi_client: NERSCSFAPIClientProvider  # may be None if NERSC is unavailable at startup
     job_state: JobState
     refdata: Refdata
     images: Images
@@ -116,7 +115,7 @@ async def build_app(
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._jaws_cli = jaws_client
-        app.state._cdmstate = AppState(auth, sfapi_client, s3, job_state, refdata, images, flowman)
+        app.state._cdmstate = AppState(auth, sfapi_client, job_state, refdata, images, flowman)
     except:
         if mongocli:
             mongocli.close()
@@ -138,8 +137,10 @@ async def _build_NERSC_flow_deps(
     jaws_client = None
     try:
         nscli = NERSCStatus()
+        logr.info("Getting NERSC status...")
         ns = await nscli.status()
         await nscli.close()
+        logr.info("Done")
         if not ns.ok:
             desc = ns.perlmutter_description if ns.perlmutter_description else ns.dtns_description
             if start_wo_nersc:
@@ -147,7 +148,7 @@ async def _build_NERSC_flow_deps(
                 return None, None, None, desc
             else:
                 raise ValueError(f"NERSC is down: {desc}")
-        logr.info("Initializing NERSC SFAPI client... ")
+        logr.info("Initializing NERSC SFAPI client...")
         sfapi_client = await NERSCSFAPIClientProvider.create(
             Path(cfg.sfapi_cred_path), cfg.nersc_jaws_user
         )

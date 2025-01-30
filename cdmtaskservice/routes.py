@@ -186,18 +186,58 @@ _ANN_REFDATA_ID = Annotated[str, FastPath(
 
 
 @ROUTER_REFDATA.get(
-    "/{refdata_id}",
+    "/id/{refdata_id}",
     response_model=models.ReferenceData,
-    summary="Get reference data information.",
+    summary="Get reference data information by ID.",
     description="Get information about reference data available for containers, including its "
-        + "location and staging status."
+        + "location and staging status, by the reference data's unique ID."
 )
-async def get_refdata(
+async def get_refdata_by_id(
     r: Request,
     refdata_id: _ANN_REFDATA_ID,
 ) -> models.ReferenceData:
     refdata = app_state.get_app_state(r).refdata
-    return await refdata.get_refdata(refdata_id)
+    return await refdata.get_refdata_by_id(refdata_id)
+
+
+@ROUTER_REFDATA.get(
+    "/path/{s3_path:path}",
+    response_model=list[models.ReferenceData],
+    summary="Get reference data information by the S3 file path.",
+    description="Get information about reference data available for containers by the "
+        + "reference data file path. Returns at most 1000 records."
+)
+async def get_refdata_by_path(
+    r: Request,
+    s3_path: Annotated[str, FastPath(
+        example="refdata-bucket/checkm2/checkm2_refdata-2.4.tgz",
+        description="The S3 path to the reference data, starting with the bucket.",
+        min_length=models.S3_PATH_MIN_LENGTH,
+        max_length=models.S3_PATH_MAX_LENGTH,
+    )],
+) -> models.ReferenceData:
+    refdata = app_state.get_app_state(r).refdata
+    return await refdata.get_refdata_by_path(s3_path)
+
+
+@ROUTER_REFDATA.get(
+    "/etag/{s3_etag}",
+    response_model=list[models.ReferenceData],
+    summary="Get reference data information by the S3 Etag.",
+    description="Get information about reference data available for containers by the "
+        + "reference data Etag. Returns at most 1000 records."
+)
+async def get_refdata_by_etag(
+    r: Request,
+    s3_etag: Annotated[str, FastPath(
+        example="a70a4d1732484e75434df2c08570e1b2-3",
+        description="The S3 Etag of the file.",
+        min_length=models.ETAG_MIN_LENGTH,
+        max_length=models.ETAG_MAX_LENGTH,
+    )],
+) -> models.ReferenceData:
+    refdata = app_state.get_app_state(r).refdata
+    return await refdata.get_refdata_by_etag(s3_etag)
 
 
 @ROUTER_ADMIN.post(

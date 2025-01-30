@@ -100,7 +100,7 @@ class Refdata:
             await self._coman.run_coroutine(flow.stage_refdata(rd, meta))
         return rd
 
-    async def get_refdata(
+    async def get_refdata_by_id(
         self,
         refdata_id: str,
         as_admin: bool = False,
@@ -111,6 +111,20 @@ class Refdata:
         refdata_id - the reference data ID
         as_admin - True if the user should be able to access additional details about the data.
         """
-        return await self._mongo.get_refdata(
+        return await self._mongo.get_refdata_by_id(
             _require_string(refdata_id, "refdata_id"), as_admin=as_admin
         )
+        
+    async def get_refdata_by_path(self, s3_path: str) -> list[models.ReferenceData]:
+        """
+        Get reference data based on the S3 file path. Returns at most 1000 records.
+        """
+        # pass through method, don't want the routes talking directly to mongo
+        return await self._mongo.get_refdata_by_path(_require_string(s3_path, "s3_path"))
+    
+    async def get_refdata_by_etag(self, etag: str) -> list[models.ReferenceData]:
+        """
+        Get reference data based on the S3 Etag. Returns at most 1000 records.
+        """
+        # also a passthrough method
+        return await self._mongo.get_refdata_by_etag(_require_string(etag, "etag"))
