@@ -72,7 +72,6 @@ class MongoDAO:
         # TODO REFDATA get by file and etag
         await self._col_refdata.create_indexes([
             IndexModel([(models.FLD_REFDATA_ID, ASCENDING)], unique=True),
-            # TODO REFDATA use a transaction to prevent multiple files w/o a force flag
             # Non unique as files can be overwritten
             IndexModel([(models.FLD_REFDATA_FILE, ASCENDING)]),
             # Not really sure about uniqueness for this one...
@@ -342,10 +341,20 @@ class MongoDAO:
 
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""
-        _not_falsy(refdata, "refdata")
         # don't bother checking for duplicate key exceptions since the service is supposed
         # to ensure unique IDs
-        await self._col_refdata.insert_one(refdata.model_dump())
+
+        # TDOO REFDATA add a force option to allow for file overwrites if needed
+        res = await self._col_refdata.update_one(
+            {"file": _not_falsy(refdata, "refdata").file},
+            # do nothing if the document already exists
+            {"$setOnInsert": refdata.model_dump()},
+            upsert=True,
+        )
+        if not res.did_upsert:
+            raise ReferenceDataExistsError(
+                f"A reference data record for S3 path {refdata.file} already exists"
+            )
 
     async def get_refdata(
         self, refdata_id: str, as_admin: bool = False
@@ -486,6 +495,10 @@ class NoSuchJobError(Exception):
 
 class NoSuchReferenceDataError(Exception):
     """ The reference data does not exist in the system. """
+
+
+class ReferenceDataExistsError(Exception):
+    """ The reference data already exists in the system. """
 
 
 class ImageTagExistsError(Exception):
