@@ -68,6 +68,11 @@ FLD_REFDATA_ADMIN_ERROR = "admin_error"
 FLD_REFDATA_TRACEBACK = "traceback"
 FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
 
+S3_PATH_MIN_LENGTH = 3 + 1 + 1  # 3 for bucket + / + 1 char
+S3_PATH_MAX_LENGTH = 63 + 1 + 1024  # 63 for bucket + / + 1024 bytes
+ETAG_MIN_LENGTH = 32
+ETAG_MAX_LENGTH = 32 + 1 + 5  # 32 for the md5ish + dash + up to 10000 parts = 38
+
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
 # POSiX fully portable filenames and /
@@ -390,8 +395,8 @@ class S3File(BaseModel):
     file: Annotated[str, Field(
         example="mybucket/foo/bar/baz.jpg",
         description="A path to an object in an S3 instance, starting with the bucket.",
-        min_length=3 + 1 + 1,  # 3 for bucket + / + 1 char
-        max_length=63 + 1 + 1024,  # 63 for bucket + / + 1024 bytes
+        min_length=S3_PATH_MIN_LENGTH,
+        max_length=S3_PATH_MAX_LENGTH,
     )]
     # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
     # the way in and will come from S3 on the way out
@@ -400,8 +405,8 @@ class S3File(BaseModel):
         description="The S3 e-tag of the file. Weak e-tags are not supported. "
             + "If provided on input it is checked against the "
             + "target file e-tag before proceeding. Always provided with output.",
-        min_length=32,
-        max_length=32 + 1 + 5,  # 32 for the md5ish + dash + up to 10000 parts = 38
+        min_length=ETAG_MIN_LENGTH,
+        max_length=ETAG_MAX_LENGTH,
     )] = None
     
     @field_validator("file", mode="before")
@@ -802,18 +807,6 @@ class ReferenceDataState(str, Enum):
     ERROR = "error"
 
 
-class ReferenceDataInput(S3File):
-    """
-    Information necessary to stage reference data at a remote site. If multiple files are required,
-    they must be compressed into a single tarfile.
-    """
-    # TODO REFDATA will need a force toggle if file is overwritten after reg
-    unpack: Annotated[bool, Field(
-        description="Whether to unpack the file after download. *.tar.gz, *.tgz, and *.gz "
-            + "files are supported."
-    )] = False
-
-
 class ReferenceDataStatus(BaseModel):
     """
     Status of a reference data staging process at a particular remote compute location.
@@ -858,11 +851,16 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
 
 
-class _ReferenceDataRoot(ReferenceDataInput, RegistrationInfo):
+class _ReferenceDataRoot(S3File, RegistrationInfo):
     # This is an outgoing structure only so we don't add validators
     id: Annotated[str, Field(
         description="An opaque, unique string that serves as the reference data's ID.",
     )]
+    # TODO REFDATA will need a force toggle if file is overwritten after reg
+    unpack: Annotated[bool, Field(
+        description="Whether to unpack the file after download. *.tar.gz, *.tgz, and *.gz "
+            + "files are supported."
+    )] = False
     
     def get_status_for_cluster(self, cluster: Cluster) -> ReferenceDataStatus:
         """
