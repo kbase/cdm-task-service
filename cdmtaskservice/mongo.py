@@ -43,11 +43,8 @@ class MongoDAO:
         self._col_refdata = self._db.refdata
         
     async def _create_indexes(self):
-        # TODO DATAINTEGRITY test unique index builds throw an error if there are non-unique
-        #                    docs in the DB. Want the server to not start until the indexes
-        #                    are confirmed correct. See
-        #                    https://www.mongodb.com/docs/manual/core/index-creation/#constraint-violations-during-index-build
-        #                    Otherwise, create a polling loop to wait until indexes exist
+        # Tested that trying to create a unique index on a key that is not unique within documents
+        # in the collection causes an error to be thrown 
         
         # NOTE that since there's two unique indexes means this collection can't be sharded
         # but it's likely to be very small so shouldn't be an issue
@@ -379,7 +376,6 @@ class MongoDAO:
             models.FLD_REFDATA_FILE, _require_string(s3_path, "s3_path"),
         )
 
-        
     async def get_refdata_by_etag(self, etag: str) -> list[models.ReferenceData]:
         """
         Get reference data by the refdata Etag. Returns at most 1000 records.
