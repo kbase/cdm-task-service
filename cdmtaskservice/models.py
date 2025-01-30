@@ -57,6 +57,8 @@ FLD_JOB_ADMIN_ERROR = "admin_error"
 FLD_JOB_TRACEBACK = "traceback"
 FLD_JOB_LOGPATH = "logpath"
 FLD_REFDATA_ID = "id"
+FLD_REFDATA_FILE = "file"
+FLD_REFDATA_ETAG = "etag"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
 FLD_REFDATA_TRANS_TIMES = "transition_times"
@@ -845,7 +847,7 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
     nersc_download_task_id: Annotated[list[str] | None, Field(
         description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
             + "instance to NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
+            + "completion in the SFAPI. Multiple tasks indicate job retries after failures. "
             + "Only present if the refdata is being downloaded to NERSC."
     )] = None
     admin_error: Annotated[str | None, Field(

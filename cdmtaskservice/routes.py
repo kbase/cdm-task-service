@@ -176,6 +176,15 @@ async def get_image(
     return await app_state.get_app_state(r).images.get_image(image_id)
 
 
+_ANN_REFDATA_ID = Annotated[str, FastPath(
+    example="f0c24820-d792-4efa-a38b-2458ed8ec88f",
+    description="The reference data ID.",
+    pattern=r"^[\w-]+$",
+    min_length=1,
+    max_length=50,
+)]
+
+
 @ROUTER_REFDATA.get(
     "/{refdata_id}",
     response_model=models.ReferenceData,
@@ -185,13 +194,7 @@ async def get_image(
 )
 async def get_refdata(
     r: Request,
-    refdata_id: Annotated[str, FastPath(
-        example="f0c24820-d792-4efa-a38b-2458ed8ec88f",
-        description="The reference data ID.",
-        pattern=r"^[\w-]+$",
-        min_length=1,
-        max_length=50,
-    )],
+    refdata_id: _ANN_REFDATA_ID,
 ) -> models.ReferenceData:
     refdata = app_state.get_app_state(r).refdata
     return await refdata.get_refdata(refdata_id)
@@ -247,6 +250,23 @@ async def get_job_admin(
     _ensure_admin(user, "Only service administrators can get jobs as an admin.")
     job_state = app_state.get_app_state(r).job_state
     return await job_state.get_job(job_id, user.user, as_admin=True)
+
+
+@ROUTER_ADMIN.get(
+    "/refdata/{refdata_id}",
+    response_model=models.AdminReferenceData,
+    summary="Get reference data information as an admin.",
+    description="Get information about reference data available for containers, including its "
+        + "location and staging status, with additional details."
+)
+async def get_refdata_admin(
+    r: Request,
+    refdata_id: _ANN_REFDATA_ID,
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+) -> models.ReferenceData:
+    _ensure_admin(user, "Only service administrators can get refdata as an admin.")
+    refdata = app_state.get_app_state(r).refdata
+    return await refdata.get_refdata(refdata_id, as_admin=True)
 
 
 class NERSCClientInfo(BaseModel):
