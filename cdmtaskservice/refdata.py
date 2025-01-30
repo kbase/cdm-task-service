@@ -12,7 +12,7 @@ from cdmtaskservice.exceptions import ETagMismatchError
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.s3.client import S3Client
-from cdmtaskservice.s3.paths import S3Paths
+from cdmtaskservice.s3.paths import S3Paths, validate_path
 from cdmtaskservice.timestamp import utcdatetime
 
 
@@ -42,24 +42,32 @@ class Refdata:
         self._flowman = _not_falsy(flow_manager, "flow_manager")
 
     async def create_refdata(
-        self, refdata_input: models.ReferenceDataInput, user: kb_auth.KBaseUser
+        self,
+        s3_path: str,
+        user: kb_auth.KBaseUser,
+        etag: str = None,
+        unpack: bool = False
     ) -> models.ReferenceData:
         """
         Start the refdata creation process.
         
-        refdata_input - the input data needed to create the refdata.
-        user - the username of the user submitting the request.
+        s3_path - the path to the refdata file in S3.
+        user - the user submitting the request.
+        etag - the etag of the refdata file. If provided and non-matching, an error is thrown.
+        unpack - whether to unpack the reference data file at the compute location. Supports
+            *.gz, *.tar.gz, and *.tgz files.
         
         Returns the refdata state.
         """
-        _not_falsy(refdata_input, "refdata_input")
+        # validate before S3Paths beacuse that returns an error mentioning an index
+        # TODO CODE add a toggle to S3Paths to not include index info in error
+        validate_path(s3_path)
         _not_falsy(user, "user")
-        # TODO PERF this checks the file path syntax again, consider some way to avoid
-        meta = (await self._s3.get_object_meta(S3Paths([refdata_input.file])))[0]
-        if refdata_input.etag and refdata_input.etag != meta.e_tag:
+        meta = (await self._s3.get_object_meta(S3Paths([s3_path])))[0]
+        if etag and etag != meta.e_tag:
             raise ETagMismatchError(
-                f"The expected ETag '{refdata_input.etag} for the path "
-                + f"'{refdata_input.file}' does not match the actual ETag '{meta.e_tag}'"
+                f"The expected ETag '{etag} for the path "
+                + f"'{s3_path}' does not match the actual ETag '{meta.e_tag}'"
             )
         statuses = []
         clusters = self._flowman.list_clusters()
@@ -77,9 +85,9 @@ class Refdata:
             raise ValueError("No job flows are available")
         rd = models.ReferenceData(
             id=str(uuid.uuid4()),  # TODO TEST for testing we'll need to set up a mock for this
-            file=refdata_input.file,
+            file=s3_path,
             etag=meta.e_tag,
-            unpack=refdata_input.unpack,
+            unpack=unpack,
             registered_by=user.user,
             registered_on=utcdatetime(),
             statuses=statuses,

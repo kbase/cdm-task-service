@@ -220,7 +220,7 @@ async def approve_image(
 
 
 @ROUTER_ADMIN.post(
-    "/refdata/",
+    "/refdata/{refdata_s3_path:path}",
     response_model=models.ReferenceData,
     summary="Create reference data",
     description="Define an S3 file as containing reference data necessary for one or more "
@@ -228,12 +228,30 @@ async def approve_image(
 )
 async def create_refdata(
     r: Request,
-    refdata_input: models.ReferenceDataInput,
+    # will be validated later 
+    refdata_s3_path: Annotated[str, FastPath(
+        example="refdata-bucket/checkm2/checkm2_refdata-2.4.tgz",
+        description="The S3 path to the reference data to register, starting with the bucket. "
+            + "If the refdata consists of multiple files, they must be archived.",
+        min_length=models.S3_PATH_MIN_LENGTH,
+        max_length=models.S3_PATH_MAX_LENGTH,
+    )],
+    etag: Annotated[str | None, Query(
+        example="a70a4d1732484e75434df2c08570e1b2-3",
+        description="The S3 e-tag of the file. Weak e-tags are not supported. "
+            + "If provided it is checked against the target file e-tag before proceeding.",
+        min_length=models.ETAG_MIN_LENGTH,
+        max_length=models.ETAG_MAX_LENGTH,
+    )] = None,
+    unpack: Annotated[bool, Query(
+        description="Whether to unpack the file after download. *.tar.gz, *.tgz, and *.gz "
+            + "files are supported."
+    )] = False,
     user: kb_auth.KBaseUser=Depends(_AUTH)
 ) -> models.Image:
     _ensure_admin(user, "Only service administrators can create reference data.")
     refdata = app_state.get_app_state(r).refdata
-    return await refdata.create_refdata(refdata_input, user)
+    return await refdata.create_refdata(refdata_s3_path, user, etag=etag, unpack=unpack)
 
 
 @ROUTER_ADMIN.get(
