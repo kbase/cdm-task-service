@@ -69,10 +69,17 @@ class MongoDAO:
         await self._col_jobs.create_indexes([
             IndexModel([(models.FLD_JOB_ID, ASCENDING)], unique=True)
         ])
-        # TODO REFDATA etag and file indexes
-        #          should etag be unique?
+        # TODO REFDATA get by file and etag
         await self._col_refdata.create_indexes([
-            IndexModel([(models.FLD_REFDATA_ID, ASCENDING)], unique=True)
+            IndexModel([(models.FLD_REFDATA_ID, ASCENDING)], unique=True),
+            # TODO REFDATA use a transaction to prevent multiple files w/o a force flag
+            # Non unique as files can be overwritten
+            IndexModel([(models.FLD_REFDATA_FILE, ASCENDING)]),
+            # Not really sure about uniqueness for this one...
+            # Could make it unique to prevent refdata duplication, but that means we'd
+            # have to get the etag of the user's refdata, find the record, and use the refdata id
+            # For now just allow duplicate refdata
+            IndexModel([(models.FLD_REFDATA_ETAG, ASCENDING)]),
         ])
 
     async def save_image(self, image: models.Image):
@@ -333,7 +340,6 @@ class MongoDAO:
             models.FLD_JOB_LOGPATH: logpath
         })
 
-
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""
         _not_falsy(refdata, "refdata")
@@ -341,11 +347,9 @@ class MongoDAO:
         # to ensure unique IDs
         await self._col_refdata.insert_one(refdata.model_dump())
 
-
     async def get_refdata(
-        # TODO REFDATA make use of the as admin toggle
         self, refdata_id: str, as_admin: bool = False
-    ) -> models.ReferenceData:
+    ) -> models.ReferenceData | models.AdminReferenceData:
         """
         Get reference data by its ID.
         
@@ -357,7 +361,7 @@ class MongoDAO:
         )
         if not doc:
             raise NoSuchJobError(f"No reference data with ID '{refdata_id}' exists")
-        return models.ReferenceData(**doc)
+        return models.AdminReferenceData(**doc) if as_admin else models.ReferenceData(**doc)
 
     async def _update_refdata_state(
         self,

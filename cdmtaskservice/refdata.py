@@ -95,8 +95,8 @@ class Refdata:
     async def get_refdata(
         self,
         refdata_id: str,
-        as_admin: bool = False, # TODO REFDATA make use of the admin toggle
-    ) -> models.ReferenceData:
+        as_admin: bool = False,
+    ) -> models.ReferenceData | models.AdminReferenceData:
         """
         Get reference data based on its ID.
         
