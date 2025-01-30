@@ -65,8 +65,8 @@ class Root(BaseModel):
         example="b78f6e15e85381a7df71d6005d99e866f3f868dc",
         description="The git commit of the service code."
     )]
-    server_time: Annotated[str, Field(
-        example="2022-10-07T17:58:53.188698+00:00",
+    server_time: Annotated[datetime.datetime, Field(
+        example="2022-10-07T17:58:53.188698Z",
         description="The server's time as an ISO8601 string."
     )]
 
