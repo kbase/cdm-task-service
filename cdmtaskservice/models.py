@@ -829,7 +829,6 @@ class ReferenceDataStatus(BaseModel):
         example="The front fell off",
         description="A description of the error that occurred."
     )] = None
-    # TODO REFDATA will need to add a nersc task ID, admin errpr/trace in an admin model
 
 
 class AdminReferenceDataStatus(ReferenceDataStatus):
@@ -881,7 +880,7 @@ class ReferenceData(_ReferenceDataRoot):
     """
     # This is an outgoing structure only so we don't add validators
     # TODO LAWRENCIUM how do deal with this? sync process from NERSC, not a separate D/L
-    # TODO FUTURESITES will need to be able to stage to sites that down't exist currently
+    # TODO FUTURESITES will need to be able to stage to sites that don't exist currently
     #                  ... if that ever happens
     statuses: Annotated[list[ReferenceDataStatus], Field(
         description="The states of reference data staging processes at remote compute locations.",
@@ -894,7 +893,7 @@ class AdminReferenceData(_ReferenceDataRoot):
     """
     # This is an outgoing structure only so we don't add validators
     # TODO LAWRENCIUM how do deal with this? sync process from NERSC, not a separate D/L
-    # TODO FUTURESITES will need to be able to stage to sites that down't exist currently
+    # TODO FUTURESITES will need to be able to stage to sites that don't exist currently
     #                  ... if that ever happens
     statuses: Annotated[list[AdminReferenceDataStatus], Field(
         description="The states of reference data staging processes at remote compute locations.",

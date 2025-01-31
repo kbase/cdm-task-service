@@ -16,6 +16,10 @@ class ServerErrorDetail(BaseModel):
         example="2022-10-07T17:58:53.188698Z",
         description="The server's time as an ISO8601 string.",
     )]
+    request_id: Annotated[str | None, Field(
+        example="172367b0-0099-4903-9a19-d12ff101b2da",
+        description="The ID of the request, if available."
+    )] = None
     message: Optional[str] = Field(
         example="Well dang, that ain't good",
         description="A free text string providing more information about the error"
