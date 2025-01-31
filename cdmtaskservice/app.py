@@ -24,6 +24,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from cdmtaskservice import app_state
 from cdmtaskservice import errors
 from cdmtaskservice import kb_auth
+from cdmtaskservice import logfields
 from cdmtaskservice import models_errors
 from cdmtaskservice import routes
 from cdmtaskservice.config import CDMTaskServiceConfig
@@ -118,12 +119,30 @@ logging.getLogger("cdmtaskservice").setLevel(logging.INFO)
 
 
 _SCHEME = "Bearer"
+_X_REAL_IP = "X-Real-IP"
+_X_FORWARDED_FOR = "X-Forwarded-For"
+_USER_AGENT = "User-Agent"
+
+
+def _safe_strip(s: str):
+    return s.strip() if s else None
 
 
 class _AppMiddleWare(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         request_id_var.set(str(uuid.uuid4()))
+        extra_var = {
+            # TODO IP_ADDRESSES test this works in CI, should get correct IP
+            #                   https://www.uvicorn.org/settings/#http
+            logfields.X_FORWARDED_FOR: _safe_strip(request.headers.get(_X_FORWARDED_FOR)),
+            logfields.X_REAL_IP: _safe_strip(request.headers.get(_X_REAL_IP)),
+            logfields.IP_ADDRESS: _safe_strip(request.client.host),
+            logfields.USER_AGENT: _safe_strip(request.headers.get(_USER_AGENT)),
+            logfields.URL_PATH: _safe_strip(request.url.path),
+            logfields.HTTP_METHOD: _safe_strip(request.method),
+        }
+        logging_extra_var.set(extra_var)
         user = None
         authorization = request.headers.get("Authorization")
         if authorization:
@@ -136,8 +155,8 @@ class _AppMiddleWare(BaseHTTPMiddleware):
                 raise InvalidAuthHeaderError(f"Authorization header requires {_SCHEME} scheme")
             user = await app_state.get_app_state(request).auth.get_user(credentials)
         app_state.set_request_user(request, user)
-        # TODO LOGGING set IP / X-Real-IP / X-Forwarded-For in context var
-        logging_extra_var.set({"user": user.user if user else None})
+        extra_var["user"] = user.user if user else None
+        logging_extra_var.set(extra_var)
         return await call_next(request)
 
 
