@@ -16,10 +16,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from cdmtaskservice import app_state
 from cdmtaskservice import errors
-from cdmtaskservice.error_mapping import map_error
+from cdmtaskservice import kb_auth
 from cdmtaskservice import models_errors
 from cdmtaskservice import routes
 from cdmtaskservice.config import CDMTaskServiceConfig
+from cdmtaskservice.error_mapping import map_error
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
@@ -103,20 +104,23 @@ def _handle_general_exception(r: Request, exc: Exception):
     if errmap.http_code < 500:
         return _format_error(errmap.http_code, str(exc), errmap.err_type)
     else:
-        # TODO ERRORHANDLING may want to only return error message for 500s if user is a
-        #      service admin, otherwise return a generic message
-        if len(exc.args) == 1 and type(exc.args[0]) == str:
-            return _format_error(errmap.http_code, exc.args[0])
+        user = app_state.get_request_user(r)
+        if not user or user.admin_perm != kb_auth.AdminPermission.FULL:
+            # 5XX means something broke in the service, so nothing regular users can do about it
+            err = "An unexpected error occurred"
+        elif len(exc.args) == 1 and type(exc.args[0]) == str:
+            err = exc.args[0]
         else:
-            return _format_error(errmap.http_code)
-        
+            err = str(exc.args)
+        return _format_error(errmap.http_code, err)
+
 
 def _format_error(
-        status_code: int,
-        message: str = None,
-        error_type: errors.ErrorType = None,
-        request_validation_detail = None
-        ):
+    status_code: int,
+    message: str = None,
+    error_type: errors.ErrorType = None,
+    request_validation_detail = None
+) -> JSONResponse:
     content = {
         "httpcode": status_code,
         "httpstatus": responses[status_code],
