@@ -1,15 +1,12 @@
 """
-Alteration of FastAPI's HTTPBearer class to handle the KBase authorization
-step and allow for more informative errors.
+Alteration of FastAPI's HTTPBearer class to handle the KBase authorization steps.
 
-Also adds an `optional` keyword argument that allows for missing, but not malformed,
-authentication headers. If `optional` is `True` and no authorization header is provided, `None`
-will be returned in place of the normal `KBaseUser`.
+Also adds an `optional` keyword argument that allows for missing auth. If true and no
+authorization information is provided, `None` is returned as the user.
 """
 
 from fastapi.security.http import HTTPBase
 from fastapi.openapi.models import HTTPBearer as HTTPBearerModel
-from fastapi.security.utils import get_authorization_scheme_param
 from fastapi.requests import Request
 from typing import Optional
 
@@ -17,6 +14,8 @@ from cdmtaskservice import app_state
 from cdmtaskservice import kb_auth
 
 # Modified from https://github.com/tiangolo/fastapi/blob/e13df8ee79d11ad8e338026d99b1dcdcb2261c9f/fastapi/security/http.py#L100
+# Basically the only reason for this class is to get the UI to work with auth.
+# Dependent on the middleware in app.py to set the user in the request state.
 
 _SCHEME = "Bearer"
 
@@ -40,26 +39,11 @@ class KBaseHTTPBearer(HTTPBase):
         self.optional = optional
 
     async def __call__(self, request: Request) -> kb_auth.KBaseUser:
-        authorization: str = request.headers.get("Authorization")
-        if not authorization:
-            if self.optional:
-                return None
+        user = app_state.get_request_user(request)
+        if not user and not self.optional:
             raise MissingTokenError("Authorization header required")
-        scheme, credentials = get_authorization_scheme_param(authorization)
-        if not (scheme and credentials):
-            raise InvalidAuthHeaderError(
-                f"Authorization header requires {_SCHEME} scheme followed by token")
-        if scheme.lower() != _SCHEME.lower():
-            # don't put the received scheme in the error message, might be a token
-            raise InvalidAuthHeaderError(f"Authorization header requires {_SCHEME} scheme")
-        user = await app_state.get_app_state(request).auth.get_user(credentials)
-        app_state.set_request_user(request, user)
         return user
 
 
 class MissingTokenError(kb_auth.AuthenticationError):
     """ An error thrown when a token is expected but not provided. """
-    
-    
-class InvalidAuthHeaderError(kb_auth.AuthenticationError):
-    """ An error thrown when an authorization header is invalid. """
