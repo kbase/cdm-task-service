@@ -149,7 +149,9 @@ async def _build_NERSC_flow_deps(
         if not ns.ok:
             desc = ns.perlmutter_description if ns.perlmutter_description else ns.dtns_description
             if start_wo_nersc:
-                logr.info(f"NERSC is down, starting without job flow:\n{ns}")
+                logr.info(
+                    f"NERSC is down, starting without job flow", extra={"nersc_status": repr(ns)}
+                )
                 return None, None, None, desc
             else:
                 raise ValueError(f"NERSC is down: {desc}")
