@@ -9,11 +9,12 @@ from cdmtaskservice.errors import ErrorType
 from cdmtaskservice.exceptions import (
     ETagMismatchError,
     IllegalParameterError,
+    InvalidAuthHeaderError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     UnauthorizedError,
 )
-from cdmtaskservice.http_bearer import MissingTokenError, InvalidAuthHeaderError
+from cdmtaskservice.http_bearer import MissingTokenError
 from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
 from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError

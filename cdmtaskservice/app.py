@@ -10,9 +10,11 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from fastapi.security.utils import get_authorization_scheme_param
 from http.client import responses
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from cdmtaskservice import app_state
 from cdmtaskservice import errors
@@ -24,6 +26,7 @@ from cdmtaskservice.error_mapping import map_error
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
+from cdmtaskservice.exceptions import InvalidAuthHeaderError
 
 
 # TODO LOGGING - log all write ops w/ username
@@ -37,6 +40,29 @@ SERVICE_DESCRIPTION = (
 # httpx is super chatty if the root logger is set to INFO
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger("cdmtaskservice").setLevel(logging.INFO)
+
+
+_SCHEME = "Bearer"
+
+
+class _AppMiddleWare(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next) -> Response:
+        # TODO LOGGING / ERRHADNLING set request ID in context var & include in error messages
+        # TODO LOGGING set IP / X-Real-IP / X-Forwarded-For in context var
+        # TODO LOGGING set user in contextvar
+        user = None
+        authorization = request.headers.get("Authorization")
+        if authorization:
+            scheme, credentials = get_authorization_scheme_param(authorization)
+            if not (scheme and credentials):
+                raise InvalidAuthHeaderError(
+                    f"Authorization header requires {_SCHEME} scheme followed by token")
+            if scheme.lower() != _SCHEME.lower():
+                # don't put the received scheme in the error message, might be a token
+                raise InvalidAuthHeaderError(f"Authorization header requires {_SCHEME} scheme")
+            user = await app_state.get_app_state(request).auth.get_user(credentials)
+        app_state.set_request_user(request, user)
+        return await call_next(request)
 
 
 def create_app():
@@ -66,6 +92,7 @@ def create_app():
         }
     )
     app.add_middleware(GZipMiddleware)
+    app.add_middleware(_AppMiddleWare)
     app.include_router(routes.ROUTER_GENERAL)
     app.include_router(routes.ROUTER_JOBS)
     app.include_router(routes.ROUTER_IMAGES)
