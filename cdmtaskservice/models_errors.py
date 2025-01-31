@@ -2,18 +2,20 @@
 Pydantic models for service error structures.
 """
 
+import datetime
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Annotated, Optional
+
 from cdmtaskservice.errors import ErrorType
 
 
 class ServerErrorDetail(BaseModel):
     httpcode: int = Field(example=500, description="The HTTP error code")
     httpstatus: str = Field(example="INTERNAL SERVER ERROR", description="The HTTP status string")
-    time: str = Field(
-        example="2022-10-07T17:58:53.188698+00:00",
-        description="The server time in ISO8601 format"
-    )
+    time: Annotated[datetime.datetime, Field(
+        example="2022-10-07T17:58:53.188698Z",
+        description="The server's time as an ISO8601 string.",
+    )]
     message: Optional[str] = Field(
         example="Well dang, that ain't good",
         description="A free text string providing more information about the error"

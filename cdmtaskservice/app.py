@@ -22,7 +22,7 @@ from cdmtaskservice import routes
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.version import VERSION
-from cdmtaskservice.timestamp import timestamp
+from cdmtaskservice.timestamp import utcdatetime
 
 
 # TODO LOGGING - log all write ops w/ username
@@ -120,7 +120,7 @@ def _format_error(
     content = {
         "httpcode": status_code,
         "httpstatus": responses[status_code],
-        "time": timestamp()
+        "time": utcdatetime()
     }
     if error_type:
         content.update({
