@@ -30,7 +30,7 @@ from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.version import VERSION
-from cdmtaskservice.timestamp import timestamp, utcdatetime
+from cdmtaskservice.timestamp import utcdatetime
 
 SERVICE_NAME = "CDM Task Service Prototype"
 
@@ -81,7 +81,7 @@ async def root() -> Root:
         "service_name": SERVICE_NAME,
         "version": VERSION,
         "git_hash": GIT_COMMIT,
-        "server_time": timestamp()
+        "server_time": utcdatetime()
     }
 
 
