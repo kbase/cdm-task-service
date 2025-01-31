@@ -22,7 +22,7 @@ from cdmtaskservice.jaws.client import JAWSClient
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.job_state import JobState
-from cdmtaskservice.kb_auth import KBaseAuth
+from cdmtaskservice.kb_auth import KBaseAuth, KBaseUser
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.nersc.status import NERSCStatus
@@ -44,6 +44,11 @@ class AppState(NamedTuple):
     refdata: Refdata
     images: Images
     jobflow_manager: JobFlowManager
+
+
+class RequestState(NamedTuple):
+    """ Holds request specific state. """
+    user: KBaseUser | None
 
 
 async def build_app(
@@ -212,6 +217,19 @@ def _get_app_state_from_app(app: FastAPI) -> AppState:
     if not app.state._cdmstate:
         raise ValueError("App state has not been initialized")
     return app.state._cdmstate
+
+
+def set_request_user(r: Request, user: KBaseUser):
+    """ Set the user for the current request. """
+    # if we add more stuff in the request state we'll need to not blow away the old state
+    r.state._cdmstate = RequestState(user=user)
+
+
+def get_request_user(r: Request) -> KBaseUser:
+    """ Get the user for a request. """
+    if not getattr(r.state, "_cdmstate", None) or not r.state._cdmstate:
+        return None
+    return r.state._cdmstate.user
 
 
 async def get_mongo_client(cfg: CDMTaskServiceConfig) -> AsyncIOMotorClient:
