@@ -5,8 +5,9 @@ Manages job state.
 import logging
 import uuid
 
-from cdmtaskservice import models
 from cdmtaskservice import kb_auth
+from cdmtaskservice import logfields
+from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
     require_string as _require_string,
@@ -143,5 +144,5 @@ class JobState:
         msg = f"User {user} accessed job {job_id}"
         if as_admin:
             msg = f"Admin user {user} accessed {job.user}'s job {job_id}"
-        logging.getLogger(__name__).info(msg)
+        logging.getLogger(__name__).info(msg, extra={logfields.JOB_ID: job_id})
         return job

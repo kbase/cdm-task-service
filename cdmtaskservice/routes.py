@@ -16,7 +16,7 @@ from fastapi import (
 from pydantic import BaseModel, Field
 from typing import Annotated
 
-from cdmtaskservice import app_state
+from cdmtaskservice import app_state, logfields
 from cdmtaskservice import kb_auth
 from cdmtaskservice import models
 from cdmtaskservice.callback_url_paths import (
@@ -444,7 +444,10 @@ async def _callback_handling(
 ) -> (JobFlow, models.AdminJobDetails):
     # Any in the tuple is the job flow runner. Would need to make an abstract class to type it
     # YAGNI
-    logging.getLogger(__name__).info(f"{operation} reported as complete for job {job_id}")
+    logging.getLogger(__name__).info(
+        f"{operation} reported as complete for job {job_id}",
+        extra={logfields.JOB_ID: job_id},
+    )
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, _SERVICE_USER, as_admin=True)
     return appstate.jobflow_manager.get_flow(job.job_input.cluster), job
