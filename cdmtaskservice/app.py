@@ -2,6 +2,7 @@
 API for the CDM task service.
 '''
 
+import datetime
 import logging
 import os
 import sys
@@ -13,6 +14,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.security.utils import get_authorization_scheme_param
 from http.client import responses
+from pythonjsonlogger.core import RESERVED_ATTRS
+from pythonjsonlogger.json import JsonFormatter
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -39,6 +42,44 @@ SERVICE_DESCRIPTION = (
 
 # httpx is super chatty if the root logger is set to INFO
 logging.basicConfig(level=logging.WARNING)
+# https://stackoverflow.com/a/58777937/643675
+logging.Formatter.formatTime = (
+    lambda self, record, datefmt=None: datetime.datetime.fromtimestamp(
+        record.created, datetime.timezone.utc
+    ).astimezone().isoformat(sep="T",timespec="milliseconds"))
+rootlogger = logging.getLogger()
+# Remove any existing handlers. The list slice prevents list modification while iterating
+for handler in rootlogger.handlers[:]:
+    rootlogger.removeHandler(handler)
+
+# Not a fan of uvicorn specific stuff here
+# Ensure Uvicorn loggers propagate to the root logger
+uvicorn_loggers = ["uvicorn", "uvicorn.access", "uvicorn.error"]
+for logger_name in uvicorn_loggers:
+    logger = logging.getLogger(logger_name)
+    logger.propagate = True
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+
+class CustomJsonFormatter(JsonFormatter):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def process_log_record(self, log_record):
+        return super().process_log_record(
+            {k: v for k, v in log_record.items() if v is not None}
+        )
+
+
+handler = logging.StreamHandler()
+handler.setFormatter(CustomJsonFormatter(
+    "{levelname}{name}{message}{asctime}{exc_info}",
+    style="{",
+    rename_fields={"levelname": "level"},
+    reserved_attrs=RESERVED_ATTRS + ["color_message"],
+))
+rootlogger.addHandler(handler)
 logging.getLogger("cdmtaskservice").setLevel(logging.INFO)
 
 
@@ -70,10 +111,12 @@ def create_app():
     Create the CDM task service application
     """
 
-    print(f"Server version {VERSION} {GIT_COMMIT}")
+    logging.getLogger(__name__).info(
+        f"Server starting", extra={"version": VERSION, "git_commit": GIT_COMMIT}
+    )
     with open(os.environ[_KB_DEPLOYMENT_CONFIG], "rb") as cfgfile:
         cfg = CDMTaskServiceConfig(cfgfile)
-    cfg.print_config(sys.stdout)
+    cfg.print_config(sys.stdout)  # maybe should redo the service config in json...?
     sys.stdout.flush()
 
     app = FastAPI(
