@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from fastapi import FastAPI, Request
+from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
@@ -150,7 +151,8 @@ async def _build_NERSC_flow_deps(
             desc = ns.perlmutter_description if ns.perlmutter_description else ns.dtns_description
             if start_wo_nersc:
                 logr.info(
-                    f"NERSC is down, starting without job flow", extra={"nersc_status": repr(ns)}
+                    f"NERSC is down, starting without job flow",
+                    extra={logfields.NERSC_STATUS: repr(ns)},
                 )
                 return None, None, None, desc
             else:
