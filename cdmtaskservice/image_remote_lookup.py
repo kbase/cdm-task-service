@@ -106,8 +106,6 @@ class DockerImageInfo:
     async def _run_crane_command(self, image_name: str, command: str) -> str:
         retcode, stdo, stde = await self._run_crane(command, image_name)
         if retcode > 0:
-            # TODO LOGGING figure out how this is going to work, want to associate logs with
-            #              user names, ips, etc.
             # TODO TEST logging add tests for logging before exiting prototype stage
             #           manual testing for now
             logging.getLogger(__name__).error(

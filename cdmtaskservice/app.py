@@ -37,6 +37,16 @@ from cdmtaskservice.exceptions import InvalidAuthHeaderError
 
 # TODO LOGGING when NERSC is back up go through all logs and add `extra` fields.
 
+# TODO FEATURE GPU support
+# TODO FEATURE lawrencium support
+# TODO FEATURE job restarts / recovery (automatic?)
+# TODO FEATURE kafka notificatos (how reliable does this need to be?)
+# TODO FEATURE list jobs (see design)
+# TODO FEATURE list refdata (see design)
+# TODO FEATURE list images (see design)
+# TODO FEATURE delete image
+# TODO FEATURE refdata restarts / recovery (automatic?)
+
 
 _KB_DEPLOYMENT_CONFIG = "KB_DEPLOYMENT_CONFIG"
 
@@ -155,7 +165,7 @@ class _AppMiddleWare(BaseHTTPMiddleware):
                 raise InvalidAuthHeaderError(f"Authorization header requires {_SCHEME} scheme")
             user = await app_state.get_app_state(request).auth.get_user(credentials)
         app_state.set_request_user(request, user)
-        extra_var["user"] = user.user if user else None
+        extra_var[logfields.USER] = user.user if user else None
         logging_extra_var.set(extra_var)
         return await call_next(request)
 
