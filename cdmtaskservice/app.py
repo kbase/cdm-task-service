@@ -2,10 +2,12 @@
 API for the CDM task service.
 '''
 
+import contextvars
 import datetime
 import logging
 import os
 import sys
+import uuid
 
 from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -32,13 +34,29 @@ from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.exceptions import InvalidAuthHeaderError
 
 
-# TODO LOGGING - log all write ops w/ username
+# TODO LOGGING when NERSC is back up go through all logs and add `extra` fields.
+
 
 _KB_DEPLOYMENT_CONFIG = "KB_DEPLOYMENT_CONFIG"
 
 SERVICE_DESCRIPTION = (
     "A service for running arbitrary binaries on remote compute for the KBase CDM"
 )
+
+
+###
+#  Context variables - use these carefully and read the docs before modifying anything
+###
+
+
+logging_extra_var = contextvars.ContextVar("logging_extra_var", default={})
+request_id_var = contextvars.ContextVar("request_id_var", default=None)
+
+
+###
+# Logging setup, uses context vars to fill in logs
+###
+
 
 # httpx is super chatty if the root logger is set to INFO
 logging.basicConfig(level=logging.WARNING)
@@ -62,7 +80,17 @@ for logger_name in uvicorn_loggers:
         logger.removeHandler(handler)
 
 
+class LoggingExtraFilter(logging.Filter):
+    """ Insert extra fields into the logs. """
+    def filter(self, record):
+        for key, value in logging_extra_var.get().items():
+            setattr(record, key, value)
+        record.request_id = request_id_var.get()
+        return True
+
+
 class CustomJsonFormatter(JsonFormatter):
+    """ Remove keys with null values from the logs. """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -73,6 +101,7 @@ class CustomJsonFormatter(JsonFormatter):
 
 
 handler = logging.StreamHandler()
+handler.addFilter(LoggingExtraFilter())
 handler.setFormatter(CustomJsonFormatter(
     "{levelname}{name}{message}{asctime}{exc_info}",
     style="{",
@@ -83,14 +112,18 @@ rootlogger.addHandler(handler)
 logging.getLogger("cdmtaskservice").setLevel(logging.INFO)
 
 
+###
+# Middleware for auth and setting up context vars
+###
+
+
 _SCHEME = "Bearer"
 
 
 class _AppMiddleWare(BaseHTTPMiddleware):
+
     async def dispatch(self, request: Request, call_next) -> Response:
-        # TODO LOGGING / ERRHADNLING set request ID in context var & include in error messages
-        # TODO LOGGING set IP / X-Real-IP / X-Forwarded-For in context var
-        # TODO LOGGING set user in contextvar
+        request_id_var.set(str(uuid.uuid4()))
         user = None
         authorization = request.headers.get("Authorization")
         if authorization:
@@ -103,7 +136,14 @@ class _AppMiddleWare(BaseHTTPMiddleware):
                 raise InvalidAuthHeaderError(f"Authorization header requires {_SCHEME} scheme")
             user = await app_state.get_app_state(request).auth.get_user(credentials)
         app_state.set_request_user(request, user)
+        # TODO LOGGING set IP / X-Real-IP / X-Forwarded-For in context var
+        logging_extra_var.set({"user": user.user if user else None})
         return await call_next(request)
+
+
+###
+# App creation
+###
 
 
 def create_app():
@@ -154,6 +194,11 @@ def create_app():
     return app
 
 
+###
+# Eror handling
+###
+
+
 def _handle_fastapi_validation_exception(r: Request, exc: RequestValidationError):
     return _format_error(
         status.HTTP_400_BAD_REQUEST,
@@ -194,7 +239,8 @@ def _format_error(
     content = {
         "httpcode": status_code,
         "httpstatus": responses[status_code],
-        "time": utcdatetime()
+        "time": utcdatetime(),
+        "request_id": request_id_var.get(),
     }
     if error_type:
         content.update({
