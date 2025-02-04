@@ -179,10 +179,6 @@ task run_container {{
     mkdir -p ./__input__
     mkdir -p ./{OUTPUT_DIR}
     
-    # TODO MOUNTING remove hack for collections containers
-    ln -s __input__ collectionssource
-    ln -s {OUTPUT_DIR} collectionsdata
-    
     # link any manifest file into the mount point
     if [[ -n "~{{manifest}}" ]]; then
         ln ~{{manifest}} ./__input__/$(basename ~{{manifest}})
@@ -201,7 +197,7 @@ task run_container {{
     for jenv in ${{job_env[@]}}; do
         export $jenv
     done
-      
+    
     # run the command
     ~{{sep=" " cmdline}}
     EC=$?
@@ -224,11 +220,13 @@ task run_container {{
     runtime_minutes: {math.ceil(job.job_input.runtime.total_seconds() / 60)}
     memory: "{job.job_input.memory} B"
     cpu: {job.job_input.cpus}
+    dynamic_refdata: "refdata:{job.job_input.params.refdata_mount_point}"
+    dynamic_input: "__input__:{job.job_input.params.input_mount_point}"
+    dynamic_output: "__output__:{job.job_input.params.output_mount_point}"
   }}
 }}
 """
-    # TODO WDL handle mounting
-    # TODO WDL handle refdata
+    # TODO WDL handle refdata - currently just a path into the refdata, needs to be RD specific
 
 
 def _process_flag_args(
@@ -326,9 +324,7 @@ def _handle_container_num(flag: str, container_num: int) -> str | list[str]:
 
 
 def _handle_manifest(job: Job, manifest: Path, flag: str) -> str | list[str]:
-    # TODO MOUNTING remove this hack when mounting works
-    #pth = os.path.join(job.job_input.params.input_mount_point, manifest.name)
-    pth = os.path.join("./__input__", manifest.name)
+    pth = os.path.join(job.job_input.params.input_mount_point, manifest.name)
     # This is the same as the command separated list case below... not sure if using a common fn
     # makes sense
     if flag:
