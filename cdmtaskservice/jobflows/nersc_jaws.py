@@ -8,6 +8,7 @@ from pathlib import Path
 import traceback
 from typing import Any, Callable, Awaitable
 
+from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice import timestamp
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
@@ -83,9 +84,9 @@ class NERSCJAWSRunner(JobFlow):
     async def _handle_exception(
         self, e: Exception, entity_id: str, errtype: str, refdata: bool = False
     ):
-        # TODO LOGGING figure out how logging it going to work etc.
         logging.getLogger(__name__).exception(
-            f"Error {errtype} {'refdata' if refdata else 'job'}: {entity_id}"
+            f"Error {errtype} {'refdata' if refdata else 'job'}.",
+            extra={logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id}
         )
         await self._save_err_to_mongo(
             entity_id,
@@ -117,7 +118,12 @@ class NERSCJAWSRunner(JobFlow):
             raise InvalidJobStateError(f"{op} task is not complete")
         elif res.state == TransferState.FAIL:
             logging.getLogger(__name__).error(
-                f"{op} failed for job {job.id}: {res.message}\n{res.traceback}"
+                f"{op} failed for job.",
+                extra={
+                    logfields.JOB_ID: job.id,
+                    logfields.REMOTE_ERROR: res.message,
+                    logfields.REMOTE_TRACEBACK: res.traceback
+                }
             )
             await self._save_err_to_mongo(
                 job.id,

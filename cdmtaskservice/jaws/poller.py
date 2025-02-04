@@ -7,6 +7,7 @@ import asyncio
 import logging
 from typing import Any
 
+from cdmtaskservice import logfields
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.client import NoSuchJAWSJobError
@@ -34,15 +35,26 @@ async def poll(cli: jaws_client.JAWSClient, job_id: str, run_id: str) -> dict[st
             res = await cli.status(run_id)
             if jaws_client.is_done(res):
                 return res
-            logr.info(f"Polled job {job_id} with JAWS run ID {run_id}, next poll in {backoff}s")
+            logr.info(
+                "Polled JAWS run",
+                extra={
+                    logfields.JOB_ID: job_id,
+                    logfields.JAWS_RUN_ID: run_id,
+                    logfields.NEXT_ACTION_SEC: backoff
+                }
+            )
         except NoSuchJAWSJobError:  # fatal
             raise
         except Exception:
             # TODO ERRORHANDLING it'll probably take some experience to determine fatal vs.
             #                    non-fatal errors
             logr.exception(
-                f"Failed to get status from JAWS for run ID {run_id} for job {job_id}\n"
-                + f"*** Trying again in {backoff}s ***"
+                f"*** Failed to get status from JAWS. Trying again in {backoff}s ***",
+                extra={
+                    logfields.JOB_ID: job_id,
+                    logfields.JAWS_RUN_ID: run_id,
+                    logfields.NEXT_ACTION_SEC: backoff
+                }
             )
         await asyncio.sleep(backoff)
 
