@@ -324,7 +324,7 @@ async def get_refdata_admin(
 ) -> models.ReferenceData:
     _ensure_admin(user, "Only service administrators can get refdata as an admin.")
     refdata = app_state.get_app_state(r).refdata
-    return await refdata.get_refdata(refdata_id, as_admin=True)
+    return await refdata.get_refdata_by_id(refdata_id, as_admin=True)
 
 
 class NERSCClientInfo(BaseModel):
