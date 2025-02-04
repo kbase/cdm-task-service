@@ -101,42 +101,44 @@ class NERSCJAWSRunner(JobFlow):
     
     async def _get_transfer_result(
         self,
-        trans_func: Callable[[models.Job], Awaitable[tuple[TransferResult, Any]]],
-        job: models.Job,
+        trans_func: Callable[[], Awaitable[tuple[TransferResult, Any]]],
+        entity_id: str,
         op: str,
         err_type: str,
+        refdata: bool = False
     ) -> Any:
         # can't check that the NERSC task is complete first because the task
         # won't complete until the callback request returns, which won't happen
         # if we wait for the task to complete. IOW, deadlock
         try:
-            res, data = await trans_func(job)
+            res, data = await trans_func()
         except Exception as e:
-            await self._handle_exception(e, job.id, err_type)
+            await self._handle_exception(e, entity_id, err_type, refdata=refdata)
             raise
         if res.state == TransferState.INCOMPLETE:
             raise InvalidJobStateError(f"{op} task is not complete")
         elif res.state == TransferState.FAIL:
             logging.getLogger(__name__).error(
-                f"{op} failed for job.",
+                f"{op} failed for {'refdata' if refdata else 'job'}.",
                 extra={
-                    logfields.JOB_ID: job.id,
+                    logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id,
                     logfields.REMOTE_ERROR: res.message,
                     logfields.REMOTE_TRACEBACK: res.traceback
                 }
             )
             await self._save_err_to_mongo(
-                job.id,
+                entity_id,
                 f"An unexpected error occurred during file {op.lower()}",
                 res.message,
                 res.traceback,
+                refdata=refdata,
             )
             raise ValueError(f"{op} failed: {res.message}")
         else:
             return data
     
     async def _save_err_to_mongo(
-        self, entity_id: str, user_err: str, admin_err: str, traceback:str, refdata=False,
+        self, entity_id: str, user_err: str, admin_err: str, traceback: str, refdata=False,
     ):
         # if this fails, well, then we're screwed
         # could probably simplify this with a partial fn to hold the cluster arg.. meh
@@ -214,10 +216,10 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the download submitted state")
-        async def tfunc(job: models.Job):
+        async def tfunc():
             return await self._nman.get_s3_download_result(job), None
         await self._get_transfer_result(  # check for errors
-            tfunc, job, "Download", "getting download results for",
+            tfunc, job.id, "Download", "getting download results for",
         )
         await self._mongo.update_job_state(
             job.id,
@@ -356,10 +358,10 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the upload submitted state")
-        async def tfunc(job: models.Job):
+        async def tfunc():
             return await self._nman.get_presigned_upload_result(job), None
         await self._get_transfer_result(  # check for errors
-            tfunc, job, "Upload", "getting upload results for",
+            tfunc, job.id, "Upload", "getting upload results for",
         )
         await self._coman.run_coroutine(self._upload_complete(job))
     
@@ -398,9 +400,12 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.ERROR_PROCESSING_SUBMITTED:
             raise InvalidJobStateError("Job must be in the error processing submitted state")
+        # TODO TEST this when JAWS works again, force an error
+        async def tfunc():
+            return await self._nman.get_presigned_upload_result(job)
         data = await self._get_transfer_result(
-            self._nman.get_presigned_error_log_upload_result,
-            job,
+            tfunc,
+            job.id,
             "Error log upload",
             "getting error log upload results for",
         )
@@ -436,7 +441,9 @@ class NERSCJAWSRunner(JobFlow):
         paths = S3Paths([objmeta.path])
         try:
             presigned = await self._s3ext.presign_get_urls(paths)
-            callback_url = get_refdata_download_complete_callback(self._callback_root, refdata.id)
+            callback_url = get_refdata_download_complete_callback(
+                self._callback_root, refdata.id, self._cluster
+            )
             # TODO DISKSPACE clean up no longer used refdata @ NERSC
             #                keep the refdata mongo record so it can be restaged if necessary
             task_id = await self._nman.download_s3_files(
@@ -458,3 +465,34 @@ class NERSCJAWSRunner(JobFlow):
             )
         except Exception as e:
             await self._handle_exception(e, refdata.id, "starting file download for", refdata=True)
+
+    async def refdata_complete(self, refdata_id: str):
+        """
+        Complete a refdata download task. The refdata is expected to be in the download
+        submitted state for the cluster.
+        """
+        refdata = await self._mongo.get_refdata_by_id(_require_string(refdata_id, "refdata_id"))
+        refstate = refdata.get_status_for_cluster(self._cluster)
+        if refstate.state != models.ReferenceDataState.DOWNLOAD_SUBMITTED:
+            raise InvalidReferenceDataStateError(
+                "Reference data must be in the download submitted state for "
+                + f"cluster {refstate.cluster.value}"
+            )
+        async def tfunc():
+            return await self._nman.get_s3_refdata_download_result(refdata), None
+        await self._get_transfer_result(  # check for errors
+            tfunc, refdata.id, "Download", "getting download results for", refdata=True
+        )
+        # TODO DISKSPACE will need to clean up refdata manifests & d/l result json files
+        await self._mongo.update_refdata_state(
+            self._cluster,
+            refdata.id,
+            models.ReferenceDataState.DOWNLOAD_SUBMITTED,
+            models.ReferenceDataState.COMPLETE,
+            timestamp.utcdatetime(),
+        )
+
+# TODO REFDATA support unpack
+# TODO REFDATA associate with image
+# TODO REFDATA on job start, fail if image requires refdata but no mount point or not ready
+# TODO REFDATA mount in WDL

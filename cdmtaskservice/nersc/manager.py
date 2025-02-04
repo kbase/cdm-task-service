@@ -558,13 +558,23 @@ class NERSCManager:
         """
         Get the results of downloading files to NERSC from s3 for a job.
         """
-        return (await self._get_transfer_result(job, "download"))[0]
+        return (await self._get_transfer_result(_not_falsy(job, "job").id, "download"))[0]
+    
+    async def get_s3_refdata_download_result(
+        self, refdata: models.ReferenceData
+    ) -> TransferResult:
+        """
+        Get the results of downloading files to NERSC from s3 for refdata.
+        """
+        return (await self._get_transfer_result(
+            _not_falsy(refdata, "refdata").id, "download", refdata=True
+        ))[0]
 
     async def get_presigned_upload_result(self, job: models.Job) -> TransferResult:
         """
         Get the results of uploading files from NERSC to presigned URLs for a job.
         """
-        return (await self._get_transfer_result(job, "upload"))[0]
+        return (await self._get_transfer_result(_not_falsy(job, "job").id, "upload"))[0]
     
     # not thrilled about this api... probably needs a rethink
     async def get_presigned_error_log_upload_result(self, job: models.Job
@@ -580,11 +590,13 @@ class NERSCManager:
           * Any error message for each container. These are typically not useful to users.
           * This will be None if the upload failed.
         """
-        return await self._get_transfer_result(job, "error_log")
+        return await self._get_transfer_result(_not_falsy(job, "job").id, "error_log")
 
-    async def _get_transfer_result(self, job: models.Job, op: str) -> tuple[TransferResult, Any]:
-        _not_falsy(job, "job")
-        path = self._get_job_scratch(job.id) / f"{op}_result.json"
+    async def _get_transfer_result(
+        self, entity_id: str, op: str, refdata: bool = False
+    ) -> tuple[TransferResult, Any]:
+        sc = self._get_refdata_scratch(entity_id) if refdata else self._get_job_scratch(entity_id)
+        path = sc / f"{op}_result.json"
         res = await self._download_json_file_from_NERSC(
             Machine.dtns, path, no_exception_on_missing_file=True
         )
