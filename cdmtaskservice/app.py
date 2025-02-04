@@ -35,8 +35,6 @@ from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.exceptions import InvalidAuthHeaderError
 
 
-# TODO LOGGING when NERSC is back up go through all logs and add `extra` fields.
-
 # TODO FEATURE GPU support
 # TODO FEATURE lawrencium support
 # TODO FEATURE job restarts / recovery (automatic?)

@@ -6,6 +6,7 @@ credentials periodic expiration from the rest of the system.
 import asyncio
 import datetime
 import logging
+import os
 from pathlib import Path
 from queue import PriorityQueue
 import time
@@ -14,8 +15,8 @@ from typing import Self
 from sfapi_client import AsyncClient
 from sfapi_client.users import AsyncUser
 
+from cdmtaskservice import logfields
 from cdmtaskservice.arg_checkers import require_string, not_falsy
-import os
 
 
 # TODO TEST add manual & automated tests
@@ -73,7 +74,6 @@ class NERSCSFAPIClientProvider:
             modtime = os.path.getmtime(self._credpath)
             if self._credfile_last_mod != modtime:
                 self._credfile_last_mod = modtime
-                # TODO LOGGING figure out how this is going to work and test
                 logging.getLogger(__name__).info(
                     f"Detected SFAPI credential at {self._credpath} "
                     + f"changed at {time.time()}, reloading")
@@ -130,7 +130,9 @@ class NERSCSFAPIClientProvider:
                 if index is None:
                     raise ValueError(err) from e
                 err += f"\n*** Reloading creds in {_BACKOFF[index]}s ***."
-                logging.getLogger(__name__).exception(err)
+                logging.getLogger(__name__).exception(
+                    err, extra={logfields.NEXT_ACTION_SEC: _BACKOFF[index]}
+                )
                 await asyncio.sleep(_BACKOFF[index])
 
     async def destroy(self):

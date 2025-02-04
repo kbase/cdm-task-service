@@ -20,6 +20,7 @@ import sys
 from types import ModuleType
 from typing import Self, Awaitable, Any, NamedTuple
 
+from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
@@ -269,7 +270,7 @@ class NERSCManager:
         self._dtn_scratch = dtn_scratch.result()
         self._perlmutter_scratch = Path(pm_scratch.result().strip())
         logging.getLogger(__name__).info(
-            f"NERSC perlmutter scratch path: {self._perlmutter_scratch}"
+            "NERSC perlmutter scratch path", extra={logfields.FILE: self._perlmutter_scratch}
         )
     
     async def _set_up_dtn_scratch(self, client: AsyncClient) -> Path:
@@ -278,7 +279,9 @@ class NERSCManager:
         scratch = scratch.strip()
         if not scratch:
             raise ValueError("Unable to determine $SCRATCH variable for NERSC dtns")
-        logging.getLogger(__name__).info(f"NERSC DTN scratch path: {scratch}")
+        logging.getLogger(__name__).info(
+            "NERSC DTN scratch path", extra={logfields.FILE: scratch}
+        )
         return Path(scratch)
     
     def _get_job_scratch(self, job_id, perlmutter=False):
@@ -304,7 +307,7 @@ class NERSCManager:
         chmod: str = None,
     ):
         logr = logging.getLogger(__name__)
-        logr.info(f"Uploading file {target} to NERSC.")
+        logr.info("Uploading file to NERSC.", extra={logfields.FILE: target})
         dtw = f"{_DT_WORKAROUND}; " if compute.name == Machine.dtns else ""
         if target.parent != Path("."):
             cmd = f"{dtw}mkdir -p {target.parent}"
@@ -316,11 +319,11 @@ class NERSCManager:
                 await asrp.upload(f)
         else:
             await asrp.upload(bio)
-        logr.info(f"Upload of file {target} to NERSC complete.")
+        logr.info("Upload of file to NERSC complete.", extra={logfields.FILE: target})
         if chmod:
             cmd = f"{dtw}chmod {chmod} {target}"
             await compute.run(cmd)
-            logr.info(f"chmod of uploaded file {target} complete.")
+            logr.info("chmod of uploaded file complete.", extra={logfields.FILE: target})
 
     def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
         # skip some API calls vs. the upload example in the NERSC docs
@@ -465,10 +468,13 @@ class NERSCManager:
             command.insert(3, f"export CTS_CONTAINER_LOGS_LOCATION={container_logs_location}; ")
         command = "".join(command)
         task_id = (await self._run_command(cli, _DT_TARGET, command))["task_id"]
-        # TODO LOGGING figure out how to handle logging, see other logging todos
-        op = "refdata" if refdata else "job"
         logging.getLogger(__name__).info(
-            f"Created {task_type} task with id {task_id} for {op} {entity_id}")
+            f"Created {task_type} task for {'refdata' if refdata else 'job'}",
+            extra={
+                logfields.NERSC_TASK_ID: task_id,
+                logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id
+            }
+        )
         return task_id
     
     def _create_download_manifest(
@@ -632,7 +638,8 @@ class NERSCManager:
                 raise ValueError(f"JAWS returned no run_id in JSON {res}")
             run_id = j["run_id"]
             logging.getLogger(__name__).info(
-                f"Submitted JAWS job with run id {run_id} for job {job.id}"
+                "Submitted JAWS job",
+                extra={logfields.JOB_ID: job.id, logfields.JAWS_RUN_ID: run_id}
             )
             return str(run_id)
         except json.JSONDecodeError as e:
