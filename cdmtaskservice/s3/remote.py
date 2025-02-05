@@ -9,14 +9,22 @@ python versions.
 import aiohttp
 import asyncio
 import base64
+import gzip
 from hashlib import md5
 import os
 from pathlib import Path
+import shutil
+import tarfile
 from typing import Any, Awaitable
 import zlib
 
 # Probably not necessary, but could look into aiofiles for some of these methods
 # Potential future (minor) performance improvement, but means more installs on remote clusters
+
+_EXT_GZ = ".gz"
+_EXT_TARGZ = ".tar.gz"
+_EXT_TGZ = ".tgz"
+UNPACK_FILE_EXTENSIONS = [_EXT_GZ, _EXT_TARGZ, _EXT_TGZ]
 
 _CHUNK_SIZE_64KB = 2 ** 16
 _MT_FILE_MD5 = md5(b"").hexdigest()
@@ -234,6 +242,66 @@ async def _process_uploads(
     await _run_tasks(tasks, concurrency)
 
 
+# TODO REFDATA clean up tar and gz files
+def _ensure_safe_tar_path(parent_dir: Path, member_name: str, tar_file: str):
+    """Ensure that the target path is within the base directory."""
+    # TODO TEST need to figure out how to make a bad tar file to test this
+    abs_base = parent_dir.absolute()
+    abs_target = (parent_dir / member_name).absolute()
+    if not abs_base.parts == abs_target.parts[:len(abs_base.parts)]:
+        raise ValueError(
+            f"Unsafe path detected for tarfile {tar_file}: {member_name}"
+        )
+
+
+def _extract_gz(file_path: Path):
+    """Extract a .gz file."""
+    output_path = file_path.parent / file_path.stem
+    with gzip.open(file_path, 'rb') as f_in, open(output_path, 'wb') as f_out:
+        shutil.copyfileobj(f_in, f_out)
+
+
+def _extract_tar(file_path: Path):
+    """Extract a .tar.gz or .tgz file safely."""
+    parent_dir = file_path.parent
+    with tarfile.open(file_path, 'r:*') as tar:
+        for member in tar.getmembers():
+            _ensure_safe_tar_path(parent_dir, member.name, file_path)
+        tar.extractall(parent_dir)
+
+
+async def _process_download(
+    session: aiohttp.ClientSession,
+    url: str,
+    partsize: int,
+    outputpath: Path,
+    etag: str,
+    insecure_ssl: bool,
+    timeout_sec: int,
+    unpack: bool,
+):
+    await download_presigned_url(
+        session,
+        url,
+        partsize,
+        outputpath,
+        etag,
+        insecure_ssl,
+        timeout_sec
+    )
+    if unpack:
+        op = str(outputpath).lower()
+        if op.endswith(_EXT_TGZ) or op.endswith(_EXT_TARGZ):
+            return _extract_tar(outputpath)
+        elif op.endswith(_EXT_GZ):
+            return _extract_gz(outputpath)
+        else:
+            raise ValueError(
+                f"Unsupported unpack file type for file {outputpath}. " +
+                f"Only {', '.join(UNPACK_FILE_EXTENSIONS)} are supported."
+            )
+
+
 async def _process_downloads(
     sess: aiohttp.ClientSession,
     root: Path,
@@ -243,7 +311,7 @@ async def _process_downloads(
     min_timeout_sec: int,
     sec_per_GB: float,
 ):
-    tasks = [download_presigned_url(
+    tasks = [_process_download(
         sess,
         fil["url"],
         fil["partsize"],
@@ -251,6 +319,7 @@ async def _process_downloads(
         etag=fil["etag"],
         insecure_ssl=insecure_ssl,
         timeout_sec=_timeout(min_timeout_sec, fil["size"], sec_per_GB),
+        unpack=fil["unpack"],
     ) for fil in files]
     await _run_tasks(tasks, concurrency)
 

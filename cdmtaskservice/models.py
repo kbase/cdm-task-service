@@ -836,6 +836,7 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
     Information about reference data status with added details of interest to service
     administrators.
     """
+    # This is an outgoing structure only so we don't add validators
     nersc_download_task_id: Annotated[list[str] | None, Field(
         description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
             + "instance to NERSC. Note that task details only persist for ~10 minutes past "

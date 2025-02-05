@@ -453,6 +453,7 @@ class NERSCJAWSRunner(JobFlow):
                 callback_url,
                 insecure_ssl=self._s3insecure,
                 refdata=True,
+                unpack=refdata.unpack,
             )
             await self._mongo.add_NERSC_refdata_download_task_id(
                 self._cluster,
@@ -492,7 +493,6 @@ class NERSCJAWSRunner(JobFlow):
             timestamp.utcdatetime(),
         )
 
-# TODO REFDATA support unpack
 # TODO REFDATA associate with image
 # TODO REFDATA on job start, fail if image requires refdata but no mount point or not ready
 # TODO REFDATA mount in WDL

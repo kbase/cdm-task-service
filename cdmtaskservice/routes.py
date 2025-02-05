@@ -87,8 +87,8 @@ async def root() -> Root:
 
 
 class WhoAmI(BaseModel):
-    """ The username associated with the provided user token and the users's admin state. """
-    user: Annotated[str, Field(example="kbasehelp", description="The users's username.")]
+    """ The username associated with the provided user token and the user's admin state. """
+    user: Annotated[str, Field(example="kbasehelp", description="The user's username.")]
     is_service_admin: Annotated[bool, Field(
         example=False, description="Whether the user is a service administrator."
     )]
@@ -289,7 +289,7 @@ async def create_refdata(
             + "files are supported."
     )] = False,
     user: kb_auth.KBaseUser=Depends(_AUTH)
-) -> models.Image:
+) -> models.ReferenceData:
     _ensure_admin(user, "Only service administrators can create reference data.")
     refdata = app_state.get_app_state(r).refdata
     return await refdata.create_refdata(refdata_s3_path, user, etag=etag, unpack=unpack)
@@ -322,7 +322,7 @@ async def get_refdata_admin(
     r: Request,
     refdata_id: _ANN_REFDATA_ID,
     user: kb_auth.KBaseUser=Depends(_AUTH),
-) -> models.ReferenceData:
+) -> models.AdminReferenceData:
     _ensure_admin(user, "Only service administrators can get refdata as an admin.")
     refdata = app_state.get_app_state(r).refdata
     return await refdata.get_refdata_by_id(refdata_id, as_admin=True)
