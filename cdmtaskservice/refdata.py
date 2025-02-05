@@ -8,11 +8,12 @@ from cdmtaskservice import kb_auth
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import ETagMismatchError
+from cdmtaskservice.exceptions import ETagMismatchError, IllegalParameterError
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths, validate_path
+from cdmtaskservice.s3.remote import UNPACK_FILE_EXTENSIONS
 from cdmtaskservice.timestamp import utcdatetime
 
 
@@ -63,6 +64,11 @@ class Refdata:
         # TODO CODE add a toggle to S3Paths to not include index info in error
         validate_path(s3_path)
         _not_falsy(user, "user")
+        if unpack:
+            if not any([s3_path.endswith(ex) for ex in UNPACK_FILE_EXTENSIONS]):
+                raise IllegalParameterError(
+                    "Invalid file extension for unpack, only "
+                    + f"{', '.join(UNPACK_FILE_EXTENSIONS)} are supported")
         meta = (await self._s3.get_object_meta(S3Paths([s3_path])))[0]
         if etag and etag != meta.e_tag:
             raise ETagMismatchError(

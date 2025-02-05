@@ -377,6 +377,7 @@ class NERSCManager:
         concurrency: int = 10,
         insecure_ssl: bool = False,
         refdata: bool = False,
+        unpack: bool = False,
     ) -> str:
         """
         Download a set of files to NERSC from an S3 instance.
@@ -392,11 +393,12 @@ class NERSCManager:
         insecure_ssl - whether to skip the cert check for the S3 URL.
         refdata - whether this is a refdata download and files should be stored in the NERSC
             refdata location.
+        unpack - whether to unpack *.gz, *.tar.gz, or *.tgz files.
         
         Returns the NERSC task ID for the download.
         """
         maniio = self._create_download_manifest(
-            download_id, objects, presigned_urls, concurrency, insecure_ssl, refdata)
+            download_id, objects, presigned_urls, concurrency, insecure_ssl, refdata, unpack)
         return await self._process_manifest(
             maniio,
             download_id,
@@ -491,6 +493,7 @@ class NERSCManager:
         concurrency: int,
         insecure_ssl: bool,
         refdata: bool,
+        unpack: bool
     ) -> io.BytesIO:
         _require_string(download_id, "download_id")
         _not_falsy(objects, "objects")
@@ -513,6 +516,7 @@ class NERSCManager:
                 "etag": meta.e_tag,
                 "partsize": meta.effective_part_size,
                 "size": meta.size,
+                "unpack": unpack,
             } for url, meta in zip(presigned_urls, objects)
         ]
         return io.BytesIO(json.dumps({"file-transfers": manifest}).encode())
