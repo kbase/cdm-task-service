@@ -290,7 +290,7 @@ async def _process_download(
         timeout_sec
     )
     if unpack:
-        op = str(outputpath)
+        op = str(outputpath).lower()
         if op.endswith(_EXT_TGZ) or op.endswith(_EXT_TARGZ):
             return _extract_tar(outputpath)
         elif op.endswith(_EXT_GZ):
