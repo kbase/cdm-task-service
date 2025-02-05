@@ -104,6 +104,10 @@ class WhoAmI(BaseModel):
         },
         description="Request headers received from the client."
     )
+    client_ip: str = Field(
+        example="203.0.113.5", 
+        description="IP address of the client as seen by Uvicorn."
+    )
 
 @ROUTER_GENERAL.get(
     "/whoami/",
@@ -115,11 +119,12 @@ async def whoami(
     request: Request, 
     user: kb_auth.KBaseUser = Depends(_AUTH)
 ) -> WhoAmI:
-    headers = dict(request.headers)
+    headers = {k.decode(): v.decode() for k, v in request.scope["headers"]}  # Raw headers from ASGI
     return WhoAmI(
         user=user.user,
         is_service_admin=kb_auth.AdminPermission.FULL == user.admin_perm,
-        headers=headers
+        headers=headers,
+        client_ip=request.client.host  # Client IP as seen by Uvicorn
     )
 
 
