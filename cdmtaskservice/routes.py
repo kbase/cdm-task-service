@@ -86,6 +86,10 @@ async def root() -> Root:
     }
 
 
+from fastapi import Request, Depends
+from pydantic import BaseModel, Field
+from typing import Annotated, Dict
+
 class WhoAmI(BaseModel):
     """ The username associated with the provided user token and the user's admin state. """
     user: Annotated[str, Field(example="kbasehelp", description="The user's username.")]
