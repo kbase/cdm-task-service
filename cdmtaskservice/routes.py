@@ -92,6 +92,14 @@ class WhoAmI(BaseModel):
     is_service_admin: Annotated[bool, Field(
         example=False, description="Whether the user is a service administrator."
     )]
+    headers: Dict[str, str] = Field(
+        example={
+            "X-Forwarded-For": "203.0.113.5",
+            "X-Real-IP": "192.0.2.1",
+            "User-Agent": "Mozilla/5.0"
+        },
+        description="Request headers received from the client."
+    )
 
 @ROUTER_GENERAL.get(
     "/whoami/",
@@ -102,17 +110,13 @@ class WhoAmI(BaseModel):
 async def whoami(
     request: Request, 
     user: kb_auth.KBaseUser = Depends(_AUTH)
-) -> dict:
+) -> WhoAmI:
     headers = dict(request.headers)
-    return {
-        "user": user.user,
-        "is_service_admin": kb_auth.AdminPermission.FULL == user.admin_perm,
-        "headers": {
-            "X-Forwarded-For": headers.get("x-forwarded-for", "Not Provided"),
-            "X-Real-IP": headers.get("x-real-ip", "Not Provided"),
-            "All-Headers": headers  # Optional: to print all headers
-        }
-    }
+    return WhoAmI(
+        user=user.user,
+        is_service_admin=kb_auth.AdminPermission.FULL == user.admin_perm,
+        headers=headers
+    )
 
 
 class SubmitJobResponse(BaseModel):
