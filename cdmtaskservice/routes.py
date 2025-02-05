@@ -87,23 +87,31 @@ async def root() -> Root:
 
 
 class WhoAmI(BaseModel):
-    """ The username associated with the provided user token and the users's admin state. """
-    user: Annotated[str, Field(example="kbasehelp", description="The users's username.")]
+    """ The username associated with the provided user token and the user's admin state. """
+    user: Annotated[str, Field(example="kbasehelp", description="The user's username.")]
     is_service_admin: Annotated[bool, Field(
         example=False, description="Whether the user is a service administrator."
     )]
-    
 
 @ROUTER_GENERAL.get(
     "/whoami/",
     response_model=WhoAmI,
     summary="Who am I? What does it all mean?",
-    description="Information about the current user."
+    description="Information about the current user and request headers."
 )
-async def whoami(user: kb_auth.KBaseUser=Depends(_AUTH)) -> WhoAmI:
+async def whoami(
+    request: Request, 
+    user: kb_auth.KBaseUser = Depends(_AUTH)
+) -> dict:
+    headers = dict(request.headers)
     return {
         "user": user.user,
-        "is_service_admin": kb_auth.AdminPermission.FULL == user.admin_perm
+        "is_service_admin": kb_auth.AdminPermission.FULL == user.admin_perm,
+        "headers": {
+            "X-Forwarded-For": headers.get("x-forwarded-for", "Not Provided"),
+            "X-Real-IP": headers.get("x-real-ip", "Not Provided"),
+            "All-Headers": headers  # Optional: to print all headers
+        }
     }
 
 
