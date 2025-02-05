@@ -121,7 +121,7 @@ root_url = "{{ KBCTS_SERVICE_ROOT_URL or "https://ci.kbase.us/services/cts" }}"
 # to be defined here in order for the OpenAPI documentation to function.
 root_path = "{{ KBCTS_SERVICE_ROOT_PATH or "" }}"
 
-# The service group this instance of the service belongs to. This is used to separate files
+# The service group to which this instance of the service belongs. This is used to separate files
 # on remote services so files from different S3 instances (say production and development)
 # don't collide.
 # MongoDB databases should not be split among different service groups or errors accessing

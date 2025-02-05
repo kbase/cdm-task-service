@@ -190,10 +190,14 @@ class NERSCManager:
         client_provider - a function that provides a valid SFAPI client. It is assumed that
             the user associated with the client does not change.
         nersc_code_path - the path in which to store remote code at NERSC. It is advised to
-            include version information in the path to avoid code conflicts.
+            include version information in the path to avoid code conflicts. The path is appended
+            by the service group to separate dev and prod environments.
         jaws_token - a token for the JGI JAWS system.
         jaws_group - the group to use for running JAWS jobs.
         jaws_refdata_root_dir - the root directory for refdata configured for the JAWS instance.
+        service_group - The service group to which this instance of the manager belongs.
+            This is used to separate files at NERSC so files from different S3 instances
+            (say production and development) don't collide.
         """
         nm = NERSCManager(client_provider, nersc_code_path, service_group, jaws_refdata_root_dir)
         await nm._setup_remote_code(
@@ -210,7 +214,9 @@ class NERSCManager:
             jaws_refdata_root_dir: str,
         ):
         self._client_provider = _not_falsy(client_provider, "client_provider")
-        self._nersc_code_path = self._check_path(nersc_code_path, "nersc_code_path")
+        self._nersc_code_path = self._check_path(
+            nersc_code_path, "nersc_code_path"
+        ) / service_group
         self._scratchdir = Path("cdm_task_service") / service_group
         self._jawscfg = f"jaws_cts_{service_group}.conf"
         self._refdata_root = self._check_path(jaws_refdata_root_dir, "jaws_refdata_root_dir"
