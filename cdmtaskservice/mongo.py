@@ -365,7 +365,7 @@ class MongoDAO:
             {models.FLD_REFDATA_ID: _require_string(refdata_id, "refdata_id")}
         )
         if not doc:
-            raise NoSuchJobError(f"No reference data with ID '{refdata_id}' exists")
+            raise NoSuchReferenceDataError(f"No reference data with ID '{refdata_id}' exists")
         return self._to_refdata(doc, as_admin=as_admin)
 
     async def get_refdata_by_path(self, s3_path: str) -> list[models.ReferenceData]:

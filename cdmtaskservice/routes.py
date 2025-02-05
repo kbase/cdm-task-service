@@ -21,6 +21,7 @@ from cdmtaskservice import kb_auth
 from cdmtaskservice import models
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
+    get_refdata_download_complete_callback,
     get_job_complete_callback,
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
@@ -392,6 +393,30 @@ async def download_complete(
 
 
 @ROUTER_CALLBACKS.get(
+    f"/{get_refdata_download_complete_callback()}/{{refdata_id}}/{{cluster}}",
+    summary="Report refdata data download complete",
+    description="Report that data download for refdata is complete. This method is not expected "
+        + "to be called by users.",
+    status_code = status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def refdata_download_complete(
+    r: Request,
+    refdata_id: _ANN_REFDATA_ID,
+    cluster: Annotated[models.Cluster, FastPath(
+        example=models.Cluster.PERLMUTTER_JAWS,
+        description="The cluster for which the refdata download is complete."
+    )]
+):
+    logging.getLogger(__name__).info(
+        f"Download reported as complete for refdata {refdata_id} on cluster {cluster.value}",
+        extra={logfields.REFDATA_ID: refdata_id, logfields.CLUSTER: cluster.value},
+    )
+    runner = app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
+    await runner.refdata_complete(refdata_id)
+
+
+@ROUTER_CALLBACKS.get(
     f"/{get_job_complete_callback()}/{{job_id}}",
     summary="Report job complete",
     description="Report a remote job is complete. This method is not expected "
@@ -442,8 +467,6 @@ async def error_log_upload_complete(
 async def _callback_handling(
     r: Request, operation: str, job_id: str
 ) -> (JobFlow, models.AdminJobDetails):
-    # Any in the tuple is the job flow runner. Would need to make an abstract class to type it
-    # YAGNI
     logging.getLogger(__name__).info(
         f"{operation} reported as complete for job {job_id}",
         extra={logfields.JOB_ID: job_id},
