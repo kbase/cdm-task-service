@@ -14,13 +14,20 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num
 )
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import UnauthorizedError, IllegalParameterError, ETagMismatchError
+from cdmtaskservice.exceptions import (
+    ETagMismatchError,
+    IllegalParameterError,
+    InvalidReferenceDataStateError,
+    UnauthorizedError,
+)
 from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.mongo import MongoDAO
+from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client, S3BucketInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
+
 
 class JobState:
     """
@@ -33,6 +40,7 @@ class JobState:
         mongo: MongoDAO,
         s3client: S3Client,
         images: Images,
+        refdata: Refdata,
         coro_manager: CoroutineWrangler,
         flow_manager: JobFlowManager,
         log_bucket: str,
@@ -44,6 +52,7 @@ class JobState:
         mongo - a MongoDB DAO object.
         s3Client - an S3Client pointed at the S3 storage system to use.
         images - a handler for getting images.
+        refdata - a manager for reference data.
         coro_manager - a coroutine manager.
         flow_manager- the job flow manager.
         log_bucket - the bucket in which logs are stored. Disallowed for writing for other cases.
@@ -52,6 +61,7 @@ class JobState:
         self._mongo = _not_falsy(mongo, "mongo")
         self._s3 = _not_falsy(s3client, "s3client")
         self._images = _not_falsy(images, "images")
+        self._ref = _not_falsy(refdata, "refdata")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._flowman = _not_falsy(flow_manager, "flow_manager")
         self._logbuk = _require_string(log_bucket, "log_bucket")
@@ -76,6 +86,7 @@ class JobState:
         )
         # Could parallelize these ops but probably not worth it
         image = await self._images.get_image(job_input.image)
+        await self._check_refdata(job_input, image)
         bucket = job_input.output_dir.split("/", 1)[0]
         if bucket == self._logbuk:
             raise S3BucketInaccessibleError(f"Jobs may not write to bucket {self._logbuk}")
@@ -120,6 +131,22 @@ class JobState:
         # Pass in the meta to avoid potential race conditions w/ etag changes
         await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
+
+    async def _check_refdata(self, job_input: models.JobInput, image: models.Image):
+        if not image.refdata_id:
+            return
+        if not job_input.params.refdata_mount_point:
+            raise IllegalParameterError(
+                "Image for job requires reference data but no refdata mount point "
+                + "is specified in the job input parameters"
+        )
+        refdata = await self._ref.get_refdata_by_id(image.refdata_id)
+        refstatus = refdata.get_status_for_cluster(job_input.cluster)
+        if refstatus.state != models.ReferenceDataState.COMPLETE:
+            raise InvalidReferenceDataStateError(
+                f"Reference data '{refdata.id} required for job is not yet staged at "
+                + f"remote compute environment {job_input.cluster.value}"
+        )
 
     async def get_job(
         self,

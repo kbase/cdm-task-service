@@ -117,7 +117,16 @@ async def build_app(
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3, coman, flowman)
         images = Images(mongodao, imginfo, refdata)
-        job_state = JobState(mongodao, s3, images, coman, flowman, logbuk, cfg.job_max_cpu_hours)
+        job_state = JobState(  # this also has a lot of required args, yech
+            mongodao,
+            s3,
+            images,
+            refdata,
+            coman,
+            flowman,
+            logbuk,
+            cfg.job_max_cpu_hours
+        )
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._jaws_cli = jaws_client
