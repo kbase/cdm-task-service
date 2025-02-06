@@ -253,11 +253,20 @@ async def get_refdata_by_etag(
 async def approve_image(
     r: Request,
     image_id: _ANN_IMAGE_ID,
+    refdata_id: Annotated[str | None, Query(
+        example="3a28c155-ea8b-4e1b-baef-242d991a8200",
+        description="The ID of reference data to associate with the image. The reference data "
+            + "must already be registered with the system, although it may still be staging "
+            + "at remote compute sites.",
+        pattern=r"^[\w-]+$",
+        min_length=1,
+        max_length=50,
+    )] = None,
     user: kb_auth.KBaseUser=Depends(_AUTH)
 ) -> models.Image:
     _ensure_admin(user, "Only service administrators can approve images.")
     images = app_state.get_app_state(r).images
-    return await images.register(image_id, user.user)
+    return await images.register(image_id, user.user, refdata_id=refdata_id)
 
 
 @ROUTER_ADMIN.post(
