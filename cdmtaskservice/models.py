@@ -705,7 +705,12 @@ class Image(RegistrationInfo):
         description="The image tag at registration time. "
             + "The tag may no longer point to the same image."
     )] = None
-    # TODO REFERENCEDATA add reference data ID
+    refdata_id: Annotated[str | None, Field(
+        example="3a28c155-ea8b-4e1b-baef-242d991a8200",
+        description="The ID of reference data associated with the image. The image requires "
+            + "this reference data to run, and it will be mounted into the image container at "
+            + "the refdata mount point."
+    )] = None
     
     @property
     def name_with_digest(self):
