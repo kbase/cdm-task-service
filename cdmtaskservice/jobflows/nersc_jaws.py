@@ -492,5 +492,3 @@ class NERSCJAWSRunner(JobFlow):
             models.ReferenceDataState.COMPLETE,
             timestamp.utcdatetime(),
         )
-
-# TODO REFDATA mount in WDL

@@ -219,8 +219,9 @@ class NERSCManager:
         ) / service_group
         self._scratchdir = Path("cdm_task_service") / service_group
         self._jawscfg = f"jaws_cts_{service_group}.conf"
+        self._relative_refdata_root = Path("cdm_task_service") / service_group
         self._refdata_root = self._check_path(jaws_refdata_root_dir, "jaws_refdata_root_dir"
-                                              ) / "cdm_task_service" / service_group
+                                              ) / self._relative_refdata_root
 
     def _check_path(self, path: Path, name: str):
         _not_falsy(path, name)
@@ -299,6 +300,9 @@ class NERSCManager:
     
     def _get_refdata_root(self, refdata_id):
         return self._refdata_root / refdata_id
+    
+    def _get_relative_refdata_root(self, refdata_id):
+        return self._relative_refdata_root / refdata_id
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
@@ -673,7 +677,12 @@ class NERSCManager:
         manifest_files = generate_manifest_files(job)
         manifest_file_paths = self._get_manifest_file_paths(len(manifest_files))
         fmap = {m: _JOB_FILES / m.file for m in job.job_input.input_files}
-        wdljson = wdl.generate_wdl(job, fmap, manifest_file_paths)
+        refpath = None
+        if job.image.refdata_id:
+            refpath = self._get_relative_refdata_root(job.image.refdata_id)
+        wdljson = wdl.generate_wdl(
+            job, fmap, manifest_file_list=manifest_file_paths, relative_refdata_path=refpath
+        )
         pre = self._get_job_scratch(job.id)
         downloads = {pre / fp: f for fp, f in zip(manifest_file_paths, manifest_files)}
         downloads[pre / _JAWS_INPUT_WDL] = wdljson.wdl

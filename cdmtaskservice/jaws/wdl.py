@@ -60,6 +60,7 @@ def generate_wdl(
     job: Job,
     file_mapping: dict[S3FileWithDataID, Path],
     manifest_file_list: list[Path] = None,
+    relative_refdata_path: Path = None
 ) -> JawsInput:
     """
     Generate input for a JAWS run in the form of a WDL file and input.json file contents.
@@ -72,12 +73,19 @@ def generate_wdl(
         Required if manifest files are specified in the job input.
         The manifest files will be mounted directly into the input mount point for the job,
         regardless of the path, and so must not collide with any other files in the input root.
+    relative_refdata_path - the path to a directory containing reference data for the run at the
+        JAWS site, relative to the JAWS refdata root path.
+        This will be mounted into the container at the refdata mount point specified in the job.
     """
     # It'd be nice if there were a programmatic WDL writer but I haven't been able to find one
     # This fn is a little long but not too hard to read yet I think
     # If the manifest file name / path changes that'll break the JAWS cache, need to think
     # about that
     # How often will jobs run with identical manifest files though? Maybe MD5 based caching?
+    if relative_refdata_path and not job.job_input.params.refdata_mount_point:
+        raise ValueError(
+            "If a refdata path is supplied, a mount point for the job must be supplied"
+        )
     if not job.job_input.inputs_are_S3File():
         raise ValueError("input files must be S3 files with the E-tag")
     job_files = job.job_input.get_files_per_container()
@@ -120,17 +128,18 @@ def generate_wdl(
     if manifest_file_list:
         input_json[f"{workflow_name}.manifest_list"] = [str(m) for m in manifest_file_list]
 
-    wdl = _generate_wdl(job, workflow_name, bool(manifest_file_list))
+    wdl = _generate_wdl(job, workflow_name, bool(manifest_file_list), relative_refdata_path)
     return JawsInput(wdl, input_json)
 
 
-def _generate_wdl(job: Job, workflow_name: str, manifests: bool):
+def _generate_wdl(job: Job, workflow_name: str, manifests: bool, relative_refdata_path: Path):
     # Inserting the job ID into the WDL should not bust the Cromwell cache:
     # https://kbase.slack.com/archives/CGJDCR22D/p1729786486819809
     # https://cromwell.readthedocs.io/en/stable/cromwell_features/CallCaching/
     mani_wf_input = ""
     mani_call_input = ""
     mani_task_input = ""
+    refdata_mount = ""
     if manifests:
         mani_wf_input = """
       Array[File] manifest_list"""
@@ -138,6 +147,9 @@ def _generate_wdl(job: Job, workflow_name: str, manifests: bool):
         manifest = manifest_list[i]"""
         mani_task_input = """
     File manifest"""
+    if relative_refdata_path:
+        refdata_mount = f'''
+    dynamic_refdata: "{relative_refdata_path}:{job.job_input.params.refdata_mount_point}"'''
 
     return f"""
 version {_WDL_VERSION}
@@ -219,14 +231,12 @@ task run_container {{
     docker: "{job.image.name_with_digest}"
     runtime_minutes: {math.ceil(job.job_input.runtime.total_seconds() / 60)}
     memory: "{job.job_input.memory} B"
-    cpu: {job.job_input.cpus}
-    dynamic_refdata: "refdata:{job.job_input.params.refdata_mount_point}"
+    cpu: {job.job_input.cpus}{refdata_mount}
     dynamic_input: "__input__:{job.job_input.params.input_mount_point}"
     dynamic_output: "__output__:{job.job_input.params.output_mount_point}"
   }}
 }}
 """
-    # TODO WDL handle refdata - currently just a path into the refdata, needs to be RD specific
 
 
 def _process_flag_args(
