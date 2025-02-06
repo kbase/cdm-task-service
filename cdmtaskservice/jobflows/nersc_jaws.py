@@ -493,5 +493,4 @@ class NERSCJAWSRunner(JobFlow):
             timestamp.utcdatetime(),
         )
 
-# TODO REFDATA on job start, fail if image requires refdata but no mount point or not ready
 # TODO REFDATA mount in WDL

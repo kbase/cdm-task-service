@@ -272,7 +272,6 @@ class Parameters(BaseModel):
         max_length=1024,
         pattern=_PATH_REGEX,
     )] = "/output_files"
-    # TODO REFDATA if the container requires refdata throw an error if this is None
     refdata_mount_point: Annotated[str | None, Field(
         example="/reference_data",
         description="Where reference data files should be pleased in the container. "
