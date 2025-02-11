@@ -2,6 +2,8 @@
 Methods for registering, deleting, and listing images.
 """
 
+from typing import Awaitable
+
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.image_remote_lookup import DockerImageInfo, parse_image_name
@@ -55,15 +57,24 @@ class Images:
         await self._mongo.save_image(img)
         return img
     
-    async def get_image(self, imagename) -> models.Image:
+    async def get_image(self, imagename: str) -> models.Image:
         """
         Get an image.
         """
+        return await self._process_image(imagename, self._mongo.get_image)
+
+    async def delete_image(self, imagename: str):
+        """
+        Delete an image.
+        """
+        await self._process_image(imagename, self._mongo.delete_image)
+    
+    async def _process_image(self, imagename: str, fn: Awaitable):
         parsedimage = parse_image_name(imagename)
         tag = parsedimage.tag
         if not parsedimage.tag and not parsedimage.digest:
             tag = "latest"
-        return await self._mongo.get_image(parsedimage.name, digest=parsedimage.digest, tag=tag)
+        return await fn(parsedimage.name, digest=parsedimage.digest, tag=tag)
 
 
 class NoEntrypointError(Exception):

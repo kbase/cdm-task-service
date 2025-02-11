@@ -167,7 +167,8 @@ _ANN_IMAGE_ID = Annotated[str, FastPath(
     "/{image_id:path}",
     response_model=models.Image,
     summary="Get an image by name",
-    description="Get an image previously registered to the system by the image name."
+    description="Get an image previously registered to the system by the image name. "
+        + "If a digest and tag are provided the tag is ignored."
 )
 async def get_image(
     r: Request,
@@ -248,7 +249,6 @@ async def get_refdata_by_etag(
     description="Approve a Docker image for use with this service. "
         + "The image must be publicly accessible and have an entrypoint. "
         + "The image may not already exist in the system."
-        
 )
 async def approve_image(
     r: Request,
@@ -267,6 +267,24 @@ async def approve_image(
     _ensure_admin(user, "Only service administrators can approve images.")
     images = app_state.get_app_state(r).images
     return await images.register(image_id, user.user, refdata_id=refdata_id)
+
+
+@ROUTER_ADMIN.delete(
+    "/images/{image_id:path}",
+    summary="Delete an image",
+    description="Delete a Docker image, making it no longer usable with this service. "
+        + "If a digest and tag are provided the tag is ignored.",
+    status_code = status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_image(
+    r: Request,
+    image_id: _ANN_IMAGE_ID,
+    user: kb_auth.KBaseUser=Depends(_AUTH)
+):
+    _ensure_admin(user, "Only service administrators can delete images.")
+    images = app_state.get_app_state(r).images
+    await images.delete_image(image_id)
 
 
 @ROUTER_ADMIN.post(
