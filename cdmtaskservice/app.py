@@ -54,7 +54,6 @@ from cdmtaskservice.exceptions import InvalidAuthHeaderError
 # TODO FEATURE list jobs (see design)
 # TODO FEATURE list refdata (see design)
 # TODO FEATURE list images (see design)
-# TODO FEATURE delete image
 # TODO FEATURE refdata restarts / recovery (automatic?)
 
 
@@ -153,8 +152,6 @@ class _AppMiddleWare(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         request_id_var.set(str(uuid.uuid4()))
         extra_var = {
-            # TODO IP_ADDRESSES test this works in CI, should get correct IP
-            #                   https://www.uvicorn.org/settings/#http
             logfields.X_FORWARDED_FOR: _safe_strip(request.headers.get(_X_FORWARDED_FOR)),
             logfields.X_REAL_IP: _safe_strip(request.headers.get(_X_REAL_IP)),
             logfields.IP_ADDRESS: _safe_strip(request.client.host),

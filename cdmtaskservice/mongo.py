@@ -8,7 +8,8 @@ import datetime
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import IndexModel, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
-from typing import Any
+from pymongo.results import DeleteResult
+from typing import Any, Awaitable
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
@@ -97,12 +98,30 @@ class MongoDAO:
                 # no way to test this, but just in case
                 raise ValueError(f"Unexpected duplicate key collision for image {image}") from e
 
-    async def get_image(self, name: str, digest: str | None = None, tag: str | None = None
+    async def get_image(
+        self, name: str, digest: str | None = None, tag: str | None = None
     ) -> models.Image:
         """
         Get an image via a name and tag or digest. Either a tag or digest is required. If both
         are provided, the tag is ignored.
         """
+        doc, err = await self._process_image(name, digest, tag, self._col_images.find_one)
+        if not doc:
+            raise NoSuchImageError(f"No image {name} {err} exists in the system.")
+        return models.Image.model_construct(**doc)
+
+    async def delete_image(self, name: str, digest: str | None = None, tag: str | None = None):
+        """
+        Delete an image via a name and tag or digest. Either a tag or digest is required. If both
+        are provided, the tag is ignored.
+        """
+        delres, err = await self._process_image(name, digest, tag, self._col_images.delete_one)
+        if delres.deleted_count != 1:
+            raise NoSuchImageError(f"No image {name} {err} exists in the system.")
+
+    async def _process_image(
+        self, name: str, digest: str, tag: str, fn: Awaitable
+    ) -> models.Image | DeleteResult:
         name = _require_string(name, "name")
         digest = digest.strip() if digest else None
         tag = tag.strip() if tag else None
@@ -115,10 +134,7 @@ class MongoDAO:
             err = f"with tag '{tag}'"
         else:
             raise ValueError("A digest or tag is required")
-        doc = await self._col_images.find_one(query)
-        if not doc:
-            raise NoSuchImageError(f"No image {name} {err} exists in the system.")
-        return models.Image.model_construct(**doc)
+        return await fn(query), err
 
     async def save_job(self, job: models.Job):
         """ Save a job. Job IDs are expected to be unique."""
