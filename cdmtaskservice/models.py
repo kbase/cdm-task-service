@@ -28,8 +28,6 @@ from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathS
 # TODO EXAMPLES try using examples instead of the deprecated example. Last time I tried no joy
 #               still doesn't seem to work as of 24/11/11
 #               https://github.com/fastapi/fastapi/discussions/11137
-# TODO USEREX fail if an unknown key is in model input - error on typos
-#              https://docs.pydantic.dev/latest/api/config/#pydantic.config.ConfigDict.extra
 
 # WARNNING: Model field names also define field names in the MOngo database.
 # As such, field names cannot change without creating a mapping for field names in the mongo
@@ -172,7 +170,8 @@ class Parameter(BaseModel):
     manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
     manifest_file_header is optional and only taken into account when the type is manifest_file.  
     """
-
+    model_config = ConfigDict(extra='forbid')
+    
     type: Annotated[ParameterType, Field(example=ParameterType.INPUT_FILES)]
     input_files_format: Annotated[InputFilesFormat | None, Field(
         example=InputFilesFormat.COMMA_SEPARATED_LIST,
@@ -251,6 +250,7 @@ class Parameters(BaseModel):
     * A Parameter instance can also be used to specify a manifest of file names or
       file IDs to be passed to the container.
     """
+    model_config = ConfigDict(extra='forbid')
     
     input_mount_point: Annotated[str, Field(
         example="/input_files",
@@ -390,6 +390,7 @@ class Parameters(BaseModel):
 
 class S3File(BaseModel):
     """ A file in an S3 instance. """
+    model_config = ConfigDict(extra='forbid', frozen=True)
     
     file: Annotated[str, Field(
         example="mybucket/foo/bar/baz.jpg",
@@ -412,12 +413,11 @@ class S3File(BaseModel):
     @classmethod
     def _check_file(cls, v):
         return _validate_s3_path(v)
-    
-    model_config = ConfigDict(frozen=True)
 
 
 class S3FileWithDataID(S3File):
     """ A file in an S3 instance, optionally with a data ID. """
+    model_config = ConfigDict(extra='forbid', frozen=True)
     
     data_id: Annotated[str | None, Field(
         example="GCA_000146795.3",
@@ -430,8 +430,6 @@ class S3FileWithDataID(S3File):
     @classmethod
     def _check_data_id(cls, v):
         return _err_on_control_chars(v)
-
-    model_config = ConfigDict(frozen=True)
     
 # TODO FEATURE How to handle all vs all? Current model is splitting file list between containers
 
@@ -449,6 +447,7 @@ class Cluster(str, Enum):
 
 class JobInput(BaseModel):
     """ Input to a Job. """
+    model_config = ConfigDict(extra='forbid')
     
     # In the design there's a field for authentication source. This seems so unlikely to ever
     # be implemented we're leaving it out here. If it is implemented kbase should be the default.
@@ -671,6 +670,7 @@ class RegistrationInfo(BaseModel):
     """
     Information about when and by whom something was registered.
     """
+    # Output only model, no validation
     registered_by: Annotated[str, Field(
         example="aparkin",
         description="The username of the user that performed the registration."
@@ -759,6 +759,7 @@ class NERSCDetails(BaseModel):
     """
     Details about a job run at NERSC.
     """
+    # Output only model, no validation
     download_task_id: Annotated[list[str], Field(
         description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
             + "instance to NERSC. Note that task details only persist for ~10 minutes past "
@@ -782,6 +783,7 @@ class JAWSDetails(BaseModel):
     """
     Details about a JAWS job run.
     """
+    # Output only model, no validation
     run_id: Annotated[list[str], Field(
         description="Run IDs for a JGI JAWS job. Multiple run IDs indicate job retries after "
             + "failures.")]
@@ -791,6 +793,7 @@ class AdminJobDetails(Job):
     """
     Information about a job with added details of interest to service administrators.
     """
+    # Output only model, no validation
     nersc_details: NERSCDetails | None = None
     jaws_details: JAWSDetails | None = None
     admin_error: Annotated[str | None, Field(

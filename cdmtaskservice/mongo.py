@@ -98,6 +98,11 @@ class MongoDAO:
                 # no way to test this, but just in case
                 raise ValueError(f"Unexpected duplicate key collision for image {image}") from e
 
+    def _clean_doc(self, doc: dict[str, Any]) -> dict[str, Any]:
+        # removes the mongo _id in place.
+        doc.pop("_id", None)
+        return doc
+
     async def get_image(
         self, name: str, digest: str | None = None, tag: str | None = None
     ) -> models.Image:
@@ -108,7 +113,7 @@ class MongoDAO:
         doc, err = await self._process_image(name, digest, tag, self._col_images.find_one)
         if not doc:
             raise NoSuchImageError(f"No image {name} {err} exists in the system.")
-        return models.Image.model_construct(**doc)
+        return models.Image.model_construct(**self._clean_doc(doc))
 
     async def delete_image(self, name: str, digest: str | None = None, tag: str | None = None):
         """
@@ -159,6 +164,7 @@ class MongoDAO:
         if not doc:
             raise NoSuchJobError(f"No job with ID '{job_id}' exists")
         # TODO PERF build up the job piece by piece to skip S3 path validation
+        doc = self._clean_doc(doc)
         return models.AdminJobDetails(**doc) if as_admin else models.Job(**doc)
 
     async def _update_job_state(
@@ -406,6 +412,7 @@ class MongoDAO:
         return await cursor.to_list()
 
     def _to_refdata(self, doc: dict[str, Any], as_admin: bool = False):
+        doc = self._clean_doc(doc)
         return models.AdminReferenceData(**doc) if as_admin else models.ReferenceData(**doc)
 
     async def _update_refdata_state(
