@@ -14,6 +14,7 @@ from cdmtaskservice.s3.client import (
     S3BucketNotFoundError,
     S3PathInaccessibleError,
     S3PathNotFoundError,
+    S3UnexpectedError,
 )
 from cdmtaskservice.s3.paths import S3Paths
 from conftest import (
@@ -52,9 +53,17 @@ async def test_create_fail_bad_args(minio, minio_unauthed_user):
     )
     await _create_fail(
         "https://google.com", "foo", "bar",
+        S3UnexpectedError(
+            "An unexpected HTTP error occurred: An HTTP Client raised an unhandled exception: "
+            + "0, message='', url='https://google.com/'" 
+        ),
+    )
+    await _create_fail(
+        "https://ci.kbase.us/services/ws/docs/_sources/knownuserbugs.rst.txt", "foo", "bar",
         S3ClientConnectError(
-            "s3 response from the server at https://google.com was not parseable. "
-            + "See logs for details"
+            "s3 response from the server at "
+            + "https://ci.kbase.us/services/ws/docs/_sources/knownuserbugs.rst.txt "
+            + "was not parseable. See logs for details"
         ),
     )
     await _create_fail(
