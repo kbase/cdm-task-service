@@ -307,21 +307,29 @@ class S3Client:
     async def presign_post_urls(
         self,
         paths: S3Paths,
+        crc64nvmes: list[str] = None,
         expiration_sec: int = 3600
     ) -> list[PresignedPost]:
         """
         Presign urls to allow posting to s3 paths. Does not check for overwrites.
         
         paths - the paths in question.
+        crc64nvmes - the CRC-64/NVME checksums of the files.
         expiration_sec - the expiration time of the urls.
         """
         _not_falsy(paths, "paths")
+        if crc64nvmes and len(crc64nvmes) != len(paths):
+            raise ValueError("If checksums are supplied, there must be one per path")
         _check_num(expiration_sec, "expiration_sec")
+        crc64nvmes = crc64nvmes if crc64nvmes else [None] * len(paths)
         results = []
         async with self._client() as client:
-            for buk, key in paths.split_paths():
-                ret = await client.generate_presigned_post(
-                    Bucket=buk, Key=key, ExpiresIn=expiration_sec)
+            for (buk, key), crc in zip(paths.split_paths(), crc64nvmes):
+                args = {"Bucket": buk, "Key": key, "ExpiresIn": expiration_sec}
+                if crc:
+                    args["Fields"] = {"x-amz-checksum-crc64nvme": crc}
+                    args["Conditions"] = [{"x-amz-checksum-crc64nvme": crc}]
+                ret = await client.generate_presigned_post(**args)
                 results.append(PresignedPost(ret["url"], ret["fields"]))
         return results
 
