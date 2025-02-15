@@ -171,7 +171,9 @@ class S3Client:
                 + "See logs for details"
             ) from e
         except HTTPClientError as e:
-            # may need to add more explanation here based on the error text
+            # This is currently untested as I can't figure out a way to test it reliably
+            # between GHA and my laptop. It can happen though
+            # May need to add more explanation here based on the error text
             raise S3UnexpectedError(f"An unexpected HTTP error occurred: {e}") from e
         except ClientError as e:
             bucket = getattr(func, "bucket", None)
