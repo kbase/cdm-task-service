@@ -51,10 +51,11 @@ async def test_create_fail_bad_args(minio, minio_unauthed_user):
         {"connect_timeout": 0.2, "retries": {"total_max_attempts": 1}},
     )
     await _create_fail(
-        "https://google.com", "foo", "bar",
+        "https://ci.kbase.us/services/ws/docs/_sources/knownuserbugs.rst.txt", "foo", "bar",
         S3ClientConnectError(
-            "s3 response from the server at https://google.com was not parseable. "
-            + "See logs for details"
+            "s3 response from the server at "
+            + "https://ci.kbase.us/services/ws/docs/_sources/knownuserbugs.rst.txt "
+            + "was not parseable. See logs for details"
         ),
     )
     await _create_fail(

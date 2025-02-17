@@ -7,7 +7,7 @@ Note the client is *not threadsafe* as the underlying aiobotocore session is not
 import asyncio
 from aiobotocore.session import get_session
 from botocore.config import Config
-from botocore.exceptions import EndpointConnectionError, ClientError
+from botocore.exceptions import EndpointConnectionError, ClientError, HTTPClientError
 from botocore.parsers import ResponseParserError
 import logging
 from typing import Any, Self
@@ -170,6 +170,11 @@ class S3Client:
                 f"s3 response from the server at {self._url} was not parseable. "
                 + "See logs for details"
             ) from e
+        except HTTPClientError as e:
+            # This is currently untested as I can't figure out a way to test it reliably
+            # between GHA and my laptop. It can happen though
+            # May need to add more explanation here based on the error text
+            raise S3UnexpectedError(f"An unexpected HTTP error occurred: {e}") from e
         except ClientError as e:
             bucket = getattr(func, "bucket", None)
             write = getattr(func, "write", False)
