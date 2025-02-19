@@ -62,6 +62,13 @@ class Images:
         Get an image.
         """
         return await self._process_image(imagename, self._mongo.get_image)
+    
+    async def get_images(self) -> list[models.Image]:
+        """
+        Get images in the service in no particluar order. Returns at most 1000 images.
+        """
+        # Pass through method
+        return await self._mongo.get_images()
 
     async def delete_image(self, imagename: str):
         """

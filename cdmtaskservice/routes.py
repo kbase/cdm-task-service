@@ -163,18 +163,33 @@ _ANN_IMAGE_ID = Annotated[str, FastPath(
 )]
 
 
+
+class Images(BaseModel):
+    """ The response to a request to get images in the system. """
+    data: Annotated[list[models.Image], Field(description="The images.")]
+    # if we add paging / sorting / filtering, could add more info here
+
+
+@ROUTER_IMAGES.get(
+    "/",
+    response_model=Images,
+    summary="Get images",
+    description="Get images registered in the service. At most 1000 are returned "
+        + "in no particular order.",
+)
+async def get_images(r: Request):
+    images = await app_state.get_app_state(r).images.get_images()
+    return Images(data=images)
+
+
 @ROUTER_IMAGES.get(
     "/{image_id:path}",
     response_model=models.Image,
     summary="Get an image by name",
     description="Get an image previously registered to the system by the image name. "
-        + "If a digest and tag are provided the tag is ignored."
+        + "If a digest and tag are provided the tag is ignored.",
 )
-async def get_image(
-    r: Request,
-    image_id: _ANN_IMAGE_ID,
-    # Public for now - any reason for these to be private to KBase staff?
-):
+async def get_image(r: Request, image_id: _ANN_IMAGE_ID):
     return await app_state.get_app_state(r).images.get_image(image_id)
 
 
