@@ -115,7 +115,6 @@ def generate_wdl(
         input_files.append(ins)
         relpaths.append(rels)
         cmd = [shlex.quote(c) for c in job.image.entrypoint]
-        cmd.extend(_process_flag_args(job, i, files, file_to_rel_path, manifest))
         cmd.extend(_process_pos_args(job, i, files, file_to_rel_path, manifest))
         cmdlines.append(cmd)
         environment.append(_process_environment(job, i, files, file_to_rel_path, manifest))
@@ -239,22 +238,6 @@ task run_container {{
 """
 
 
-def _process_flag_args(
-    job: Job,
-    container_num: int,
-    files: list[S3FileWithDataID],
-    file_to_rel_path: dict[S3FileWithDataID, Path],
-    manifest: Path | None,
-) -> list[str]:
-    cmd = []
-    if job.job_input.params.flag_args:
-        for flag, p in job.job_input.params.flag_args.items():
-            cmd.extend(_process_parameter(
-                p, job, container_num, files, file_to_rel_path, manifest, as_list=True, flag=flag
-            ))
-    return cmd
-
-
 def _process_pos_args(
     job: Job,
     container_num: int,
@@ -263,8 +246,8 @@ def _process_pos_args(
     manifest: Path | None,
 ) -> list[str]:
     cmd = []
-    if job.job_input.params.positional_args:
-        for p in job.job_input.params.positional_args:
+    if job.job_input.params.args:
+        for p in job.job_input.params.args:
             cmd.extend(_process_parameter(
                 p, job, container_num, files, file_to_rel_path, manifest, as_list=True
             ))
@@ -295,31 +278,27 @@ def _process_parameter(
     files: list[S3FileWithDataID],
     file_to_rel_path: dict[S3FileWithDataID, Path],
     manifest: Path | None,
-    as_list: bool = False,  # flag space separated files imply as list
-    flag: str = None,
+    as_list: bool = False,
 ) -> str | list[str]:
     if isinstance(param, Parameter):
         match param.type:
             case ParameterType.INPUT_FILES:
-                param = _join_files(files, param.input_files_format, job, file_to_rel_path, flag)
+                param = _join_files(
+                    files, param.input_files_format, job, file_to_rel_path, param.get_flag()
+                )
             case ParameterType.MANIFEST_FILE:  # implies manifest file is not None
-                param = _handle_manifest(job, manifest, flag)
+                param = _handle_manifest(job, manifest, param.get_flag())
             case ParameterType.CONTAINTER_NUMBER:
-                param = _handle_container_num(flag, container_num)
+                param = _handle_container_num(param.get_flag(), container_num)
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
-    elif flag:
-        if flag.endswith("="):
-            param = shlex.quote(flag + param)
-        else:
-            param = [shlex.quote(flag), shlex.quote(param)]
     else:
         shlex.quote(param)
     return [param] if as_list and not isinstance(param, list) else param
 
 
-def _handle_container_num(flag: str, container_num: int) -> str | list[str]:
+def _handle_container_num(flag: str | None, container_num: int) -> str | list[str]:
     # similar to the function below
     cn = str(container_num)
     if flag:
@@ -333,7 +312,7 @@ def _handle_container_num(flag: str, container_num: int) -> str | list[str]:
     return param
 
 
-def _handle_manifest(job: Job, manifest: Path, flag: str) -> str | list[str]:
+def _handle_manifest(job: Job, manifest: Path, flag: str | None) -> str | list[str]:
     pth = os.path.join(job.job_input.params.input_mount_point, manifest.name)
     # This is the same as the command separated list case below... not sure if using a common fn
     # makes sense
@@ -353,7 +332,7 @@ def _join_files(
     format_: InputFilesFormat,
     job: Job,
     file_to_rel_path: dict[S3FileWithDataID, Path],
-    flag: str,
+    flag: str | None,
 ) -> str | list[str]:
     imp = job.job_input.params.input_mount_point
     match format_:
