@@ -159,6 +159,29 @@ class ManifestFileFormat(str, Enum):
     DATA_IDS = "data_ids"
 
 
+ArgumentString = Annotated[str, StringConstraints(
+    min_length=1,
+    max_length=1024,
+    # open this up as needed, careful to not allow dangerous chars. Do not allow spaces
+    pattern=r"^[\w\./][\w\./-]*$"
+)]
+
+
+Flag = Annotated[str, StringConstraints(
+    min_length=2,
+    max_length=256,
+    # open this up as needed, careful to not allow dangerous chars. Do not allow spaces
+    pattern=r"^--?[a-zA-Z0-9][\w\.-]*=?$"
+)]
+
+
+EnvironmentVariable = Annotated[str, StringConstraints(
+    min_length=1,
+    max_length=256,
+    pattern=r"^[A-Z_][A-Z0-9_]*$"  # https://stackoverflow.com/a/2821183/643675
+)]
+
+
 class Parameter(BaseModel):
     """
     Represents a special parameter passed to a container.
@@ -170,6 +193,7 @@ class Parameter(BaseModel):
     manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
     manifest_file_header is optional and only taken into account when the type is manifest_file.  
     """
+    # The Parameter and ParameterWithFlag pydoc is almost identical, be sure to edit in sync
     model_config = ConfigDict(extra='forbid')
     
     type: Annotated[ParameterType, Field(example=ParameterType.INPUT_FILES)]
@@ -185,6 +209,12 @@ class Parameter(BaseModel):
         min_length=1,
         max_length=1000,
     )] = None
+    
+    def get_flag(self):
+        """
+        Get any command line flag associated with this parameter.
+        """
+        return None
     
     @field_validator("manifest_file_header", mode="after")
     @classmethod
@@ -212,26 +242,43 @@ class Parameter(BaseModel):
         return self
 
 
-ArgumentString = Annotated[str, StringConstraints(
-    min_length=1,
-    max_length=1024,
-    pattern=r"^[\w\./][\w\./-]*$"  # open this up as needed, careful to not allow dangerous chars
-)]
-
-
-Flag = Annotated[str, StringConstraints(
-    min_length=2,
-    max_length=256,
-    # open this up as needed, careful to not allow dangerous chars
-    pattern=r"^--?[a-zA-Z][\w\.-]*=?$"
-)]
-
-
-EnvironmentVariable = Annotated[str, StringConstraints(
-    min_length=1,
-    max_length=256,
-    pattern=r"^[A-Z_][A-Z0-9_]*$"  # https://stackoverflow.com/a/2821183/643675
-)]
+class ParameterWithFlag(Parameter):
+    """
+    Represents a special parameter passed to a container, optionally with a
+    preceding flag argument.
+    
+    Can represent a set of input file names formatted in various ways, a manifest file
+    containing file paths or data IDs, or a container number.
+    
+    input_files_format is required when the type is input_files, but ignored otherwise.  
+    manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
+    manifest_file_header is optional and only taken into account when the type is manifest_file.  
+    """
+    # The Parameter and ParameterWithFlag pydoc is almost identical, be sure to edit in sync
+    model_config = ConfigDict(extra='forbid')
+    flag: Annotated[Flag | None, Field(
+        example="--file",
+        description="A command line argument flag to precede the parameter. "
+            + "If the flag ends with '=', no space is left between the flag and its value.",
+    )] = None
+    
+    
+    def get_flag(self):
+        """
+        Get any command line flag associated with this parameter.
+        """
+        return self.flag
+    
+    @model_validator(mode="after")
+    def _check_fields(self) -> Self:
+        if (self.type == ParameterType.INPUT_FILES
+            and self.input_files_format == InputFilesFormat.REPEAT_PARAMETER
+            and not self.flag
+        ):
+            raise ValueError("If the repeat parameter input files format is specified,"
+                             + " a flag must be provided."
+            )
+        return self
 
 
 class Parameters(BaseModel):
@@ -245,7 +292,7 @@ class Parameters(BaseModel):
       input mount point, with paths resulting from the path in S3 as well as the input_roots
       parameter from the job input.
     * If individual filenames need to be specified, use a Parameter instance in
-      the positional, flag, or environmental arguments. At most one Parameter can
+      the positional or environmental arguments. At most one Parameter can
       be specified per parameter set.
     * A Parameter instance can also be used to specify a manifest of file names or
       file IDs to be passed to the container.
@@ -281,27 +328,22 @@ class Parameters(BaseModel):
         max_length=1024,
         pattern=_PATH_REGEX,
     )] = None
-    positional_args: Annotated[list[ArgumentString | Parameter] | None, Field(
+    args: Annotated[list[ArgumentString | Flag | ParameterWithFlag] | None, Field(
         example=[
             "process",
+            "--output-dir", "/output_files",
             {
                 "type": ParameterType.INPUT_FILES.value,
-                "input_files_format": InputFilesFormat.COMMA_SEPARATED_LIST.value,
-            }
-        ],
-        description="A list of positional parameters to be inserted at the end of the container "
-            + "entrypoint command. Strings are treated as literals."
-    )] = None
-    flag_args: Annotated[dict[Flag, ArgumentString | Parameter] | None, Field(
-        example={
-            "--output-dir": "/output_files",
-            "--input-file=": {
-                "type": ParameterType.INPUT_FILES.value,
                 "input_files_format": InputFilesFormat.REPEAT_PARAMETER.value,
+                "flag": "--input-file=",
             },
-        },
-        description="A dictionary of flag parameters to be inserted into the container "
-            + "entrypoint command line. String values are treated as literals."
+            "--jobid",
+            {
+                "type": ParameterType.CONTAINTER_NUMBER,
+            },
+        ],
+        description="A list of command line arguments to be inserted after the container "
+            + "entrypoint command. Strings are treated as literals."
     )] = None
     environment: Annotated[dict[EnvironmentVariable, ArgumentString | Parameter] | None, Field(
         example={
@@ -347,18 +389,13 @@ class Parameters(BaseModel):
         if hasattr(self, "_param"):  # memoize
             return self._param
         param = None
-        if self.positional_args:
-            for i, p in enumerate(self.positional_args):
-                param = self._check_parameter(param, p, f"Positional parameter at index {i}")
-        if self.flag_args:
-            for p in self.flag_args.values():
+        if self.args:
+            for p in self.args:
                 param = self._check_parameter(param, p)
         if self.environment:
             for key, p in self.environment.items():
                 param = self._check_parameter(
-                    # Space separated lists in environment variables don't really make sense.
-                    # Come back to this if needed.
-                    param, p, f"Environmental parameter at key {key}", no_space=True)
+                    param, p, f"Environmental parameter at key {key}")
         self._param = param
         return param
 
@@ -374,7 +411,9 @@ class Parameters(BaseModel):
                         f"{loc} may not have {InputFilesFormat.REPEAT_PARAMETER.value} "
                         + f" set as a {ParameterType.INPUT_FILES.value} type"
                     )
-                if no_space and p.input_files_format is InputFilesFormat.SPACE_SEPARATED_LIST:
+                # Space separated lists in environment variables don't really make sense.
+                # Come back to this if needed.
+                if p.input_files_format is InputFilesFormat.SPACE_SEPARATED_LIST:
                     raise ValueError(
                         f"{loc} may not have {InputFilesFormat.SPACE_SEPARATED_LIST.value} "
                         + f" set as a {ParameterType.INPUT_FILES.value} type"
