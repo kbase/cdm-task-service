@@ -134,10 +134,3 @@ class Refdata:
         """
         # pass through method, don't want the routes talking directly to mongo
         return await self._mongo.get_refdata_by_path(_require_string(s3_path, "s3_path"))
-    
-    async def get_refdata_by_etag(self, etag: str) -> list[models.ReferenceData]:
-        """
-        Get reference data based on the S3 Etag. Returns at most 1000 records.
-        """
-        # also a passthrough method
-        return await self._mongo.get_refdata_by_etag(_require_string(etag, "etag"))

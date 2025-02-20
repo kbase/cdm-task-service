@@ -214,7 +214,7 @@ class RefData(BaseModel):
     description="Get information about reference data available for containers in the system "
         + "in no particular order. Returns at most 1000 records."
 )
-async def get_refdata(r: Request) -> models.ReferenceData:
+async def get_refdata(r: Request) -> RefData:
     refdata = app_state.get_app_state(r).refdata
     rd = await refdata.get_refdata()
     return RefData(data=rd)
@@ -250,33 +250,13 @@ async def get_refdata_by_path(
         min_length=models.S3_PATH_MIN_LENGTH,
         max_length=models.S3_PATH_MAX_LENGTH,
     )],
-) -> models.ReferenceData:
+) -> RefData:
     refdata = app_state.get_app_state(r).refdata
     rd = await refdata.get_refdata_by_path(s3_path)
     return RefData(data=rd)
 
 
-@ROUTER_REFDATA.get(
-    "/etag/{s3_etag}",
-    response_model=RefData,
-    summary="Get reference data information by the S3 Etag",
-    description="Get information about reference data available for containers by the "
-        + "reference data Etag. Returns at most 1000 records."
-)
-async def get_refdata_by_etag(
-    r: Request,
-    s3_etag: Annotated[str, FastPath(
-        example="a70a4d1732484e75434df2c08570e1b2-3",
-        description="The S3 Etag of the file.",
-        min_length=models.ETAG_MIN_LENGTH,
-        max_length=models.ETAG_MAX_LENGTH,
-    )],
-) -> models.ReferenceData:
-    # TODO CHECKSUMS swap this method for a full object checksum, etags are useless here
-    refdata = app_state.get_app_state(r).refdata
-    rd = await refdata.get_refdata_by_etag(s3_etag)
-    return RefData(data=rd)
-
+# TODO CHECKSUM FEATURE add get refdata by crc64nvme if needed... YAGNI
 
 @ROUTER_ADMIN.post(
     "/images/{image_id:path}",
