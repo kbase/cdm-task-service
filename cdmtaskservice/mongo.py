@@ -390,6 +390,16 @@ class MongoDAO:
                 f"A reference data record for S3 path {refdata.file} already exists"
             )
 
+    async def get_refdata(self) -> list[models.ReferenceData]:
+        """
+        Get reference data in the service in no particular order. At most 1000 are returned.
+        """
+        # TODO FEATURE REFDATA paging - not really needed until > 1000 images
+        # TODO FEATURE REFDATA sorting and filtering - not really needed until > 1000 images
+        # For now osrting and filtering can be done client side. Seems likely we'll never have
+        # 1000 active images
+        return await self._get_refdata(None, None)
+
     async def get_refdata_by_id(
         self, refdata_id: str, as_admin: bool = False
     ) -> models.ReferenceData | models.AdminReferenceData:
@@ -423,9 +433,11 @@ class MongoDAO:
         )
 
     # sorts by field ascending, so make sure there's an index for that field
-    async def _get_refdata(self, field: str, value: Any) -> list[models.ReferenceData]:
-        cursor = self._col_refdata.find({field: value}).sort(field, 1).limit(1000)
-        return await cursor.to_list()
+    async def _get_refdata(self, field: str | None, value: Any) -> list[models.ReferenceData]:
+        query = {field: value} if field else {}
+        sort = field if field else models.FLD_REFDATA_FILE
+        cursor = self._col_refdata.find(query).sort(sort, 1).limit(1000)
+        return [self._to_refdata(d) for d in await cursor.to_list()]
 
     def _to_refdata(self, doc: dict[str, Any], as_admin: bool = False):
         doc = self._clean_doc(doc)

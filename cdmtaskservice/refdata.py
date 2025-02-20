@@ -106,6 +106,13 @@ class Refdata:
             await self._coman.run_coroutine(flow.stage_refdata(rd, meta))
         return rd
 
+    async def get_refdata(self) -> list[models.ReferenceData]:
+        """
+        Get reference data in the system in no particular order. Returns at most 1000 records.
+        """
+        # pass through method, don't want the routes talking directly to mongo
+        return await self._mongo.get_refdata()
+
     async def get_refdata_by_id(
         self,
         refdata_id: str,
