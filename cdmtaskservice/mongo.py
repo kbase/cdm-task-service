@@ -113,7 +113,23 @@ class MongoDAO:
         doc, err = await self._process_image(name, digest, tag, self._col_images.find_one)
         if not doc:
             raise NoSuchImageError(f"No image {name} {err} exists in the system.")
+        return self._to_image(doc)
+    
+    def _to_image(self, doc: dict[str, Any]) -> models.Image:
         return models.Image.model_construct(**self._clean_doc(doc))
+
+    async def get_images(self) -> list[models.Image]:
+        """
+        Get images in the service in no particular order. At most 1000 images are returned.
+        """
+        # TODO FEATURE IMAGE paging - not really needed until > 1000 images
+        # TODO FEATURE IMAGE sorting and filtering - not really needed until > 1000 images
+        # For now osrting and filtering can be done client side. Seems likely we'll never have
+        # 1000 active images
+        images = []
+        async for d in self._col_images.find().limit(1000):
+            images.append(self._to_image(d))
+        return images
 
     async def delete_image(self, name: str, digest: str | None = None, tag: str | None = None):
         """
