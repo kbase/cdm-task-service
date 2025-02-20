@@ -156,11 +156,11 @@ async def _is_bucket_writeable_fail(s3c, bucket, expected, print_stacktrace=Fals
 
 
 @pytest.mark.asyncio
-async def test_get_object_meta_single_part(minio):
+async def test_get_object_meta_single_part_w_crc64nvme(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     # test that leading /s in key are ignored
-    await minio.upload_file("test-bucket///test_file", b"abcdefghij")
+    await minio.upload_file("test-bucket///test_file", b"abcdefghij", crc64nvme="e/Vz6rUQ/+o=")
 
     s3c = await _client(minio)
     objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))
@@ -170,10 +170,7 @@ async def test_get_object_meta_single_part(minio):
         "test-bucket/test_file",
         "a925576942e94b2ef57a066101b48876",
         10,
-        None,
-        False,
-        1,
-        10
+        "e/Vz6rUQ/+o=",
     )
 
 
@@ -194,18 +191,22 @@ async def test_get_object_meta_multipart_and_insecure_ssl(minio):
         "test-bucket/big_test_file",
         "b8185adaf462a5ac2ca9db335b290d23-4",
         18000009,
-        6000000,
-        True,
-        4,
-        6000000,
+        None,
     )
 
 @pytest.mark.asyncio
-async def test_get_object_meta_mix(minio):
+async def test_get_object_meta_mix_w_crc64nvme(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("nice-bucket")
     await minio.upload_file(
-        "nice-bucket/big_test_file", b"abcdefghij" * 600000, 4, b"bigolfile")
+        "nice-bucket/big_test_file",
+        b"abcdefghij" * 600000,
+        4,
+        b"bigolfile",
+        main_part_crc64nvme="GtvBv8sO0DA=",
+        last_part_crc64nvme="LSWN4IrdjXs=",
+        crc64nvme="B/mN7A/vO4c=",
+    )
     await minio.upload_file("nice-bucket/test_file", b"abcdefghij")
     
     s3c = await _client(minio)
@@ -217,10 +218,7 @@ async def test_get_object_meta_mix(minio):
         "nice-bucket/big_test_file",
         "9728af2f2c566b2b944b96203769175d-5",
         24000009,
-        6000000,
-        True,
-        5,
-        6000000,
+        "B/mN7A/vO4c=",
     )
     _check_obj_meta(
         objm[1],
@@ -228,9 +226,7 @@ async def test_get_object_meta_mix(minio):
         "a925576942e94b2ef57a066101b48876",
         10,
         None,
-        False,
-        1,
-        10)
+    )
 
 
 @pytest.mark.asyncio
@@ -418,11 +414,8 @@ async def _client(minio, insecure_ssl=False):
         minio.host,  minio.access_key, minio.secret_key, insecure_ssl=insecure_ssl)
 
 
-def _check_obj_meta(objm, path, e_tag, size, part_size, has_parts, num_parts, effsize):
+def _check_obj_meta(objm, path, e_tag, size, crc64nvme):
     assert objm.path == path
     assert objm.e_tag == e_tag
     assert objm.size == size
-    assert objm.part_size == part_size
-    assert objm.has_parts is has_parts
-    assert objm.num_parts == num_parts
-    assert objm.effective_part_size == effsize
+    assert objm.crc64nvme == crc64nvme
