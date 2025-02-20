@@ -163,7 +163,6 @@ _ANN_IMAGE_ID = Annotated[str, FastPath(
 )]
 
 
-
 class Images(BaseModel):
     """ The response to a request to get images in the system. """
     data: Annotated[list[models.Image], Field(description="The images.")]
@@ -202,10 +201,29 @@ _ANN_REFDATA_ID = Annotated[str, FastPath(
 )]
 
 
+class RefData(BaseModel):
+    """ The response to a request to get reference data in the system. """
+    data: Annotated[list[models.ReferenceData], Field(description="The reference data.")]
+    # if we add paging / sorting / filtering, could add more info here
+
+
+@ROUTER_REFDATA.get(
+    "/",
+    response_model=RefData,
+    summary="Get reference data information",
+    description="Get information about reference data available for containers in the system "
+        + "in no particular order. Returns at most 1000 records."
+)
+async def get_refdata(r: Request) -> models.ReferenceData:
+    refdata = app_state.get_app_state(r).refdata
+    rd = await refdata.get_refdata()
+    return RefData(data=rd)
+
+
 @ROUTER_REFDATA.get(
     "/id/{refdata_id}",
     response_model=models.ReferenceData,
-    summary="Get reference data information by ID.",
+    summary="Get reference data information by ID",
     description="Get information about reference data available for containers, including its "
         + "location and staging status, by the reference data's unique ID."
 )
@@ -219,8 +237,8 @@ async def get_refdata_by_id(
 
 @ROUTER_REFDATA.get(
     "/path/{s3_path:path}",
-    response_model=list[models.ReferenceData],
-    summary="Get reference data information by the S3 file path.",
+    response_model=RefData,
+    summary="Get reference data information by the S3 file path",
     description="Get information about reference data available for containers by the "
         + "reference data file path. Returns at most 1000 records."
 )
@@ -234,13 +252,14 @@ async def get_refdata_by_path(
     )],
 ) -> models.ReferenceData:
     refdata = app_state.get_app_state(r).refdata
-    return await refdata.get_refdata_by_path(s3_path)
+    rd = await refdata.get_refdata_by_path(s3_path)
+    return RefData(data=rd)
 
 
 @ROUTER_REFDATA.get(
     "/etag/{s3_etag}",
-    response_model=list[models.ReferenceData],
-    summary="Get reference data information by the S3 Etag.",
+    response_model=RefData,
+    summary="Get reference data information by the S3 Etag",
     description="Get information about reference data available for containers by the "
         + "reference data Etag. Returns at most 1000 records."
 )
@@ -253,8 +272,10 @@ async def get_refdata_by_etag(
         max_length=models.ETAG_MAX_LENGTH,
     )],
 ) -> models.ReferenceData:
+    # TODO CHECKSUMS swap this method for a full object checksum, etags are useless here
     refdata = app_state.get_app_state(r).refdata
-    return await refdata.get_refdata_by_etag(s3_etag)
+    rd = await refdata.get_refdata_by_etag(s3_etag)
+    return RefData(data=rd)
 
 
 @ROUTER_ADMIN.post(
@@ -356,7 +377,7 @@ async def get_job_admin(
 @ROUTER_ADMIN.get(
     "/refdata/{refdata_id}",
     response_model=models.AdminReferenceData,
-    summary="Get reference data information as an admin.",
+    summary="Get reference data information as an admin",
     description="Get information about reference data available for containers, including its "
         + "location and staging status, with additional details."
 )
