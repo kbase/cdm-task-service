@@ -257,8 +257,7 @@ async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
     body = await objdata["Body"].read()
     assert body == expectedfile
     assert objdata["ETag"] == '"b10278db14633f102103c5e9d75c0af0"'
-    # aiobotocore doesn't seem to put the checksum in the main body
-    assert objdata["ResponseMetadata"]["HTTPHeaders"]["x-amz-checksum-crc64nvme"] == "4ekt2WB1KO4="
+    assert objdata["ChecksumCRC64NVME"] == "4ekt2WB1KO4="
 
 
 @pytest.mark.asyncio

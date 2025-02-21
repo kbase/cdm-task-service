@@ -165,6 +165,8 @@ class S3Client:
             raise S3ClientConnectError(f"s3 connect failed: {e}") from e
         except ResponseParserError as e:
             # TODO TEST logging
+            # This is currently untested as I currently don't know a way to test it reliably
+            # It used to be testable by GETing a text resource
             logging.getLogger(__name__).exception(f"Unable to parse response from S3:\n{e}\n")
             raise S3ClientConnectError(
                 f"s3 response from the server at {self._url} was not parseable. "
@@ -205,10 +207,9 @@ class S3Client:
                     raise S3ClientConnectError(
                         "Access denied to list buckets on the s3 system"
                     ) from e
-            # no way to test this since we're trying to cover all possible errors in tests
             logging.getLogger(__name__).exception(
                 f"Unexpected response from S3. Response data:\n{e.response}")
-            raise S3UnexpectedError(str(e)) from e
+            raise S3UnexpectedError(f"Unexpected response from S3: {e}") from e
         
     async def _run_commands(self, async_client_callables, concurrency):
         # Look in test_manual for performance tests
