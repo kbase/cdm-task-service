@@ -10,10 +10,9 @@ from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.s3.remote import (
     calculate_etag,
-    crc32,
+    crc64nvme,
     download_presigned_url,
     upload_presigned_url,
-    upload_presigned_url_with_crc32,
     FileCorruptionError,
     TransferError,
     FileChangeError,
@@ -66,26 +65,26 @@ def test_calculate_etag_fail():
         assert_exception_correct(got.value, expected)
 
 
-def test_crc32():
+def test_crc64nvme():
     # checked these with the linux crc32 program
     testset = [
-        (TEST_MT, "00000000"),
-        (TEST_RAND1KB, "ed9a6eb3"),
-        (TEST_RAND10KB, "4ffc5208"),
+        (TEST_MT, "0000000000000000"),
+        (TEST_RAND1KB, "e1e92dd9607528ee"),
+        (TEST_RAND10KB, "b8813a5a204f469b"),
     ]
     for infile, crc in testset:
-        gotcrc = crc32(infile)
+        gotcrc = crc64nvme(infile)
         assert gotcrc.hex() == crc
 
 
-def test_crc32_fail():
+def test_crc64nvme_fail():
     testset = [
         (None, ValueError("infile must exist and be a file")),
         (TESTDATA, ValueError("infile must exist and be a file")),
     ]
     for infile, expected in testset:
         with pytest.raises(Exception) as got:
-            crc32(infile)
+            crc64nvme(infile)
         assert_exception_correct(got.value, expected)
 
 
@@ -229,21 +228,14 @@ async def test_upload_presigned_url(minio):
     
     s3c = await _client(minio)
     url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
-    urlcrc = (await s3c.presign_post_urls(S3Paths(["test-bucket/bar/myfilecrc"])))[0]
-    urlcrc.fields["x-amz-checksum-crc32"] = "T/xSCA=="
     async with aiohttp.ClientSession() as sess:
         await upload_presigned_url(sess, url.url, url.fields, TEST_RAND10KB, timeout_sec=5)
-        await upload_presigned_url(sess, urlcrc.url, urlcrc.fields, TEST_RAND10KB)
     with open(TEST_RAND10KB, "rb") as f:
         expectedfile = f.read()
     objdata = await minio.get_object("test-bucket", "foo/myfile")
-    objdatacrc = await minio.get_object("test-bucket", "bar/myfilecrc")
-    
-    for o, crc in ((objdata, None), (objdatacrc, "T/xSCA==")):
-        body = await o["Body"].read()
-        assert body == expectedfile
-        assert o["ETag"] == '"3291fbb392f6fad06dbf331dfb74da81"'
-        assert o.get("ChecksumCRC32") == crc
+    body = await objdata["Body"].read()
+    assert body == expectedfile
+    assert objdata["ETag"] == '"3291fbb392f6fad06dbf331dfb74da81"'
 
 
 @pytest.mark.asyncio
@@ -252,11 +244,11 @@ async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
     await minio.create_bucket("test-bucket")
     
     s3c = await _client(minio)
-    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
+    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"]), ["4ekt2WB1KO4="]))[0]
     async with aiohttp.ClientSession() as sess:
-        # There's no a lot to test with insecure ssl other than it doesn't break things
+        # There's not a lot to test with insecure ssl other than it doesn't break things
         # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
-        await upload_presigned_url_with_crc32(
+        await upload_presigned_url(
             sess, url.url, url.fields, TEST_RAND1KB, insecure_ssl=True, timeout_sec=5)
     with open(TEST_RAND1KB, "rb") as f:
         expectedfile = f.read()
@@ -265,7 +257,8 @@ async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
     body = await objdata["Body"].read()
     assert body == expectedfile
     assert objdata["ETag"] == '"b10278db14633f102103c5e9d75c0af0"'
-    assert objdata["ChecksumCRC32"] == "7Zpusw=="
+    # aiobotocore doesn't seem to put the checksum in the main body
+    assert objdata["ResponseMetadata"]["HTTPHeaders"]["x-amz-checksum-crc64nvme"] == "4ekt2WB1KO4="
 
 
 @pytest.mark.asyncio
@@ -319,9 +312,6 @@ async def _upload_presigned_url_fail(sess, url, fields, infile, expected, timeou
     with pytest.raises(Exception) as got:
         await upload_presigned_url(sess, url, fields, infile, timeout_sec=timeout_sec)
     assert_exception_correct(got.value, expected)
-    with pytest.raises(Exception) as got:
-        await upload_presigned_url_with_crc32(sess, url, fields, infile, timeout_sec=timeout_sec)
-    assert_exception_correct(got.value, expected)
 
 
 @pytest.mark.asyncio
@@ -335,8 +325,9 @@ async def test_upload_presigned_url_fail_bad_crc(minio):
     )
     
     s3c = await _client(minio)
-    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/bar/myfilecrc"])))[0]
-    url.fields["x-amz-checksum-crc32"] = "T/xSCX=="
+    url = (await s3c.presign_post_urls(
+        S3Paths(["test-bucket/bar/myfilecrc"]), ["uIE6WiBPRpX="] # Actual checksum: uIE6WiBPRps=
+    ))[0]
     
     await _upload_presigned_url_fail_s3_error(minio, url.url, url.fields, starts_with, contains)
 
@@ -353,26 +344,19 @@ async def test_upload_presigned_url_fail_no_bucket(minio):
     s3c = await _client(minio)
     url = (await s3c.presign_post_urls(S3Paths(["fake-bucket/bar/myfilecrc"])))[0]
     
-    await _upload_presigned_url_fail_s3_error(
-        minio, url.url, url.fields, starts_with, contains, test_crc=True)
+    await _upload_presigned_url_fail_s3_error(minio, url.url, url.fields, starts_with, contains)
 
 
-async def _upload_presigned_url_fail_s3_error(
-    minio, url, fields, starts_with, contains, test_crc=False
-):
+async def _upload_presigned_url_fail_s3_error(minio, url, fields, starts_with, contains):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    meths = [upload_presigned_url]
-    if test_crc:
-        meths.append(upload_presigned_url_with_crc32)
-    for method in meths:
-        with pytest.raises(Exception) as got:
-            async with aiohttp.ClientSession() as sess:
-                await method(sess, url, fields, TEST_RAND10KB)
-        errmsg = str(got.value)
-        assert errmsg.startswith(starts_with)
-        assert contains in errmsg
-        assert type(got.value) == TransferError
+    with pytest.raises(Exception) as got:
+        async with aiohttp.ClientSession() as sess:
+            await upload_presigned_url(sess, url, fields, TEST_RAND10KB)
+    errmsg = str(got.value)
+    assert errmsg.startswith(starts_with)
+    assert contains in errmsg
+    assert type(got.value) == TransferError
 
 
 async def _client(minio):

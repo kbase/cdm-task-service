@@ -8,7 +8,7 @@ python versions.
 
 import aiohttp
 import asyncio
-import base64
+from awscrt import checksums as awschecksums
 import gzip
 from hashlib import md5
 import os
@@ -16,10 +16,12 @@ from pathlib import Path
 import shutil
 import tarfile
 from typing import Any, Awaitable
-import zlib
 
 # Probably not necessary, but could look into aiofiles for some of these methods
 # Potential future (minor) performance improvement, but means more installs on remote clusters
+
+# TODO CRC need to check CRC on download
+
 
 _EXT_GZ = ".gz"
 _EXT_TARGZ = ".tar.gz"
@@ -34,14 +36,19 @@ def calculate_etag(infile: Path, partsize: int) -> str:
     """
     Calculate the s3 e-tag for a file.
     
+    NOTE: The calculation assumes that
+    * the part size is constant except for the last part
+    * single part etags are just the md5 of the file
+    
+    Neither of these assumptions are always true.
+    
     The e-tag will not match if the file is encrypted with customer supplied keys or with the
     AWS key management service.
     See https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html for
     more information.
     
     infile - the file to process
-    partsize - the size of the file parts. It is assumed that all parts have the same size except
-    for the last part.
+    partsize - the size of the file parts.
     
     Returns - the e-tag
     """
@@ -75,16 +82,16 @@ def calculate_etag(infile: Path, partsize: int) -> str:
     return md5(b''.join(md5_digests)).hexdigest() +  '-' + str(len(md5_digests))
 
 
-def crc32(infile: Path) -> bytes:
-    """Compute the CRC-32 checksum of the contents of the given file"""
+def crc64nvme(infile: Path) -> bytes:
+    """Compute the CRC-64/NVME checksum of the contents of the given file"""
     # adapted from https://stackoverflow.com/a/59974585/643675
     # Not really a good way to test the expanduser calls
     _check_file(infile)
     with open(infile.expanduser(), "rb") as f:
         checksum = 0
         while chunk := f.read(_CHUNK_SIZE_64KB):
-            checksum = zlib.crc32(chunk, checksum)
-    return checksum.to_bytes(4)
+            checksum = awschecksums.crc64nvme(chunk, checksum)
+    return checksum.to_bytes(8)
 
 
 def _check_file(infile: Path):
@@ -202,26 +209,7 @@ async def upload_presigned_url(
                                ) from e
 
 
-# could merge this with the above method and add a toggle... eh
-async def upload_presigned_url_with_crc32(
-    session: aiohttp.ClientSession,
-    url: str,
-    fields: dict[str, str],
-    infile: Path,
-    insecure_ssl: bool = False,
-    timeout_sec: int = 600,
-):
-    """
-    As upload_presigned_url but calculates the crc32 of the input file and sends it to S3 as
-    an integrity check.
-    """
-    _not_falsy(fields, "fields")
-    fields = dict(fields)  # don't mutate the input
-    fields["x-amz-checksum-crc32"] = base64.b64encode(crc32(infile)).decode()
-    await upload_presigned_url(
-        session, url, fields, infile, insecure_ssl=insecure_ssl, timeout_sec=timeout_sec)
-
-
+# TODO CRC need to update nersc jaws runner to presign including the CRCs
 async def _process_uploads(
     sess: aiohttp.ClientSession,
     root: Path,
@@ -231,7 +219,7 @@ async def _process_uploads(
     min_timeout_sec: int,
     sec_per_GB: float,
 ):
-    tasks = [upload_presigned_url_with_crc32(
+    tasks = [upload_presigned_url(
         sess,
         fil["url"],
         fil["fields"],

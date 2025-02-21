@@ -360,27 +360,56 @@ async def test_presign_post_urls():
     _presign_post_urls_check_fields(urls[1], "otherdir/somefile")
 
 
-def _presign_post_urls_check_fields(presign_post, key):
+@pytest.mark.asyncio
+async def test_presign_post_urls_with_crc():
+    s3c = await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
+    s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
+
+    urls = await s3c.presign_post_urls(s3p, ["crc1", "fakecrc2"], expiration_sec=10 * 60)
+    assert len(urls) == 2
+    
+    assert urls[0].url == "https://pubminio.kbase.us/bukkit"
+    _presign_post_urls_check_fields(urls[0], "myfile", "crc1")
+    
+    assert urls[1].url == "https://pubminio.kbase.us/otherbukkit"
+    _presign_post_urls_check_fields(urls[1], "otherdir/somefile", "fakecrc2")
+
+
+def _presign_post_urls_check_fields(presign_post, key, crc=None):
     fields = dict(presign_post.fields)
     assert "signature" in fields
     del fields["signature"]  # changes per invocation
     assert "policy" in fields
     del fields["policy"]  # changes per invocation
-    assert fields == {"key": key, "AWSAccessKeyId": "task-service"}
+    expfields = {"key": key, "AWSAccessKeyId": "task-service"}
+    if crc:
+        expfields["x-amz-checksum-crc64nvme"] = crc
+    assert fields == expfields
 
 
 @pytest.mark.asyncio
 async def test_presign_post_urls_fail():
     s3c = await S3Client.create(
         "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
-    await _presign_get_post_fail(s3c, None, 1, "paths is required")
+    await _presign_get_post_fail(s3c, None, None, 1, "paths is required")
+    for crc in [["fake", "fake", "fake"], ["fake"]]:
+        await _presign_get_post_fail(
+            s3c,
+            S3Paths(["foo/bar", "baz/bat"]),
+            crc,
+            1,
+            "If checksums are supplied, there must be one per path"
+        )
     for t in [0, -1, -100, -1000000]:
-        await _presign_get_post_fail(s3c, S3Paths(["foo/bar"]), t, "expiration_sec must be >= 1")
+        await _presign_get_post_fail(
+            s3c, S3Paths(["foo/bar"]), None, t, "expiration_sec must be >= 1"
+        )
     
     
-async def _presign_get_post_fail(s3c, paths, expiration, expected):
+async def _presign_get_post_fail(s3c, paths, checksums, expiration, expected):
     with pytest.raises(Exception) as got:
-        await s3c.presign_post_urls(paths, expiration)
+        await s3c.presign_post_urls(paths, crc64nvmes=checksums, expiration_sec=expiration)
     assert_exception_correct(got.value, ValueError(expected))
 
 
