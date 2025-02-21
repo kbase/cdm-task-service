@@ -15,7 +15,6 @@ from cdmtaskservice.s3.remote import (
     upload_presigned_url,
     FileCorruptionError,
     TransferError,
-    FileChangeError,
     RemoteTimeoutError,
 )
 from test_common import config
@@ -90,29 +89,21 @@ def test_crc64nvme_fail():
 
 @pytest.mark.asyncio
 async def test_download_presigned_url(minio, temp_dir):
-    await _test_download_presigned_url(minio, temp_dir, "temp1.txt", True)
-    
-    with open(temp_dir / "somedir" / "temp2.txt", "w") as f:
-        f.write("foo")
-    await _test_download_presigned_url(minio, temp_dir, "temp2.txt", True)
-    
-    with open(temp_dir / "somedir" / "temp3.txt", "w") as f:
-        f.write("abcdefghij")
-    await _test_download_presigned_url(minio, temp_dir, "temp3.txt", False)
+    await _test_download_presigned_url(minio, temp_dir, None)
+    await _test_download_presigned_url(minio, temp_dir, "e/Vz6rUQ/+o=")
 
-
-async def _test_download_presigned_url(minio, temp_dir, filename, expected_return):
+async def _test_download_presigned_url(minio, temp_dir, crc):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    await minio.upload_file("test-bucket/myfile", b"abcdefghij")
+    await minio.upload_file("test-bucket/myfile", b"abcdefghij", crc64nvme="e/Vz6rUQ/+o=")
     
     s3c = await _client(minio)
     url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
-    output = temp_dir / "somedir" / filename  # test directory creation for the first case
+    output = temp_dir / "somedir" / "temp.txt"  # test directory creation for the first case
     async with aiohttp.ClientSession() as sess:
-        res = await download_presigned_url(
-            sess, url, 10, output, etag="a925576942e94b2ef57a066101b48876", timeout_sec=5)
-    assert res == expected_return
+        await download_presigned_url(
+            sess, url, output, crc64nvme_expected=crc, timeout_sec=5
+        )
     with open(output) as f:
         assert f.read() == "abcdefghij"
 
@@ -122,7 +113,14 @@ async def test_download_presigned_url_multipart_and_insecure_ssl(minio, temp_dir
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("nice-bucket")
     await minio.upload_file(
-        "nice-bucket/big_test_file", b"abcdefghij" * 600000, 4, b"bigolfile")
+        "nice-bucket/big_test_file",
+        b"abcdefghij" * 600000,
+        4,
+        b"bigolfile",
+        main_part_crc64nvme="GtvBv8sO0DA=",
+        last_part_crc64nvme="LSWN4IrdjXs=",
+        crc64nvme="B/mN7A/vO4c=",
+    )
 
     s3c = await _client(minio)
     url = (await s3c.presign_get_urls(S3Paths(["nice-bucket/big_test_file"])))[0]
@@ -130,8 +128,9 @@ async def test_download_presigned_url_multipart_and_insecure_ssl(minio, temp_dir
     async with aiohttp.ClientSession() as sess:
         # There's not a lot to test with insecure ssl other than it doesn't break things
         # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
-        res = await download_presigned_url(sess, url, 6000000, output, insecure_ssl=True)
-    assert res is True
+        await download_presigned_url(
+            sess, url, output, crc64nvme_expected="B/mN7A/vO4c=", insecure_ssl=True
+        )
     with open(output) as f:
         assert f.read() == "abcdefghij" * 600000 * 4 + "bigolfile"
 
@@ -141,40 +140,33 @@ async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     await minio.upload_file("test-bucket/myfile", b"abcdefghij")
-    ps = 10
     o = temp_dir / "fail.txt"
     
     s3c = await _client(minio)
     url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
     async with aiohttp.ClientSession() as s:
-        await _download_presigned_url_fail(None, url, ps, o, ValueError("session is required"))
-        await _download_presigned_url_fail(s, None, ps, o, ValueError("url is required"))
-        await _download_presigned_url_fail(s, "  \t   ", ps, o, ValueError("url is required"))
-        await _download_presigned_url_fail(s, url, 0, o, ValueError("partsize must be > 0"))
-        await _download_presigned_url_fail(s, url, 10, o, FileChangeError(
-            f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
-            + "Server provided a925576942e94b2ef57a066101b48876, "
-            + "user provided Etag requirement is foo"),
-            etag="foo"
+        await _download_presigned_url_fail(None, url, o, ValueError("session is required"))
+        await _download_presigned_url_fail(s, None, o, ValueError("url is required"))
+        await _download_presigned_url_fail(s, "  \t   ", o, ValueError("url is required"))
+        await _download_presigned_url_fail(s, url, o, FileCorruptionError(
+            f"CRC64/NVME check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
+            + "Expected foo, file checksum is e/Vz6rUQ/+o="),
+            crc64nvme="foo"
         )
-        await _download_presigned_url_fail(s, url, 3, o, FileCorruptionError(
-            f"Etag check failed for url http://localhost:{minio.port}/test-bucket/myfile. "
-            + "Server provided a925576942e94b2ef57a066101b48876, "
-            + "file Etag is 1543089f5b20740cc5713f0437fcea8c-4"))
         await _download_presigned_url_fail(
-            s, url, ps, None, ValueError("outputpath is required"))
+            s, url, None, ValueError("outputpath is required"))
         await _download_presigned_url_fail(
-            s, url, 10, o, RemoteTimeoutError(f"Timeout downloading to file {o} with timeout 1e-05s"),
+            s, url, o, RemoteTimeoutError(f"Timeout downloading to file {o} with timeout 1e-05s"),
             timeout_sec=0.00001
         )
     
     
 async def _download_presigned_url_fail(
-    sess, url, partsize, output, expected, etag=None, timeout_sec=600
+    sess, url, output, expected, crc64nvme=None, timeout_sec=600
 ):
     with pytest.raises(Exception) as got:
         await download_presigned_url(
-            sess, url, partsize, output, etag=etag, timeout_sec=timeout_sec)
+            sess, url, output, crc64nvme, timeout_sec=timeout_sec)
     assert_exception_correct(got.value, expected)
     if output:
         assert not output.exists()
