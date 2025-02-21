@@ -67,7 +67,8 @@ FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
 
 S3_PATH_MIN_LENGTH = 3 + 1 + 1  # 3 for bucket + / + 1 char
 S3_PATH_MAX_LENGTH = 63 + 1 + 1024  # 63 for bucket + / + 1024 bytes
-ETAG_MIN_LENGTH = 32
+CRC64NVME_B64ENC_LENGTH=12
+ETAG_MIN_LENGTH = 32  # TODO CHEcKSUMS remove
 ETAG_MAX_LENGTH = 32 + 1 + 5  # 32 for the md5ish + dash + up to 10000 parts = 38
 
 
@@ -436,9 +437,17 @@ class S3File(BaseModel):
         min_length=S3_PATH_MIN_LENGTH,
         max_length=S3_PATH_MAX_LENGTH,
     )]
+    crc64nvme: Annotated[str | None, Field(
+        example="4ekt2WB1KO4=",
+        description="The base64 encoded CRC64/NVME checksum of the file. "
+            + "If provided on input it is checked against the "
+            + "target file checksum before proceeding. Always provided with output.",
+        min_length=CRC64NVME_B64ENC_LENGTH,
+        max_length=CRC64NVME_B64ENC_LENGTH,
+    )] = None
     # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
     # the way in and will come from S3 on the way out
-    # TODO swap for CRC64NVME
+    # TODO CHECKSUM remove
     etag: Annotated[str | None, Field(
         example="a70a4d1732484e75434df2c08570e1b2-3",
         description="The S3 e-tag of the file. Weak e-tags are not supported. "
@@ -547,14 +556,17 @@ class JobInput(BaseModel):
             {
                 "file": "mybucket/foo/bat",
                 "data_id": "GCA_000146795.3",
-                "etag": "a70a4d1732484e75434df2c08570e1b2-3"  # TODO swap for CRC64NVME
+                "crc64name": "4ekt2WB1KO4=",
+                "etag": "a70a4d1732484e75434df2c08570e1b2-3"  # TODO CHECKSUM remove
             }
         ],
         description="The S3 input files for the job, either a list of file paths as strings or a "
             + "list of data structures including the file path and optionally a data ID and / or "
-            + "ETag. The file paths always start with the bucket. "
+            + "CRC64/NVME checksum. The file paths always start with the bucket. "
+            + "All S3 input files are expected to have a CRC64/NVME checksum available, even "
+            + "if it is not provided in the input data structure. "
             + "Either all or no files must have data IDs associated with them. "
-            + "When returned from the service, the ETag is always included.",
+            + "When returned from the service, the checksum is always included.",
         min_length=1,
         # Need to see how well this performs. If we need more files per job,
         # can test performance & tweak S3 client concurrency. Alternatively, add a file set

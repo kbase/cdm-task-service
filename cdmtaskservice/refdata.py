@@ -8,7 +8,7 @@ from cdmtaskservice import kb_auth
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import ETagMismatchError, IllegalParameterError
+from cdmtaskservice.exceptions import ChecksumMismatchError, IllegalParameterError
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.s3.client import S3Client
@@ -46,7 +46,7 @@ class Refdata:
         self,
         s3_path: str,
         user: kb_auth.KBaseUser,
-        etag: str = None,
+        crc64nvme: str = None,
         unpack: bool = False
     ) -> models.ReferenceData:
         """
@@ -54,13 +54,14 @@ class Refdata:
         
         s3_path - the path to the refdata file in S3.
         user - the user submitting the request.
-        etag - the etag of the refdata file. If provided and non-matching, an error is thrown.
+        crc64nvme - the base64 encoded CRC64/NVME checksum of the refdata file.
+            If provided and non-matching, an error is thrown.
         unpack - whether to unpack the reference data file at the compute location. Supports
             *.gz, *.tar.gz, and *.tgz files.
         
         Returns the refdata state.
         """
-        # validate before S3Paths beacuse that returns an error mentioning an index
+        # validate before S3Paths because that returns an error mentioning an index
         # TODO CODE add a toggle to S3Paths to not include index info in error
         validate_path(s3_path)
         _not_falsy(user, "user")
@@ -70,10 +71,14 @@ class Refdata:
                     "Invalid file extension for unpack, only "
                     + f"{', '.join(UNPACK_FILE_EXTENSIONS)} are supported")
         meta = (await self._s3.get_object_meta(S3Paths([s3_path])))[0]
-        if etag and etag != meta.e_tag:
-            raise ETagMismatchError(
-                f"The expected ETag '{etag} for the path "
-                + f"'{s3_path}' does not match the actual ETag '{meta.e_tag}'"
+        if not meta.crc64nvme:
+            raise IllegalParameterError(
+                f"The S3 path '{s3_path}' does not have a CRC64/NVME checksum"
+            )
+        if crc64nvme and crc64nvme != meta.crc64nvme:
+            raise ChecksumMismatchError(
+                f"The expected CRC64/NMVE checksum '{crc64nvme}' for the path "
+                + f"'{s3_path}' does not match the actual checksum '{meta.crc64nvme}'"
             )
         statuses = []
         clusters = self._flowman.list_clusters()
@@ -92,7 +97,8 @@ class Refdata:
         rd = models.ReferenceData(
             id=str(uuid.uuid4()),  # TODO TEST for testing we'll need to set up a mock for this
             file=s3_path,
-            etag=meta.e_tag,
+            crc64nvme=meta.crc64nvme,
+            etag=meta.e_tag,  # TODO CHECKSUM remove
             unpack=unpack,
             registered_by=user.user,
             registered_on=utcdatetime(),

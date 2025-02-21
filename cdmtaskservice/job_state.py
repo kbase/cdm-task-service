@@ -15,7 +15,7 @@ from cdmtaskservice.arg_checkers import (
 )
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
-    ETagMismatchError,
+    ChecksumMismatchError,
     IllegalParameterError,
     InvalidReferenceDataStateError,
     UnauthorizedError,
@@ -91,27 +91,7 @@ class JobState:
         if bucket == self._logbuk:
             raise S3BucketInaccessibleError(f"Jobs may not write to bucket {self._logbuk}")
         await self._s3.is_bucket_writeable(bucket)
-        paths = [
-            f.file if isinstance(f, models.S3FileWithDataID) else f
-                 for f in job_input.input_files
-        ]
-        # TODO PERF may want to make concurrency configurable here
-        # TODO PERF this checks the file path syntax again, consider some way to avoid
-        meta = await self._s3.get_object_meta(S3Paths(paths))
-        new_input = []
-        for m, f in zip(meta, job_input.input_files):
-            data_id = None
-            if isinstance(f, models.S3FileWithDataID):
-                data_id = f.data_id
-                if f.etag and f.etag != m.e_tag:
-                    raise ETagMismatchError(
-                        f"The expected ETag '{f.etag} for the path '{f.file}' does not match "
-                        + f"the actual ETag '{m.e_tag}'"
-                    )
-            # no need to validate the path again
-            new_input.append(models.S3FileWithDataID.model_construct(
-                file=m.path, etag=m.e_tag, data_id=data_id)
-            )
+        new_input, meta = await self._check_and_update_files(job_input)
         # check the flow is available before we make any changes
         flow = self._flowman.get_flow(job_input.cluster)
         ji = job_input.model_copy(update={"input_files": new_input})
@@ -126,11 +106,38 @@ class JobState:
                 (models.JobState.CREATED, utcdatetime())
             ]
         )
-        # TDDO JOBSUBMIT if reference data is required, is it staged?
         await self._mongo.save_job(job)
         # Pass in the meta to avoid potential race conditions w/ etag changes
         await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
+
+    async def _check_and_update_files(self, job_input: models.JobInput):
+        paths = [
+            f.file if isinstance(f, models.S3FileWithDataID) else f
+                 for f in job_input.input_files
+        ]
+        # TODO PERF may want to make concurrency configurable here
+        # TODO PERF this checks the file path syntax again, consider some way to avoid
+        meta = await self._s3.get_object_meta(S3Paths(paths))
+        new_input = []
+        for m, f in zip(meta, job_input.input_files):
+            if not m.crc64nvme:
+                raise IllegalParameterError(
+                    f"The S3 path '{f.file}' does not have a CRC64/NVME checksum"
+                )
+            data_id = None
+            if isinstance(f, models.S3FileWithDataID):
+                data_id = f.data_id
+                if f.crc64nvme and f.crc64nvme != m.crc64nvme:
+                    raise ChecksumMismatchError(
+                        f"The expected CRC64/NMVE checksum '{f.crc64nvme}' for the path "
+                        + f"'{f.file}' does not match the actual checksum '{m.crc64nvme}'"
+                    )
+            # no need to validate the path again
+            new_input.append(models.S3FileWithDataID.model_construct(
+                file=m.path, crc64nvme=m.crc64nvme, etag=m.e_tag, data_id=data_id)
+            )
+        return new_input, meta
 
     async def _check_refdata(self, job_input: models.JobInput, image: models.Image):
         if not image.refdata_id:
