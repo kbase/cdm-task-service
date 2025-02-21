@@ -71,11 +71,6 @@ class MongoDAO:
             IndexModel([(models.FLD_REFDATA_ID, ASCENDING)], unique=True),
             # Non unique as files can be overwritten
             IndexModel([(models.FLD_REFDATA_FILE, ASCENDING)]),
-            # Not really sure about uniqueness for this one...
-            # Could make it unique to prevent refdata duplication, but that means we'd
-            # have to get the etag of the user's refdata, find the record, and use the refdata id
-            # For now just allow duplicate refdata
-            IndexModel([(models.FLD_REFDATA_ETAG, ASCENDING)]),
         ])
 
     async def save_image(self, image: models.Image):
@@ -422,14 +417,6 @@ class MongoDAO:
         """
         return await self._get_refdata(
             models.FLD_REFDATA_FILE, _require_string(s3_path, "s3_path"),
-        )
-
-    async def get_refdata_by_etag(self, etag: str) -> list[models.ReferenceData]:
-        """
-        Get reference data by the refdata Etag. Returns at most 1000 records.
-        """
-        return await self._get_refdata(
-            models.FLD_REFDATA_ETAG, _require_string(etag, "etag"),
         )
 
     # sorts by field ascending, so make sure there's an index for that field

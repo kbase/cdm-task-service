@@ -517,8 +517,8 @@ class NERSCManager:
                 #              This allows JAWS / Cromwell to cache the files if they have the
                 #              same path, which they won't if there's a job ID in the mix
                 "outputpath": str(sc / Path(meta.path).name if refdata else sc / meta.path),
-                "etag": meta.e_tag,
-                "partsize": meta.effective_part_size,
+                "etag": meta.e_tag,  # TODO CHECKSUMS swap for crc64NVME
+                "partsize": meta.effective_part_size,  # TODO CHECKSUMS remove
                 "size": meta.size,
                 "unpack": unpack,
             } for url, meta in zip(presigned_urls, objects)
@@ -713,6 +713,8 @@ class NERSCManager:
             return []
         return [_JOB_MANIFESTS / f"{_MANIFEST_FILE_PREFIX}{c}" for c in range(1, count + 1)]
 
+    # TODO CHECKSUMS need to add a task to calculate crc64nvmes @ NERSC
+    #                try just a blocking task for now, YAGNI async
     async def upload_JAWS_job_files(
         self,
         job: models.Job,

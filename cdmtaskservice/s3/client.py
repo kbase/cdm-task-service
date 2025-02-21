@@ -50,7 +50,7 @@ class S3ObjectMeta:
     
     @property
     def effective_part_size(self):
-        # TODO CRC remove - need to update nersc manager first
+        # TODO CHECKSUMS remove - need to update nersc manager first
         return self.size
 
 

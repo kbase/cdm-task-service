@@ -20,7 +20,7 @@ from typing import Any, Awaitable
 # Probably not necessary, but could look into aiofiles for some of these methods
 # Potential future (minor) performance improvement, but means more installs on remote clusters
 
-# TODO CRC need to check CRC on download
+# TODO CHECKSUMS need to check CRC on download
 
 
 _EXT_GZ = ".gz"
@@ -102,9 +102,9 @@ def _check_file(infile: Path):
 async def download_presigned_url(
     session: aiohttp.ClientSession,
     url: str,
-    partsize: int,
+    partsize: int,  # TODO CHECKSUMS remove
     outputpath: Path,
-    etag: str = None,
+    etag: str = None,  # TODO CHECKSUMS swap for crc64nvme
     insecure_ssl: bool = False,
     timeout_sec: int = 600,
 ):
@@ -209,7 +209,7 @@ async def upload_presigned_url(
                                ) from e
 
 
-# TODO CRC need to update nersc jaws runner to presign including the CRCs
+# TODO CHECKSUMS need to update nersc jaws runner to presign including the CRCs
 async def _process_uploads(
     sess: aiohttp.ClientSession,
     root: Path,

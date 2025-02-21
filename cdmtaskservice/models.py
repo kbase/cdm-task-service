@@ -56,7 +56,6 @@ FLD_JOB_TRACEBACK = "traceback"
 FLD_JOB_LOGPATH = "logpath"
 FLD_REFDATA_ID = "id"
 FLD_REFDATA_FILE = "file"
-FLD_REFDATA_ETAG = "etag"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
 FLD_REFDATA_TRANS_TIMES = "transition_times"
@@ -439,6 +438,7 @@ class S3File(BaseModel):
     )]
     # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
     # the way in and will come from S3 on the way out
+    # TODO swap for CRC64NVME
     etag: Annotated[str | None, Field(
         example="a70a4d1732484e75434df2c08570e1b2-3",
         description="The S3 e-tag of the file. Weak e-tags are not supported. "
@@ -547,7 +547,7 @@ class JobInput(BaseModel):
             {
                 "file": "mybucket/foo/bat",
                 "data_id": "GCA_000146795.3",
-                "etag": "a70a4d1732484e75434df2c08570e1b2-3"
+                "etag": "a70a4d1732484e75434df2c08570e1b2-3"  # TODO swap for CRC64NVME
             }
         ],
         description="The S3 input files for the job, either a list of file paths as strings or a "
