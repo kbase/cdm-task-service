@@ -29,47 +29,29 @@ _WRITE_TEST_FILENAME = (
 class S3ObjectMeta:
     """ Metadata about an object in S3 storage. """
     
-    __slots__ = ["path", "e_tag", "part_size", "size"]
+    __slots__ = ["path", "e_tag", "size", "crc64nvme"]
     
-    def __init__(self, path: str, e_tag: str, size: int, part_size: int):
+    def __init__(self, path: str, e_tag: str, size: int, crc64nvme: str | None = None):
         """
         Create the object meta. This is not expected to be instantiated manually.
         
         path - the path of the object in s3 storage, including the bucket.
         e-tag - the object e-tag.
         size - the total size of the object
-        part_size - the part size used in a multipart upload, if relevant.
+        crc64nvme - the object's base64 encoded crc64nvme, if provided.
         """
         # input checking seems a little pointless. Could check that the path looks like a path
         # and the e-tag looks like an e-tag, but since this module should be creating this
         # class why bother. This is why access modifiers for methods are good
         self.path = path
         self.e_tag = e_tag
+        self.crc64nvme = crc64nvme
         self.size = size
-        self.part_size = part_size
-        # could check that the part size makes sense given the e-tag... meh
     
     @property
-    def has_parts(self) -> bool:
-        """ Returns true if the object was uploaded as multipart. """
-        # MD5s have 32 characters. An e-tag with parts looks like `<MD5>-#parts`
-        return len(self.e_tag) > 32
-
-    @property
-    def num_parts(self) -> int:
-        """ 
-        Returns the number of parts used in a multipart upload or 1 if the upload was not
-        multipart.
-        """
-        if self.has_parts:
-            return int(self.e_tag.split("-")[1])
-        return 1
-
-
-    @property
     def effective_part_size(self):
-        """ Returns the part size, if present, or the overall object size. """
-        return self.part_size or self.size
+        # TODO CRC remove - need to update nersc manager first
+        return self.size
 
 
 # This isn't technically S3 specific but leave it here since it's the only place it gets
@@ -265,23 +247,18 @@ class S3Client:
         funcs = []
         for buk, key, path in paths.split_paths(include_full_path=True):
             async def head(client, buk=buk, key=key):  # bind the current value of the variables
-                return await client.head_object(Bucket=buk, Key=key, PartNumber=1)
+                return await client.head_object(Bucket=buk, Key=key, ChecksumMode="ENABLED")
             head.path = path
             funcs.append(head)
         results = await self._run_commands(funcs, concurrency)
         ret = []
         for res, path in zip(results, paths.paths):
-            size = res["ContentLength"]
-            part_size = None
-            if "PartsCount" in res:
-                part_size = size
-                content_range = res["ResponseMetadata"]["HTTPHeaders"]["content-range"]
-                size = int(content_range.split("/")[1])
+            headers = res["ResponseMetadata"]["HTTPHeaders"]
             ret.append(S3ObjectMeta(
                 path=path,
                 e_tag = res["ETag"].strip('"'),
-                size=size,
-                part_size=part_size
+                size=res["ContentLength"],
+                crc64nvme=headers.get("x-amz-checksum-crc64nvme"),
             ))
         return ret
 
@@ -315,7 +292,7 @@ class S3Client:
         Presign urls to allow posting to s3 paths. Does not check for overwrites.
         
         paths - the paths in question.
-        crc64nvmes - the CRC-64/NVME checksums of the files.
+        crc64nvmes - the base64 encoded CRC-64/NVME checksums of the files.
         expiration_sec - the expiration time of the urls.
         """
         _not_falsy(paths, "paths")

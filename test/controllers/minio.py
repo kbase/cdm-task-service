@@ -98,44 +98,76 @@ class MinioController:
         async with self.get_client() as client:
             return await client.get_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
 
-    async def upload_file(self, path, main_part, num_main_parts=1, last_part=None
+    async def upload_file(
+        self,
+        path,
+        main_part,
+        num_main_parts=1,
+        last_part=None,
+        main_part_crc64nvme=None,
+        last_part_crc64nvme=None,
+        crc64nvme=None,
     ) -> dict[str, Any]:
         async with self.get_client() as client:
             buk, key = path.split("/", 1)
             if num_main_parts == 1 and not last_part:
-                return await client.put_object(
-                    Body=io.BytesIO(main_part),
-                    Bucket=buk,
-                    Key=key,
-                    ContentLength=len(main_part)
-                )
+                args = {
+                    "Body": io.BytesIO(main_part),
+                    "Bucket": buk,
+                    "Key": key,
+                    "ContentLength": len(main_part),
+                }
+                if crc64nvme:
+                    args["ChecksumCRC64NVME"] = crc64nvme
+                return await client.put_object(**args)
             else:
-                res = await client.create_multipart_upload(Bucket=buk, Key=key)
+                args = {"Bucket": buk, "Key": key}
+                if crc64nvme:
+                    args = args | {"ChecksumAlgorithm": "CRC64NVME", "ChecksumType": "FULL_OBJECT"}
+                res = await client.create_multipart_upload(**args)
                 uid = res["UploadId"]
                 parts = []
                 for part_num in range(1, num_main_parts + 1):
-                    res = await upload_part(client, main_part, buk, key, uid, part_num)
+                    res = await upload_part(
+                        client, main_part, buk, key, uid, part_num, main_part_crc64nvme
+                    )
                     parts.append({"ETag": res["ETag"], "PartNumber": part_num})
+                    if crc64nvme:
+                        parts[-1]["ChecksumCRC64NVME"] = main_part_crc64nvme
                 if last_part:
-                    res = await upload_part(client, last_part, buk, key, uid, num_main_parts + 1)
+                    res = await upload_part(
+                        client, last_part, buk, key, uid, num_main_parts + 1, last_part_crc64nvme
+                    )
                     parts.append({"ETag": res["ETag"], "PartNumber": num_main_parts + 1})
-                return await client.complete_multipart_upload(
-                    Bucket=buk, Key=key, UploadId=uid, MultipartUpload={"Parts": parts}
-                )
+                    if crc64nvme:
+                        parts[-1]["ChecksumCRC64NVME"] = last_part_crc64nvme
+                args = {
+                    "Bucket": buk,
+                    "Key": key,
+                    "UploadId": uid,
+                    "MultipartUpload": {"Parts": parts},
+                }
+                if crc64nvme:
+                    args["ChecksumCRC64NVME"] = crc64nvme
+                    args["ChecksumType"] = "FULL_OBJECT"
+                return await client.complete_multipart_upload(**args)
 
     def run_mc(self, *args):
         subprocess.run([self._mc] + list(args)).check_returncode()
 
 
-async def upload_part(client, part, bucket, key, upload_id, part_num):
-    return await client.upload_part(
-        Body=io.BytesIO(part),
-        Bucket=bucket,
-        Key=key,
-        ContentLength=len(part),
-        UploadId=upload_id,
-        PartNumber=part_num
-    )
+async def upload_part(client, part, bucket, key, upload_id, part_num, crc64nvme):
+    args = {
+        "Body": io.BytesIO(part),
+        "Bucket": bucket,
+        "Key": key,
+        "ContentLength": len(part),
+        "UploadId": upload_id,
+        "PartNumber": part_num,
+    }
+    if crc64nvme:
+        args["ChecksumCRC64NVME"] = crc64nvme
+    return await client.upload_part(**args)
 
 
 if __name__ == "__main__":
