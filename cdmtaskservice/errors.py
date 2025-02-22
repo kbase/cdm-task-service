@@ -45,8 +45,8 @@ class ErrorType(Enum):
     S3_PATH_SYNTAX =             (30020, "Illegal S3 path")  # noqa: E222 @IgnorePep8
     """ The S3 path was invalid. """
     
-    S3_ETAG_MISMATCH =           (30030, "S3 ETag mismatch")  # noqa: E222 @IgnorePep8
-    """ The expected S3 ETag did not match the actual ETag. """
+    CHECKSUM_MISMATCH =          (30030, "Checksum mismatch")  # noqa: E222 @IgnorePep8
+    """ The expected checksum did not match the actual checksum. """
     
     IMAGE_NAME_PARSE =           (30040, "Image name parse error")  # noqa: E222 @IgnorePep8
     """ The provided image name could not be parsed. """

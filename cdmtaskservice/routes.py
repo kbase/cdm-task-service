@@ -320,12 +320,12 @@ async def create_refdata(
         min_length=models.S3_PATH_MIN_LENGTH,
         max_length=models.S3_PATH_MAX_LENGTH,
     )],
-    etag: Annotated[str | None, Query(
-        example="a70a4d1732484e75434df2c08570e1b2-3",
-        description="The S3 e-tag of the file. Weak e-tags are not supported. "
-            + "If provided it is checked against the target file e-tag before proceeding.",
-        min_length=models.ETAG_MIN_LENGTH,
-        max_length=models.ETAG_MAX_LENGTH,
+    crc64nvme: Annotated[str | None, Query(
+        example="4ekt2WB1KO4=",
+        description="The base64 encoded CRC64/NVME checksum of the file. "
+            + "If provided it is checked against the target file checksum before proceeding.",
+        min_length=models.CRC64NVME_B64ENC_LENGTH,
+        max_length=models.CRC64NVME_B64ENC_LENGTH,
     )] = None,
     unpack: Annotated[bool, Query(
         description="Whether to unpack the file after download. *.tar.gz, *.tgz, and *.gz "
@@ -335,7 +335,7 @@ async def create_refdata(
 ) -> models.ReferenceData:
     _ensure_admin(user, "Only service administrators can create reference data.")
     refdata = app_state.get_app_state(r).refdata
-    return await refdata.create_refdata(refdata_s3_path, user, etag=etag, unpack=unpack)
+    return await refdata.create_refdata(refdata_s3_path, user, crc64nvme=crc64nvme, unpack=unpack)
 
 
 @ROUTER_ADMIN.get(

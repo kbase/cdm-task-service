@@ -7,7 +7,7 @@ from typing import NamedTuple
 
 from cdmtaskservice.errors import ErrorType
 from cdmtaskservice.exceptions import (
-    ETagMismatchError,
+    ChecksumMismatchError,
     IllegalParameterError,
     InvalidAuthHeaderError,
     InvalidJobStateError,
@@ -62,7 +62,7 @@ _ERR_MAP = {
     S3PathInaccessibleError: ErrorMapping(ErrorType.S3_PATH_INACCESSIBLE, _H403),
     S3PathNotFoundError: ErrorMapping(ErrorType.S3_PATH_NOT_FOUND, _H404),
     S3PathSyntaxError: ErrorMapping(ErrorType.S3_PATH_SYNTAX, _H400),
-    ETagMismatchError: ErrorMapping(ErrorType.S3_ETAG_MISMATCH, _H400),
+    ChecksumMismatchError: ErrorMapping(ErrorType.CHECKSUM_MISMATCH, _H400),
     NoEntrypointError: ErrorMapping(ErrorType.MISSING_ENTRYPOINT, _H400),
     ImageInfoFetchError: ErrorMapping(ErrorType.IMAGE_FETCH, _H400),
     ImageNameParseError: ErrorMapping(ErrorType.IMAGE_NAME_PARSE, _H400),

@@ -33,8 +33,8 @@ services:
       - KBCTS_JAWS_TOKEN=tokengoeshere
       - KBCTS_JAWS_GROUP=kbase
       # TODO DOCKERUPGRADE after upgrading docker switch to host.docker.internal
-      - KBCTS_S3_URL=http://localhost:9002
-      #- KBCTS_S3_URL=http://host.docker.internal:9002
+      - KBCTS_S3_URL=http://localhost:9000
+      #- KBCTS_S3_URL=http://host.docker.internal:9000
       # local Minio, only useful if not running jobs on NERSC
       #- KBCTS_S3_URL=http://minio:9000
       - KBCTS_S3_EXTERNAL_URL=https://ci.berkeley.kbase.us:9000

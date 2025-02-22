@@ -3,8 +3,8 @@ General exceptions used by multiple modules.
 """
 
 
-class ETagMismatchError(Exception):
-    """ Thrown when an specified ETag does not match the expected ETag. """
+class ChecksumMismatchError(Exception):
+    """ Thrown when an specified checksum does not match the expected checksum. """
 
 
 class IllegalParameterError(Exception):
