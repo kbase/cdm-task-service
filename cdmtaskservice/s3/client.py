@@ -253,12 +253,11 @@ class S3Client:
         results = await self._run_commands(funcs, concurrency)
         ret = []
         for res, path in zip(results, paths.paths):
-            headers = res["ResponseMetadata"]["HTTPHeaders"]
             ret.append(S3ObjectMeta(
                 path=path,
                 e_tag = res["ETag"].strip('"'),
                 size=res["ContentLength"],
-                crc64nvme=headers.get("x-amz-checksum-crc64nvme"),
+                crc64nvme=res.get("ChecksumCRC64NVME"),
             ))
         return ret
 
