@@ -138,6 +138,7 @@ def _generate_wdl(job: Job, workflow_name: str, manifests: bool, relative_refdat
     mani_wf_input = ""
     mani_call_input = ""
     mani_task_input = ""
+    mani_link = ""
     refdata_mount = ""
     if manifests:
         mani_wf_input = """
@@ -146,6 +147,11 @@ def _generate_wdl(job: Job, workflow_name: str, manifests: bool, relative_refdat
         manifest = manifest_list[i]"""
         mani_task_input = """
     File manifest"""
+        mani_link = """
+    # link any manifest file into the mount point
+    if [[ -n "~{manifest}" ]]; then
+        ln ~{manifest} ./__input__/$(basename ~{manifest})
+    fi"""
     if relative_refdata_path:
         refdata_mount = f'''
     dynamic_refdata: "{relative_refdata_path}:{job.job_input.params.refdata_mount_point}"'''
@@ -189,11 +195,7 @@ task run_container {{
     # ensure host mount points exist
     mkdir -p ./__input__
     mkdir -p ./{OUTPUT_DIR}
-    
-    # link any manifest file into the mount point
-    if [[ -n "~{{manifest}}" ]]; then
-        ln ~{{manifest}} ./__input__/$(basename ~{{manifest}})
-    fi
+    {mani_link}
     
     # link the input files into the mount point
     files=('~{{sep="' '" input_files}}')

@@ -64,13 +64,13 @@ def parse_errors_json(errors_json: io.BytesIO, logpath: Path) -> list[tuple[int,
         cid = c["shardIndex"]
         if cid in id2rc:
             raise ValueError(f"Duplicate shardIndex: {cid}")
-        rc = c["returnCode"]
+        rc = c.get("returnCode")
         # never seen a structure other than this, may need changes
         err = c["failures"][0]["message"]
         id2rc[cid] = (rc, err)
         rcf, sof, sef = get_filenames_for_container(cid)
         with open(logpath / rcf, "w") as f:
-            f.write(f"{rc}\n")
+            f.write(f"{rc if rc is not None else 'container_did_not_run'}\n")
         with open(logpath / sof, "w") as f:
             f.write(c["stdoutContents"])
         with open(logpath / sef, "w") as f:
