@@ -9,6 +9,7 @@ python versions.
 import aiohttp
 import asyncio
 from awscrt import checksums as awschecksums
+import base64
 import gzip
 from hashlib import md5
 import os
@@ -102,9 +103,8 @@ def _check_file(infile: Path):
 async def download_presigned_url(
     session: aiohttp.ClientSession,
     url: str,
-    partsize: int,  # TODO CHECKSUMS remove
     outputpath: Path,
-    etag: str = None,  # TODO CHECKSUMS swap for crc64nvme
+    crc64nvme_expected: str = None,
     insecure_ssl: bool = False,
     timeout_sec: int = 600,
 ):
@@ -113,36 +113,20 @@ async def download_presigned_url(
     
     session - the http session.
     url - the presigned url.
-    partsize - the partsize used when uploading the file to S3
     outputpath - where to store the file. If the file exists, it will be overwritten
-    etag - if provided,
-         a) checks that the server Etag matches this Etag. The downloaded file is
-            always checked against the server provided Etag as an integrity check, but providing
-            an Etag can ensure the file hasn't changed on the server side since the last access.
-        b) if a file already exists at outputpath and matches the etag, the download is skipped.
+    crc64nvme_expected - the expected CRC64/NVME checksum for the file. This can ensure
+        the file hasn't changed on the server since the last access.
     insecure_ssl - skip the ssl certificate check.
     timeout_sec - the time, in seconds, before the download times out.
-    
-    Returns True if the download occurred or False if the file already exists.
     """
     _not_falsy(session, "session")
     _require_string(url, "url")
     _not_falsy(outputpath, "outputpath")
-    if partsize < 1:
-        raise ValueError("partsize must be > 0")
-    if etag and outputpath.is_file():
-        got_etag = calculate_etag(outputpath, partsize)
-        if got_etag == etag:
-            return False
     tout = aiohttp.ClientTimeout(total=timeout_sec)
     try:
         async with session.get(url, ssl=not insecure_ssl, timeout=tout) as resp:
             if 199 < resp.status < 300:  # redirects are handled automatically
-                serv_etag = resp.headers["Etag"].strip('"')
-                if etag and etag != serv_etag:
-                    raise FileChangeError(
-                        f"Etag check failed for url {url.split('?')[0]}. "
-                        + f"Server provided {serv_etag}, user provided Etag requirement is {etag}")
+                # unfortunately the crc64nvme is not included in the headers
                 outputpath.parent.mkdir(exist_ok=True, parents=True)
                 with open(outputpath, "wb") as f:
                     async for chunk in resp.content.iter_chunked(_CHUNK_SIZE_64KB):
@@ -154,13 +138,12 @@ async def download_presigned_url(
     except asyncio.TimeoutError as e:
         raise RemoteTimeoutError(f"Timeout downloading to file {outputpath} with timeout {timeout_sec}s"
                            ) from e
-    got_etag = calculate_etag(outputpath, partsize)
-    if got_etag != serv_etag:
+    got_crc = base64.b64encode(crc64nvme(outputpath)).decode()
+    if crc64nvme_expected and crc64nvme_expected != got_crc:
         outputpath.unlink(missing_ok=True)
         raise FileCorruptionError(
-            f"Etag check failed for url {url.split('?')[0]}. "
-            + f"Server provided {serv_etag}, file Etag is {got_etag}")
-    return True
+            f"CRC64/NVME check failed for url {url.split('?')[0]}. "
+            + f"Expected {crc64nvme_expected}, file checksum is {got_crc}")
 
 
 _UPLOAD_REQUIRED_FIELDS = ["key", "AWSAccessKeyId", "signature", "policy"]
@@ -261,9 +244,7 @@ def _extract_tar(file_path: Path):
 async def _process_download(
     session: aiohttp.ClientSession,
     url: str,
-    partsize: int,
     outputpath: Path,
-    etag: str,
     insecure_ssl: bool,
     timeout_sec: int,
     unpack: bool,
@@ -271,11 +252,10 @@ async def _process_download(
     await download_presigned_url(
         session,
         url,
-        partsize,
         outputpath,
-        etag,
-        insecure_ssl,
-        timeout_sec
+        # TODO CHECKSUM add crc64nvme
+        insecure_ssl=insecure_ssl,
+        timeout_sec=timeout_sec,
     )
     if unpack:
         op = str(outputpath).lower()
@@ -302,9 +282,8 @@ async def _process_downloads(
     tasks = [_process_download(
         sess,
         fil["url"],
-        fil["partsize"],
         root / fil["outputpath"],
-        etag=fil["etag"],
+        # TODO CHECKSUM add crc64nvme
         insecure_ssl=insecure_ssl,
         timeout_sec=_timeout(min_timeout_sec, fil["size"], sec_per_GB),
         unpack=fil["unpack"],
@@ -404,7 +383,3 @@ class RemoteTimeoutError(TransferError):
 
 class FileCorruptionError(TransferError):
     """ Thrown when a file transfer results in a corrupt file """
-
-
-class FileChangeError(Exception):
-    """ Thrown when a file has changed since the last access """
