@@ -139,7 +139,7 @@ def _get_dependencies(mod: ModuleType, cts_dep: set[ModuleType], pip_dep: set[Mo
             cts_dep.add(m)
             _get_dependencies(m, cts_dep, pip_dep)
         elif rootname not in sys.stdlib_module_names:
-            pip_dep.add(m)
+            pip_dep.add(sys.modules[rootname])
 _get_dependencies(remote, _CTS_DEPENDENCIES, _PIP_DEPENDENCIES)
 
 
@@ -232,6 +232,7 @@ class NERSCManager:
 
     async def _setup_remote_code(self, jaws_token: str, jaws_group: str):
         # TODO RELIABILITY atomically write files. For these small ones probably doesn't matter?
+        logr = logging.getLogger(__name__)
         cli = self._client_provider()
         perlmutter = await cli.compute(Machine.perlmutter)
         dt = await cli.compute(_DT_TARGET)
@@ -265,6 +266,7 @@ class NERSCManager:
                 deps = " ".join(
                     # may need to do something else if module doesn't have __version__
                     [f"{mod.__name__}=={mod.__version__}" for mod in _PIP_DEPENDENCIES])
+                logr.info(f"Installing pip mudules @ NERSC: {deps}")
                 command = (
                     f"{_DT_WORKAROUND}; "
                     + f"{_PYTHON_LOAD_HACK}; "
@@ -276,7 +278,7 @@ class NERSCManager:
                 tg.create_task(dt.run(command))
         self._dtn_scratch = dtn_scratch.result()
         self._perlmutter_scratch = Path(pm_scratch.result().strip())
-        logging.getLogger(__name__).info(
+        logr.info(
             "NERSC perlmutter scratch path", extra={logfields.FILE: self._perlmutter_scratch}
         )
     
