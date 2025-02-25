@@ -170,7 +170,8 @@ class NERSCJAWSRunner(JobFlow):
         storage system and is in the created state.
         
         job - the job
-        objmeta - the S3 object metadata for the files in the job.
+        objmeta - the S3 object metadata for the files in the job. CRC64/NVME checksums
+            are required for all objects.
         """
         if _not_falsy(job, "job").state != models.JobState.CREATED:
             raise InvalidJobStateError("Job must be in the created state")
@@ -430,7 +431,8 @@ class NERSCJAWSRunner(JobFlow):
         the data storage system and is in the created state.
         
         refdata - the reference data
-        objmeta - the S3 object metadata for the reference data file.
+        objmeta - the S3 object metadata for the reference data file. The CRC64/NVME checksum
+            is required.
         """
         refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self._cluster)
         if refstate.state != models.ReferenceDataState.CREATED:

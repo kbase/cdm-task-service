@@ -217,11 +217,10 @@ class NERSCManager:
         self._nersc_code_path = self._check_path(
             nersc_code_path, "nersc_code_path"
         ) / service_group
-        self._scratchdir = Path("cdm_task_service") / service_group
+        self._work_loc = Path("cdm_task_service") / service_group
         self._jawscfg = f"jaws_cts_{service_group}.conf"
-        self._relative_refdata_root = Path("cdm_task_service") / service_group
         self._refdata_root = self._check_path(jaws_refdata_root_dir, "jaws_refdata_root_dir"
-                                              ) / self._relative_refdata_root
+                                              ) / self._work_loc
 
     def _check_path(self, path: Path, name: str):
         _not_falsy(path, name)
@@ -295,16 +294,16 @@ class NERSCManager:
     
     def _get_job_scratch(self, job_id, perlmutter=False):
         sc = self._perlmutter_scratch if perlmutter else self._dtn_scratch
-        return sc / self._scratchdir / _JOBS_DIR / job_id
+        return sc / self._work_loc / _JOBS_DIR / job_id
     
     def _get_refdata_scratch(self, refdata_id):
-        return self._dtn_scratch / self._scratchdir / _REFDATA_DIR / refdata_id
+        return self._dtn_scratch / self._work_loc / _REFDATA_DIR / refdata_id
     
     def _get_refdata_root(self, refdata_id):
         return self._refdata_root / refdata_id
     
     def _get_relative_refdata_root(self, refdata_id):
-        return self._relative_refdata_root / refdata_id
+        return self._work_loc / refdata_id
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
@@ -506,6 +505,8 @@ class NERSCManager:
         _not_falsy(presigned_urls, "presigned_urls")
         if len(objects) != len(presigned_urls):
             raise ValueError("Must provide same number of paths and urls")
+        if not all([bool(o.crc64nvme) for o in objects]):
+            raise ValueError("All the S3 objects must have a CRC64/NVME checksum")
         manifest = self._base_manifest("download", concurrency, insecure_ssl)
         if refdata:
             sc = self._get_refdata_root(download_id)
@@ -519,8 +520,7 @@ class NERSCManager:
                 #              This allows JAWS / Cromwell to cache the files if they have the
                 #              same path, which they won't if there's a job ID in the mix
                 "outputpath": str(sc / Path(meta.path).name if refdata else sc / meta.path),
-                "etag": meta.e_tag,  # TODO CHECKSUMS swap for crc64NVME
-                "partsize": meta.effective_part_size,  # TODO CHECKSUMS remove
+                "crc64nvme": meta.crc64nvme,
                 "size": meta.size,
                 "unpack": unpack,
             } for url, meta in zip(presigned_urls, objects)

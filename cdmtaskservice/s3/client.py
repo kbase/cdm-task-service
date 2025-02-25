@@ -26,7 +26,7 @@ _WRITE_TEST_FILENAME = (
 )
 
 
-class S3ObjectMeta:
+class S3ObjectMeta:  # TODO CODE this could be a NamedTuple - what about __slots__?
     """ Metadata about an object in S3 storage. """
     
     __slots__ = ["path", "e_tag", "size", "crc64nvme"]
@@ -47,11 +47,6 @@ class S3ObjectMeta:
         self.e_tag = e_tag
         self.crc64nvme = crc64nvme
         self.size = size
-    
-    @property
-    def effective_part_size(self):
-        # TODO CHECKSUMS remove - need to update nersc manager first
-        return self.size
 
 
 # This isn't technically S3 specific but leave it here since it's the only place it gets
