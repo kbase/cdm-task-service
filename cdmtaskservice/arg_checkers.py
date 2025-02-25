@@ -1,5 +1,10 @@
 '''
-Contains common code for checking method arguments
+Contains common code for checking method arguments.
+
+Note that this file is expected to be run at NERSC. As such, non-standard lib dependency
+imports should be kept to a minimum and the newest
+python features should be avoided to make setup on the remote cluster simple and allow for older
+python versions.
 '''
 from typing import Any
 import unicodedata
