@@ -63,7 +63,7 @@ class Refdata:
         """
         # validate before S3Paths because that returns an error mentioning an index
         # TODO CODE add a toggle to S3Paths to not include index info in error
-        validate_path(s3_path)
+        s3_path = validate_path(s3_path)
         _not_falsy(user, "user")
         if unpack:
             if not any([s3_path.endswith(ex) for ex in UNPACK_FILE_EXTENSIONS]):

@@ -433,7 +433,9 @@ class S3File(BaseModel):
     
     file: Annotated[str, Field(
         example="mybucket/foo/bar/baz.jpg",
-        description="A path to an object in an S3 instance, starting with the bucket.",
+        description="A path to an object in an S3 instance, starting with the bucket. "
+            + "Please note that spaces are valid S3 object characters, so be careful about "
+            + "trailing spaces in the input.",
         min_length=S3_PATH_MIN_LENGTH,
         max_length=S3_PATH_MAX_LENGTH,
     )]

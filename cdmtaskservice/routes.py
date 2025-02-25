@@ -246,7 +246,9 @@ async def get_refdata_by_path(
     r: Request,
     s3_path: Annotated[str, FastPath(
         example="refdata-bucket/checkm2/checkm2_refdata-2.4.tgz",
-        description="The S3 path to the reference data, starting with the bucket.",
+        description="The S3 path to the reference data, starting with the bucket. "
+            + "Please note that spaces are valid S3 object characters, so be careful about "
+            + "trailing spaces in the input.",
         min_length=models.S3_PATH_MIN_LENGTH,
         max_length=models.S3_PATH_MAX_LENGTH,
     )],
@@ -316,7 +318,9 @@ async def create_refdata(
     refdata_s3_path: Annotated[str, FastPath(
         example="refdata-bucket/checkm2/checkm2_refdata-2.4.tgz",
         description="The S3 path to the reference data to register, starting with the bucket. "
-            + "If the refdata consists of multiple files, they must be archived.",
+            + "If the refdata consists of multiple files, they must be archived. "
+            + "Please note that spaces are valid S3 object characters, so be careful about "
+            + "trailing spaces in the input.",
         min_length=models.S3_PATH_MIN_LENGTH,
         max_length=models.S3_PATH_MAX_LENGTH,
     )],

@@ -400,9 +400,8 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.ERROR_PROCESSING_SUBMITTED:
             raise InvalidJobStateError("Job must be in the error processing submitted state")
-        # TODO TEST this when JAWS works again, force an error
         async def tfunc():
-            return await self._nman.get_presigned_upload_result(job)
+            return await self._nman.get_presigned_error_log_upload_result(job)
         data = await self._get_transfer_result(
             tfunc,
             job.id,
@@ -410,7 +409,7 @@ class NERSCJAWSRunner(JobFlow):
             "getting error log upload results for",
         )
         if {i[0] for i in data} != {0}:
-            err = (f"At least one container exited with a non-zero error code. "
+            err = (f"At least one container did not start or exited with a non-zero error code. "
                    + "Please examine the logs for details.")
         else:  # will probably need to expand this as we learn about JAWS errors
             err = "An unexpected error occurred."
