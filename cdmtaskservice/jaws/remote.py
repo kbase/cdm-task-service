@@ -68,6 +68,9 @@ def parse_errors_json(errors_json: io.BytesIO, logpath: Path) -> list[tuple[int,
         # never seen a structure other than this, may need changes
         err = c["failures"][0]["message"]
         id2rc[cid] = (rc, err)
+        # TODO ERRORHANDLING if the docker image string is invalid, there's no stdout or err logs
+        #                    and no return code. Make this more flexible and tell the server
+        #                    what's available.
         rcf, sof, sef = get_filenames_for_container(cid)
         with open(logpath / rcf, "w") as f:
             f.write(f"{rc if rc is not None else 'container_did_not_run'}\n")

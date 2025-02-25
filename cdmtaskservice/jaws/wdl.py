@@ -135,6 +135,9 @@ def _generate_wdl(job: Job, workflow_name: str, manifests: bool, relative_refdat
     # Inserting the job ID into the WDL should not bust the Cromwell cache:
     # https://kbase.slack.com/archives/CGJDCR22D/p1729786486819809
     # https://cromwell.readthedocs.io/en/stable/cromwell_features/CallCaching/
+    
+    # hack for shifter compatibility
+    image = job.image.name_with_digest.removeprefix("docker.io/")
     mani_wf_input = ""
     mani_call_input = ""
     mani_task_input = ""
@@ -229,7 +232,7 @@ task run_container {{
   }}
   
   runtime {{
-    docker: "{job.image.name_with_digest}"
+    docker: "{image}"
     runtime_minutes: {math.ceil(job.job_input.runtime.total_seconds() / 60)}
     memory: "{job.job_input.memory} B"
     cpu: {job.job_input.cpus}{refdata_mount}
