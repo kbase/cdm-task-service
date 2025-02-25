@@ -21,8 +21,6 @@ from typing import Any, Awaitable
 # Probably not necessary, but could look into aiofiles for some of these methods
 # Potential future (minor) performance improvement, but means more installs on remote clusters
 
-# TODO CHECKSUMS need to check CRC on download
-
 
 _EXT_GZ = ".gz"
 _EXT_TARGZ = ".tar.gz"
@@ -245,6 +243,7 @@ async def _process_download(
     session: aiohttp.ClientSession,
     url: str,
     outputpath: Path,
+    crc64nvme: str,
     insecure_ssl: bool,
     timeout_sec: int,
     unpack: bool,
@@ -253,7 +252,7 @@ async def _process_download(
         session,
         url,
         outputpath,
-        # TODO CHECKSUM add crc64nvme
+        crc64nvme_expected=crc64nvme,
         insecure_ssl=insecure_ssl,
         timeout_sec=timeout_sec,
     )
@@ -283,7 +282,7 @@ async def _process_downloads(
         sess,
         fil["url"],
         root / fil["outputpath"],
-        # TODO CHECKSUM add crc64nvme
+        crc64nvme=fil["crc64nvme"],
         insecure_ssl=insecure_ssl,
         timeout_sec=_timeout(min_timeout_sec, fil["size"], sec_per_GB),
         unpack=fil["unpack"],
