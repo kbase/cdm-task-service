@@ -89,6 +89,7 @@ _PYTHON_LOAD_HACK = "module use /global/common/software/nersc/pe/modulefiles/lat
 _RUN_CTS_REMOTE_CODE_FILENAME = "run_cts_remote_code.sh"
 # Might want to make a shared constants module for all these env var names and update this
 # file and remote.py
+# TODO CHECKSUM remove md5 stuff
 _RUN_CTS_REMOTE_CODE = f"""
 #!/usr/bin/env bash
 
@@ -101,6 +102,8 @@ export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
 export CTS_ERRORS_JSON_LOCATION=$CTS_ERRORS_JSON_LOCATION
 export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
 export CTS_MD5_FILE_LOCATION=$CTS_MD5_FILE_LOCATION
+export CTS_JAWS_OUTPUT_DIR=$CTS_JAWS_OUTPUT_DIR
+export CTS_CHECKSUM_FILE_LOCATION=$CTS_CHECKSUM_FILE_LOCATION
 export CTS_RESULT_FILE_LOCATION=$CTS_RESULT_FILE_LOCATION
 export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
 export SCRATCH=$SCRATCH
@@ -111,6 +114,8 @@ echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
 echo "CTS_ERRORS_JSON_LOCATION=[$CTS_ERRORS_JSON_LOCATION]"
 echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
 echo "CTS_MD5_FILE_LOCATION=[$CTS_MD5_FILE_LOCATION]"
+echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]
+echo "CTS_CHECKSUM_FILE_LOCATION=[$CTS_CHECKSUM_FILE_LOCATION]
 echo "CTS_RESULT_FILE_LOCATION=[$CTS_RESULT_FILE_LOCATION]"
 echo "CTS_CALLBACK_URL=[$CTS_CALLBACK_URL]"
 echo "SCRATCH=[$SCRATCH]"
@@ -474,7 +479,7 @@ class NERSCManager:
             f"export SCRATCH=$SCRATCH; ",
             f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
         ]
-        if upload_md5s_file:
+        if upload_md5s_file:  # TODO CHECKSUM remove md5 stuff
             command.insert(2, f"export CTS_MD5_FILE_LOCATION={rootpath / _MD5_JSON_FILE_NAME}; ")
         if error_json_file_location:
             command.insert(2, f"export CTS_ERRORS_JSON_LOCATION={error_json_file_location}; ")
@@ -715,8 +720,6 @@ class NERSCManager:
             return []
         return [_JOB_MANIFESTS / f"{_MANIFEST_FILE_PREFIX}{c}" for c in range(1, count + 1)]
 
-    # TODO CHECKSUMS need to add a task to calculate crc64nvmes @ NERSC
-    #                try just a blocking task for now, YAGNI async
     async def upload_JAWS_job_files(
         self,
         job: models.Job,
@@ -743,15 +746,35 @@ class NERSCManager:
         """
         _not_falsy(job, "job")
         _not_falsy(files_to_urls, "files_to_urls")
+        jaws_output_dir = _require_string(jaws_output_dir, "jaws_output_dir")
         cburl = _require_string(callback_url, "callback_url")
         _check_num(concurrency, "concurrency")
-        outfilepath = Path(
-            _require_string(jaws_output_dir, "jaws_output_dir")) / jaws_output.OUTPUTS_JSON_FILE
         cli = self._client_provider()
         dtns = await cli.compute(Machine.dtns)
+        rootpath = self._get_job_scratch(job.id)
+        command = [  # similar to the command in _process_manifest
+            f"{_DT_WORKAROUND}; ",
+            f"export CTS_MODE=checksum; ",
+            f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
+            f"export CTS_RESULT_FILE_LOCATION={rootpath / 'upload_checksums_result.json'}; ",
+            f"export CTS_JAWS_OUTPUT_DIR={jaws_output_dir}; ",
+            f"export CTS_CHECKSUM_FILE_LOCATION={rootpath / 'upload_checksums.json'}; ",
+            f"export SCRATCH=$SCRATCH; ",
+            f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
+        ]
+        command = "".join(command)
+        # May want to make this non-blocking if calculating checksums takes too long
+        # Would require another set of job states and another callback URL so try to avoid
+        await dtns.run(command)
+        # TODO CHECKSUMS NEXT upload checksums and process results
+        
+        outfilepath = Path(jaws_output_dir) / jaws_output.OUTPUTS_JSON_FILE
         outputs_json = await self._get_async_path(dtns, outfilepath).download()
         outputs = jaws_output.parse_outputs_json(outputs_json)
         container_files = list(outputs.output_files.keys())
+        # TODO CHECKSUMS include checksums in presigns
+        # TODO CHECKSUMS include checksums in saved job data
+        # TODO CHECKSUMS ensure checksums in S3 match checksums calculated at NERSC 
         presigns = await files_to_urls(container_files)
         return await self.upload_presigned_files(
             job.id,
@@ -762,6 +785,7 @@ class NERSCManager:
             insecure_ssl,
         )
 
+    # TODO CHECKSUMS get crc64s vs md5s
     async def get_uploaded_JAWS_files(self, job: models.Job) -> dict[str, str]:
         """
         Get the list of files that were uploaded to S3 as part of a JAWS job.

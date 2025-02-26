@@ -11,6 +11,7 @@ from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.s3.remote import (
     calculate_etag,
     crc64nvme,
+    crc64nvme_b64,
     download_presigned_url,
     upload_presigned_url,
     FileCorruptionError,
@@ -67,23 +68,28 @@ def test_calculate_etag_fail():
 def test_crc64nvme():
     # checked these with the linux crc32 program
     testset = [
-        (TEST_MT, "0000000000000000"),
-        (TEST_RAND1KB, "e1e92dd9607528ee"),
-        (TEST_RAND10KB, "b8813a5a204f469b"),
+        (TEST_MT, "0000000000000000", "AAAAAAAAAAA="),
+        (TEST_RAND1KB, "e1e92dd9607528ee", "4ekt2WB1KO4="),
+        (TEST_RAND10KB, "b8813a5a204f469b", "uIE6WiBPRps="),
     ]
-    for infile, crc in testset:
+    for infile, crc, b64_crc in testset:
         gotcrc = crc64nvme(infile)
+        gotcrc64 = crc64nvme_b64(infile)
         assert gotcrc.hex() == crc
+        assert gotcrc64 == b64_crc
 
 
 def test_crc64nvme_fail():
     testset = [
         (None, ValueError("infile must exist and be a file")),
-        (TESTDATA, ValueError("infile must exist and be a file")),
+        (TESTDATA, ValueError("infile must exist and be a file")),  # directory
     ]
     for infile, expected in testset:
         with pytest.raises(Exception) as got:
             crc64nvme(infile)
+        assert_exception_correct(got.value, expected)
+        with pytest.raises(Exception) as got:
+            crc64nvme_b64(infile)
         assert_exception_correct(got.value, expected)
 
 

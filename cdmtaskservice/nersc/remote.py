@@ -16,10 +16,36 @@ import sys
 import traceback
 from typing import Any, Callable
 
+from cdmtaskservice.jaws.output import parse_outputs_json, OUTPUTS_JSON_FILE
 from cdmtaskservice.jaws.remote import parse_errors_json
-from cdmtaskservice.s3.remote import process_data_transfer_manifest as s3_pdtm
+from cdmtaskservice.s3.remote import (
+    crc64nvme_b64,
+    process_data_transfer_manifest as s3_pdtm,
+)
 
 # TODO TEST add tests for this file and its dependency functions
+
+
+def calculate_checksums(jaws_output_dir: str, checksum_output_file: str):
+    """
+    Parse the JAWS output.json file and write CRC64/NVME checksums to a result file.
+    """
+    jdir = Path(jaws_output_dir)
+    with open(jdir / OUTPUTS_JSON_FILE) as f:
+        outs = parse_outputs_json(f)
+    res = {"files": [], "stdouts": [], "stderrs": []}
+    # TODO PERF may want to parallelize this with a max process limit
+    for s3_path, result_path in outs.output_files.items():
+        crc = crc64nvme_b64(jdir / result_path)
+        res["files"].append({"crc64nvme": crc, "s3path": s3_path, "respath": result_path})
+    for so in outs.stdout:
+        crc = crc64nvme_b64(jdir / so)
+        res["stdouts"].append({"crc64nvme": crc, "respath": so})
+    for se in outs.stderr:
+        crc = crc64nvme_b64(jdir / se)
+        res["stderrs"].append({"crc64nvme": crc, "respath": se})
+    with open(checksum_output_file, "w") as f:
+        json.dump(res, f, indent=4)
 
 
 def _generate_md5s(path: str, files: list[dict[str, Any]]):
@@ -92,33 +118,34 @@ def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callb
         with open(result_file_path, "w") as f:
             j = {"result": "fail", "job_msg": str(e), "job_trace": jext, "cts_env": cts_env}
             json.dump(j, f, indent=4)
-    cf = Path(result_file_path)
-    callback_file = cf.parent / f"{cf.stem}.callback_error{cf.suffix}"
-    try:
-        # may want some retries here, halting on incorrect job state messages
-        ret = requests.get(callback_url)
-        if ret.status_code < 200 or ret.status_code > 299:
+    if callback_url:
+        cf = Path(result_file_path)
+        callback_file = cf.parent / f"{cf.stem}.callback_error{cf.suffix}"
+        try:
+            # may want some retries here, halting on incorrect job state messages
+            ret = requests.get(callback_url)
+            if ret.status_code < 200 or ret.status_code > 299:
+                failed = True
+                # log callback errors for debugging purposes, service will never see this
+                # since it's written post callback
+                with open(callback_file, "w") as f:
+                    j = {
+                        "result": "fail",
+                        "callback_text": ret.text,
+                        "callback_code": ret.status_code,
+                        "cts_env": cts_env
+                    }
+                    json.dump(j, f, indent=4)
+        except Exception as e:
             failed = True
-            # log callback errors for debugging purposes, service will never see this
-            # since it's written post callback
             with open(callback_file, "w") as f:
                 j = {
                     "result": "fail",
-                    "callback_text": ret.text,
-                    "callback_code": ret.status_code,
-                    "cts_env": cts_env
+                    "callback_msg": str(e),
+                    "callback_trace": traceback.format_exc(),
+                    "cts_env": cts_env,
                 }
                 json.dump(j, f, indent=4)
-    except Exception as e:
-        failed = True
-        with open(callback_file, "w") as f:
-            j = {
-                "result": "fail",
-                "callback_msg": str(e),
-                "callback_trace": traceback.format_exc(),
-                "cts_env": cts_env,
-            }
-            json.dump(j, f, indent=4)
     if failed:
         sys.exit(1)
 
@@ -130,6 +157,7 @@ def main():
     if mode == "manifest":
         _error_wrapper(
             process_data_transfer_manifest,
+            # TODO CHECKSUM remove MD5 stuff
             [os.environ["CTS_MANIFEST_LOCATION"], os.environ.get("CTS_MD5_FILE_LOCATION")],
             resfile,
             callback_url
@@ -144,6 +172,16 @@ def main():
             ],
             resfile,
             callback_url
+        )
+    elif mode == "checksum":
+        _error_wrapper(
+            calculate_checksums,
+            [
+                os.environ["CTS_JAWS_OUTPUT_DIR"],
+                os.environ["CTS_CHECKSUM_FILE_LOCATION"],
+            ],
+            resfile,
+            None,  # expected to be run by the manager as a blocking task for now 
         )
     else:  # Should never happen
         raise ValueError(f"unexpected mode: {mode}")

@@ -93,6 +93,11 @@ def crc64nvme(infile: Path) -> bytes:
     return checksum.to_bytes(8)
 
 
+def crc64nvme_b64(infile: Path) -> str:
+    """Compute the base64 endoded CRC-64/NVME checksum of the contents of the given file"""
+    return base64.b64encode(crc64nvme(infile)).decode()
+
+
 def _check_file(infile: Path):
     if not infile or not infile.expanduser().is_file():
         raise ValueError("infile must exist and be a file")
@@ -136,7 +141,7 @@ async def download_presigned_url(
     except asyncio.TimeoutError as e:
         raise RemoteTimeoutError(f"Timeout downloading to file {outputpath} with timeout {timeout_sec}s"
                            ) from e
-    got_crc = base64.b64encode(crc64nvme(outputpath)).decode()
+    got_crc = crc64nvme_b64(outputpath)
     if crc64nvme_expected and crc64nvme_expected != got_crc:
         outputpath.unlink(missing_ok=True)
         raise FileCorruptionError(
