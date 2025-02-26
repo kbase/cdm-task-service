@@ -271,6 +271,30 @@ class MongoDAO:
             self._FLD_JAWS_RUN_ID: _require_string(run_id, "run_id")
         })
 
+    async def update_job_state_with_cpu_hours(
+        self,
+        job_id: str,
+        current_state: models.JobState,
+        state: models.JobState,
+        time: datetime.datetime,
+        cpu_hours: float | None = None
+    ):
+        """
+        Add output files to a job and update the state.
+        
+        Arguments are as update_job_state except for the addition of:
+        
+        cpu_hours - the job cpu hours, if available.
+        """
+        await self._update_job_state(
+            job_id,
+            state,
+            time,
+            current_state=current_state,
+            # Don't overwrite cpu hours if they exist
+            set_={models.FLD_JOB_CPU_HOURS: cpu_hours} if cpu_hours is not None else {}
+        )
+
     _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
     
     async def add_NERSC_upload_task_id(
@@ -367,6 +391,35 @@ class MongoDAO:
             models.FLD_JOB_TRACEBACK: traceback,
             models.FLD_JOB_LOGPATH: logpath
         })
+    
+    async def set_job_error_with_cpu_hours(
+        self,
+        job_id: str,
+        user_error: str,
+        admin_error: str,
+        state: models.JobState,
+        time: datetime.datetime,
+        traceback: str | None = None,
+        logpath: str | None = None,
+        cpu_hours: float | None = None,
+    ):
+        """
+        Put the job into an error state.
+        
+        Arguments are as set_job_error except for the addition of:
+        
+        cpu_hours - the job cpu hours, if available.
+        """
+        # TODO RETRIES will need to clear the error fields when attempting a retry
+        set_ = {
+            models.FLD_JOB_ERROR: user_error,
+            models.FLD_JOB_ADMIN_ERROR: admin_error,
+            models.FLD_JOB_TRACEBACK: traceback,
+            models.FLD_JOB_LOGPATH: logpath
+        }
+        if cpu_hours is not None:  # Don't overwrite cpu hours if they exist
+            set_[models.FLD_JOB_CPU_HOURS: cpu_hours] = cpu_hours
+        await self._update_job_state(job_id, state, time, set_=set_)
 
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""

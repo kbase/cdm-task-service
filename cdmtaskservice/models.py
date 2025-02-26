@@ -49,6 +49,7 @@ FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
 FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
+FLD_JOB_CPU_HOURS = "cpu_hours"
 FLD_JOB_OUTPUTS = "outputs"
 FLD_JOB_ERROR = "error"
 FLD_JOB_ADMIN_ERROR = "admin_error"
@@ -796,6 +797,14 @@ class Job(BaseModel):
         ],
         description="A list of tuples of (job_state, time_job_state_entered)."
     )]
+    # This is different from the job_input field, which takes a iso8601 time delta,
+    # but I think the inconsistency is warranted. You want to make it easy for people to input
+    # and understand a wide range of times but have a consistent output in a fairly standard
+    # unit.
+    cpu_hours: Annotated[float | None, Field(
+        example=52.4,
+        description="The total CPU hours used by the job, if available.")
+    ] = None
     # May need to assemble jobs manually if path validation is too expensive.
     outputs: list[S3File] | None = None
     error: Annotated[str | None, Field(
