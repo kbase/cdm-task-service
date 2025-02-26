@@ -265,29 +265,35 @@ class NERSCJAWSRunner(JobFlow):
             raise InvalidJobStateError("JAWS run is incomplete")
         res = jaws_client.result(jaws_info)
         if res == jaws_client.JAWSResult.SUCCESS:
-            await self._mongo.update_job_state(
+            await self._mongo.update_job_state_with_cpu_hours(
                 job.id,
                 models.JobState.JOB_SUBMITTED,
                 models.JobState.UPLOAD_SUBMITTING,
-                timestamp.utcdatetime()
+                timestamp.utcdatetime(),
+                cpu_hours=jaws_info["cpu_hours"],
+                
             )
             await self._coman.run_coroutine(self._upload_files(job, jaws_info))
         elif res == jaws_client.JAWSResult.FAILED:
-            await self._mongo.update_job_state(
+            await self._mongo.update_job_state_with_cpu_hours(
                 job.id,
                 models.JobState.JOB_SUBMITTED,
                 models.JobState.ERROR_PROCESSING_SUBMITTING,
-                timestamp.utcdatetime()
+                timestamp.utcdatetime(),
+                cpu_hours=jaws_info["cpu_hours"],
             )
             await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
         elif res == jaws_client.JAWSResult.SYSTEM_ERROR:
-            await self._mongo.set_job_error(
+            # there's no way to force a jaws system error that I'm aware of, will need to
+            # test via unit tests
+            await self._mongo.set_job_error_with_cpu_hours(
                 job.id,
                 "An unexpected error occurred",
                 "JAWS failed to run the job - check the JAWS job logs",
                 models.JobState.ERROR,
                 # TODO TEST will need a way to mock out timestamps
                 timestamp.utcdatetime(),
+                cpu_hours=jaws_info["cpu_hours"],
             )
         else:  # should never happen
             raise ValueError(f"unexpected JAWS result: {res}")
