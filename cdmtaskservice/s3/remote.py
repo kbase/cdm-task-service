@@ -195,7 +195,6 @@ async def upload_presigned_url(
                                ) from e
 
 
-# TODO CHECKSUMS need to update nersc jaws runner to presign including the CRCs
 async def _process_uploads(
     sess: aiohttp.ClientSession,
     root: Path,

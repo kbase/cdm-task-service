@@ -331,11 +331,11 @@ class NERSCJAWSRunner(JobFlow):
     async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
         # This is kind of similar to the method above, not sure if trying to merge is worth it
         
-        async def presign(output_files: list[Path]) -> list[PresignedPost]:
+        async def presign(output_files: list[Path], crc64nvmes: list[str]) -> list[PresignedPost]:
             root = job.job_input.output_dir
             # TODO RELIABILITY config / set expiration time
             paths = S3Paths([os.path.join(root, f) for f in output_files])
-            return await self._s3ext.presign_post_urls(paths)
+            return await self._s3ext.presign_post_urls(paths, crc64nvmes=crc64nvmes)
         
         try:
             # TODO PERF config / set concurrency

@@ -385,6 +385,7 @@ class MongoDAO:
         logpath - the path to any logs for the job.
         """
         # TODO RETRIES will need to clear the error fields when attempting a retry
+        # TODO CODE just call method below w/o cpu hours
         await self._update_job_state(job_id, state, time, set_={
             models.FLD_JOB_ERROR: user_error,
             models.FLD_JOB_ADMIN_ERROR: admin_error,

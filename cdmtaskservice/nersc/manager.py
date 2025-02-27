@@ -297,17 +297,17 @@ class NERSCManager:
         )
         return Path(scratch)
     
-    def _get_job_scratch(self, job_id, perlmutter=False):
+    def _get_job_scratch(self, job_id, perlmutter=False) -> Path:
         sc = self._perlmutter_scratch if perlmutter else self._dtn_scratch
         return sc / self._work_loc / _JOBS_DIR / job_id
     
-    def _get_refdata_scratch(self, refdata_id):
+    def _get_refdata_scratch(self, refdata_id) -> Path:
         return self._dtn_scratch / self._work_loc / _REFDATA_DIR / refdata_id
     
-    def _get_refdata_root(self, refdata_id):
+    def _get_refdata_root(self, refdata_id) -> Path:
         return self._refdata_root / refdata_id
     
-    def _get_relative_refdata_root(self, refdata_id):
+    def _get_relative_refdata_root(self, refdata_id) -> Path:
         return self._work_loc / refdata_id
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
@@ -457,7 +457,7 @@ class NERSCManager:
         mode="manifest",
         error_json_file_location: str = None,
         container_logs_location: str = None,  # this is expected to be present if the above is
-        upload_md5s_file: bool = False,
+        upload_md5s_file: bool = False,  # TDDO CHECKSUMS remove MD5 stuff
         refdata: bool = False
     ):
         if refdata:
@@ -724,7 +724,7 @@ class NERSCManager:
         self,
         job: models.Job,
         jaws_output_dir: Path,
-        files_to_urls: Callable[[list[Path]], Awaitable[list[PresignedPost]]],
+        files_to_urls: Callable[[list[Path], list[str]], Awaitable[list[PresignedPost]]],
         callback_url: str,
         concurrency: int = 10,
         insecure_ssl: bool = False
@@ -736,8 +736,8 @@ class NERSCManager:
         jaws_output_dir - the NERSC output directory of the JAWS job containing the output files,
             manifests, etc.
         files_to_urls - an async function that provides a list of presigned upload urls
-            given relative paths to files. The returned list must be in the same order as the input
-            list.
+            given a list of relative paths to files and a list of their corresponding CRC64/NVME
+            checksums. The returned list must be in the same order as the input list.
         callback_url - the URL to GET as a callback for when the upload is complete.
         concurrency - the number of simultaneous uploads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
@@ -766,19 +766,22 @@ class NERSCManager:
         # May want to make this non-blocking if calculating checksums takes too long
         # Would require another set of job states and another callback URL so try to avoid
         await dtns.run(command)
-        # TODO CHECKSUMS NEXT upload checksums and process results
         
-        outfilepath = Path(jaws_output_dir) / jaws_output.OUTPUTS_JSON_FILE
-        outputs_json = await self._get_async_path(dtns, outfilepath).download()
-        outputs = jaws_output.parse_outputs_json(outputs_json)
-        container_files = list(outputs.output_files.keys())
-        # TODO CHECKSUMS include checksums in presigns
+        checksumpath = rootpath / "upload_checksums.json"
+        checksums = await self._download_json_file_from_NERSC(Machine.dtns, checksumpath)
+        s3_paths = []
+        crc64nvmes = []
+        nersc_rel_paths = []
+        for c in checksums["files"]:
+            s3_paths.append(Path(c["s3path"]))
+            crc64nvmes.append(c["crc64nvme"])
+            nersc_rel_paths.append(c["respath"])
         # TODO CHECKSUMS include checksums in saved job data
         # TODO CHECKSUMS ensure checksums in S3 match checksums calculated at NERSC 
-        presigns = await files_to_urls(container_files)
+        presigns = await files_to_urls(s3_paths, crc64nvmes)
         return await self.upload_presigned_files(
             job.id,
-            [os.path.join(jaws_output_dir, outputs.output_files[f]) for f in container_files],
+            [os.path.join(jaws_output_dir, nrp) for nrp in nersc_rel_paths],
             presigns,
             cburl,
             concurrency,
