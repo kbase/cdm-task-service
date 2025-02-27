@@ -135,7 +135,7 @@ class JobState:
                     )
             # no need to validate the path again
             new_input.append(models.S3FileWithDataID.model_construct(
-                file=m.path, crc64nvme=m.crc64nvme, etag=m.e_tag, data_id=data_id)
+                file=m.path, crc64nvme=m.crc64nvme, data_id=data_id)
             )
         return new_input, meta
 

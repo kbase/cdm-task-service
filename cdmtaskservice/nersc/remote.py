@@ -7,14 +7,13 @@ python versions.
 '''
 
 import asyncio
-import hashlib
 import json
 import os
 from pathlib import Path
 import requests
 import sys
 import traceback
-from typing import Any, Callable
+from typing import Callable
 
 from cdmtaskservice.jaws.output import parse_outputs_json, OUTPUTS_JSON_FILE
 from cdmtaskservice.jaws.remote import parse_errors_json
@@ -48,27 +47,11 @@ def calculate_checksums(jaws_output_dir: str, checksum_output_file: str):
         json.dump(res, f, indent=4)
 
 
-def _generate_md5s(path: str, files: list[dict[str, Any]]):
-    # Maybe could speed this up with parallelization or async? Probably disk limited
-    # Test different approaches if it's taking a long time
-    path2md5 = {}
-    for f in files:
-        with open(f["file"], "rb") as fi:
-            path2md5[f["file"]] = hashlib.file_digest(fi, "md5").hexdigest()
-    with open(path, "w") as f:
-        json.dump(path2md5, f)
-
-
-def process_data_transfer_manifest(
-        manifest_file_path: str,
-        md5_json_file_path: str = None,
-    ):
+def process_data_transfer_manifest(manifest_file_path: str):
     """
     Processes a data transfer manifest file.
     
     manifest_file_path - the path to to the transfer manifest file.
-    md5_json_file_path - an optional path to write a JSON mapping of file path to MD4 for the
-        uploaded files. Only valid with an upload manifest.
     """
     # The manifest should be only used by the CDM task service and so we don't document
     # its structure.
@@ -78,8 +61,6 @@ def process_data_transfer_manifest(
     #    only useful if jobs are reusing the same files, which seems def possible
     with open(manifest_file_path) as f:
         manifest = json.load(f)
-    if md5_json_file_path:  # assume that this is only present for uploads
-        _generate_md5s(md5_json_file_path, manifest["file-transfers"]["files"])
     asyncio.run(s3_pdtm(manifest["file-transfers"]))
     return None
 
@@ -157,8 +138,7 @@ def main():
     if mode == "manifest":
         _error_wrapper(
             process_data_transfer_manifest,
-            # TODO CHECKSUM remove MD5 stuff
-            [os.environ["CTS_MANIFEST_LOCATION"], os.environ.get("CTS_MD5_FILE_LOCATION")],
+            [os.environ["CTS_MANIFEST_LOCATION"]],
             resfile,
             callback_url
         )

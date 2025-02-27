@@ -98,7 +98,6 @@ class Refdata:
             id=str(uuid.uuid4()),  # TODO TEST for testing we'll need to set up a mock for this
             file=s3_path,
             crc64nvme=meta.crc64nvme,
-            etag=meta.e_tag,  # TODO CHECKSUM remove
             unpack=unpack,
             registered_by=user.user,
             registered_on=utcdatetime(),

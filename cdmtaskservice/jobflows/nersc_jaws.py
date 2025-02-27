@@ -374,19 +374,21 @@ class NERSCJAWSRunner(JobFlow):
     
     async def _upload_complete(self, job: models.AdminJobDetails):
         try:
-            md5s = await self._nman.get_uploaded_JAWS_files(job)
-            filemd5s = {os.path.join(job.job_input.output_dir, f): md5 for f, md5 in md5s.items()}
+            checksums = await self._nman.get_uploaded_JAWS_files(job)
+            filechecksums = {
+                os.path.join(job.job_input.output_dir, f): crc for f, crc in checksums.items()
+            }
             # TODO PERF parsing the paths for the zillionth time
             # TODO PERF configure / set concurrency
-            s3objs = await self._s3.get_object_meta(S3Paths(filemd5s.keys()))
+            s3objs = await self._s3.get_object_meta(S3Paths(filechecksums.keys()))
             outfiles = []
             for o in s3objs:
-                if o.e_tag != filemd5s[o.path]:
+                if o.crc64nvme != filechecksums[o.path]:
                     raise ValueError(
-                        f"Expected Etag {filemd5s[o.path]} but got {o.e_tag} for uploaded "
-                        + f"file {o.path}"
+                        f"Expected CRC64/NVME checkusm {filechecksums[o.path]} but got "
+                        + f"{o.crc64nvme} for uploaded file {o.path}"
                     )
-                outfiles.append(models.S3File(file=o.path, etag=o.e_tag))
+                outfiles.append(models.S3File(file=o.path, crc64nvme=o.crc64nvme))
             # TODO DISKSPACE will need to clean up job results @ NERSC
             await self._mongo.add_output_files_to_job(
                 job.id,
