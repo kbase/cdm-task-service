@@ -64,6 +64,12 @@ Metadata  :
   Content-Type: application/octet-stream 
 ```
 
+### Further usage documentation
+
+* The service OpenAPI documentation
+  * https://ci.kbase.us/services/cts/docs
+* Image setup and running documentation / examples:
+  * [./docs/](./docs/)
 
 ## Service Requirements
 
@@ -84,7 +90,7 @@ Metadata  :
 ## Powered by
 
 <a href="https://jaws-docs.readthedocs.io" title="JGI JAWS">
-	<img src="images/JAWS.webp" alt='JGI JAWS' width="200" />
+    <img src="images/JAWS.webp" alt='JGI JAWS' width="200" />
 </a>
 
 ## Development
