@@ -15,8 +15,11 @@ import sys
 import traceback
 from typing import Callable
 
-from cdmtaskservice.jaws.output import parse_outputs_json, OUTPUTS_JSON_FILE
-from cdmtaskservice.jaws.remote import parse_errors_json
+from cdmtaskservice.jaws.remote import ( 
+    parse_errors_json,
+    parse_outputs_json,
+    OUTPUTS_JSON_FILE,
+)
 from cdmtaskservice.s3.remote import (
     crc64nvme_b64,
     process_data_transfer_manifest as s3_pdtm,

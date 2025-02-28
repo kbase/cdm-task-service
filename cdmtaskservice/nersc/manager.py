@@ -27,10 +27,7 @@ from cdmtaskservice.arg_checkers import (
     require_string as _require_string,
     check_num as _check_num,
 )
-from cdmtaskservice.jaws import (
-    wdl,
-    output as jaws_output
-)
+from cdmtaskservice.jaws import wdl
 from cdmtaskservice.jaws.remote import get_filenames_for_container, ERRORS_JSON_FILE
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote

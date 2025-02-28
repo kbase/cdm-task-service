@@ -1,6 +1,6 @@
 # KBase collections example
 
-This example uses the Docker container that is produced by the KBase Collections project..
+This example uses the Docker container that is produced by the KBase Collections project.
 
 ## References
 
