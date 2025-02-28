@@ -10,6 +10,61 @@ Enables running jobs on remote compute from the KBase CDM cluster.
   * The KBase data model
 * CTS: CDM Task Service
 
+## Usage notes
+
+The CTS uses CRC64/NVME checksums on all input and output files for data integrity checks and
+to ensure files do not unexpectedly change over time. As such, all input files in S3 must
+have the checksums stored in their metadata. A user can check this via various methods, but
+here we use the Minio client, `mc`. Assuming the alias for the S3 installation is `local9002`:
+
+```
+$ ./mc stat local9002/test-bucket/test-file-with-checksum
+Name      : test-file-with-checksum
+Date      : 2025-02-26 16:52:49 PST 
+Size      : 8 B    
+ETag      : 1b9554867d35f0d59e4705f6b2712cd1 
+Type      : file 
+Checksum  : CRC64NVME:S8AXmd7A3f8=
+Metadata  :
+  Content-Type: application/octet-stream
+```
+
+Files without the CRC64NVME checksum will be rejected by the service.
+
+To include a checksum on upload with `mc`, use the `--checksum` argument:
+
+```
+./mc cp --checksum crc64nvme tinyfile.crap local9002/test-bucket/test-file-with-checksum
+...yfile.crap: 8 B / 8 B ┃▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓┃ 60 B/s 0s
+```
+
+If a file already exists in S3 but has no checksum, one can be added via a copy:
+
+```
+$ ./mc stat local9002/test-bucket/test-file-no-checksum
+Name      : test-file-no-checksum
+Date      : 2025-02-26 16:52:33 PST 
+Size      : 8 B    
+ETag      : 1b9554867d35f0d59e4705f6b2712cd1 
+Type      : file 
+Metadata  :
+  Content-Type: application/octet-stream 
+
+~$ ./mc cp --checksum crc64nvme local9002/test-bucket/test-file-no-checksum local9002/test-bucket/test-file-now-with-more-checksums
+...o-checksum: 8 B / 8 B ┃▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓┃ 37 B/s 0s
+
+~$ ./mc stat local9002/test-bucket/test-file-now-with-more-checksums
+Name      : test-file-now-with-more-checksums
+Date      : 2025-02-26 16:57:06 PST 
+Size      : 8 B    
+ETag      : 1b9554867d35f0d59e4705f6b2712cd1 
+Type      : file 
+Checksum  : CRC64NVME:S8AXmd7A3f8=
+Metadata  :
+  Content-Type: application/octet-stream 
+```
+
+
 ## Service Requirements
 
 * Python 3.11+
@@ -20,14 +75,11 @@ Enables running jobs on remote compute from the KBase CDM cluster.
 ### S3 requirements
 
 * Path style access is required.
-* Any objects provided to the service that were created with multipart uploads **must** use the
-  same part size for all parts except the last.
 * The service does not support objects encrypted with customer supplied keys or with the
   AWS key management service.
-* The provided credentials must enable listing all buckets, as the service performs that operation
-  to check the host and credentials on startup.
-* If using Minio, the minimum version is `2024-10-02T17-50-41Z` and the server must be run
-  in `--compat` mode.
+* The provided credentials must enable listing readable buckets, as the service performs that
+  operation to check the host and credentials on startup.
+* If using Minio, the minimum version is `2025-02-07T23-21-09Z`.
   
 ## Powered by
 
