@@ -38,11 +38,8 @@ from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathS
 FLD_IMAGE_NAME = "name"
 FLD_IMAGE_DIGEST = "digest"
 FLD_IMAGE_TAG = "tag"
-FLD_JOB_ID = "id"
 FLD_JOB_JOB_INPUT = "job_input"
 FLD_JOB_INPUT_RUNTIME = "runtime"
-FLD_JOB_TRANS_TIMES = "transition_times"
-FLD_JOB_STATE = "state"
 FLD_JOB_NERSC_DETAILS = "nersc_details"
 FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
 FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
@@ -51,20 +48,21 @@ FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_CPU_HOURS = "cpu_hours"
 FLD_JOB_OUTPUTS = "outputs"
-FLD_JOB_ERROR = "error"
-FLD_JOB_ADMIN_ERROR = "admin_error"
-FLD_JOB_TRACEBACK = "traceback"
 FLD_JOB_LOGPATH = "logpath"
-FLD_REFDATA_ID = "id"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
-FLD_REFDATA_TRANS_TIMES = "transition_times"
-FLD_REFDATA_STATE = "state"
-FLD_REFDATA_ERROR = "error"
-FLD_REFDATA_ADMIN_ERROR = "admin_error"
-FLD_REFDATA_TRACEBACK = "traceback"
 FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
+# Fields that are shared between multiple models for consistency
+# Currently refdata & jobs
+FLD_COMMON_ID = "id"
+FLD_COMMON_STATE = "state"
+FLD_COMMON_TRANS_TIMES = "transition_times"
+FLD_COMMON_ERROR = "error"
+FLD_COMMON_ADMIN_ERROR = "admin_error"
+FLD_COMMON_TRACEBACK = "traceback"
+FLD_COMMON_STATE_TRANSITION_STATE = "state"
+FLD_COMMON_STATE_TRANSITION_TIME = "time"
 
 S3_PATH_MIN_LENGTH = 3 + 1 + 1  # 3 for bucket + / + 1 char
 S3_PATH_MAX_LENGTH = 63 + 1 + 1024  # 63 for bucket + / + 1024 bytes
@@ -690,22 +688,6 @@ class JobInput(BaseModel):
         return self.cpus * self.num_containers * self.runtime.total_seconds()
 
 
-class JobState(str, Enum):
-    """
-    The state of a job.
-    """
-    CREATED = "created"
-    DOWNLOAD_SUBMITTED = "download_submitted"
-    JOB_SUBMITTING = "job_submitting"
-    JOB_SUBMITTED = "job_submitted"
-    UPLOAD_SUBMITTING = "upload_submitting"
-    UPLOAD_SUBMITTED = "upload_submitted"
-    COMPLETE = "complete"
-    ERROR_PROCESSING_SUBMITTING = "error_processing_submitting"
-    ERROR_PROCESSING_SUBMITTED = "error_processing_submitted"
-    ERROR = "error"
-
-
 class RegistrationInfo(BaseModel):
     """
     Information about when and by whom something was registered.
@@ -762,6 +744,33 @@ class Image(RegistrationInfo):
         return f"{self.name}@{self.digest}"
 
 
+class JobState(str, Enum):
+    """
+    The state of a job.
+    """
+    CREATED = "created"
+    DOWNLOAD_SUBMITTED = "download_submitted"
+    JOB_SUBMITTING = "job_submitting"
+    JOB_SUBMITTED = "job_submitted"
+    UPLOAD_SUBMITTING = "upload_submitting"
+    UPLOAD_SUBMITTED = "upload_submitted"
+    COMPLETE = "complete"
+    ERROR_PROCESSING_SUBMITTING = "error_processing_submitting"
+    ERROR_PROCESSING_SUBMITTED = "error_processing_submitted"
+    ERROR = "error"
+
+
+class JobStateTransition(BaseModel):
+    """
+    Denotes the new state and the entry time when a state change occurs.
+    """
+    # outgoing only, no validators
+    state: JobState
+    time: Annotated[datetime.datetime, Field(
+        example="2024-10-24T22:35:40Z",
+        description="The time at which the new state was entered."
+    )]
+
 class Job(BaseModel):
     """
     Information about a job.
@@ -775,13 +784,13 @@ class Job(BaseModel):
     image: Image
     state: Annotated[JobState, Field(example=JobState.COMPLETE.value)]
     # hmm, should this be a dict vs a list of tuples?
-    transition_times: Annotated[list[tuple[JobState, datetime.datetime]], Field(
+    transition_times: Annotated[list[JobStateTransition], Field(
         example=[
-            (JobState.CREATED.value, "2024-10-24T22:35:40Z"),
-            (JobState.UPLOAD_SUBMITTED.value, "2024-10-24T22:35:41Z"),
-            (JobState.JOB_SUBMITTING, "2024-10-24T22:47:67Z"),
+            {"state": JobState.CREATED.value, "time": "2024-10-24T22:35:40Z"},
+            {"state": JobState.UPLOAD_SUBMITTED.value, "time": "2024-10-24T22:35:41Z"},
+            {"state": JobState.JOB_SUBMITTING, "time": "2024-10-24T22:47:67Z"},
         ],
-        description="A list of tuples of (job_state, time_job_state_entered)."
+        description="A list of job state transitions."
     )]
     # This is different from the job_input field, which takes a iso8601 time delta,
     # but I think the inconsistency is warranted. You want to make it easy for people to input
@@ -862,6 +871,18 @@ class ReferenceDataState(str, Enum):
     ERROR = "error"
 
 
+class RefDataStateTransition(BaseModel):
+    """
+    Denotes the new state and the entry time when a state change occurs.
+    """
+    # outgoing only, no validators
+    state: ReferenceDataState
+    time: Annotated[datetime.datetime, Field(
+        example="2024-10-24T22:35:40Z",
+        description="The time at which the new state was entered."
+    )]
+
+
 class ReferenceDataStatus(BaseModel):
     """
     Status of a reference data staging process at a particular remote compute location.
@@ -872,12 +893,15 @@ class ReferenceDataStatus(BaseModel):
         example=ReferenceDataState.COMPLETE.value,
         description="The state of the reference data staging process."
     )]
-    transition_times: Annotated[list[tuple[ReferenceDataState, datetime.datetime]], Field(
+    transition_times: Annotated[list[RefDataStateTransition], Field(
             example=[
-                (ReferenceDataState.CREATED.value, "2024-10-24T22:35:40Z"),
-                (ReferenceDataState.DOWNLOAD_SUBMITTED.value, "2024-10-24T22:35:41Z"),
+                {"state": ReferenceDataState.CREATED.value, "time": "2024-10-24T22:35:40Z"},
+                {
+                    "state": ReferenceDataState.DOWNLOAD_SUBMITTED.value,
+                    "time": "2024-10-24T22:35:41Z"
+                },
             ],
-            description="A list of tuples of (staging_state, time_staging_state_entered)."
+            description="A list refdata state transitions."
         )
     ]
     error: Annotated[str | None, Field(
