@@ -65,10 +65,10 @@ class MongoDAO:
         ])
         # Only need and want a single unique index for jobs so they can be sharded
         await self._col_jobs.create_indexes([
-            IndexModel([(models.FLD_JOB_ID, ASCENDING)], unique=True)
+            IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True)
         ])
         await self._col_refdata.create_indexes([
-            IndexModel([(models.FLD_REFDATA_ID, ASCENDING)], unique=True),
+            IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
             # Non unique as files can be overwritten
             IndexModel([(models.FLD_REFDATA_FILE, ASCENDING)]),
         ])
@@ -171,7 +171,9 @@ class MongoDAO:
         job_id - the job ID.
         as_admin - get additional details about the job.
         """
-        doc = await self._col_jobs.find_one({models.FLD_JOB_ID: _require_string(job_id, "job_id")})
+        doc = await self._col_jobs.find_one(
+            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
+        )
         if not doc:
             raise NoSuchJobError(f"No job with ID '{job_id}' exists")
         # TODO PERF build up the job piece by piece to skip S3 path validation
@@ -187,18 +189,21 @@ class MongoDAO:
         set_: dict[str, Any] | None = None,
         current_state: models.JobState | None = None,
     ):
-        query = {models.FLD_JOB_ID: _require_string(job_id, "job_id")}
+        query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
         if current_state:
-            query[models.FLD_JOB_STATE] = current_state.value
+            query[models.FLD_COMMON_STATE] = current_state.value
         res = await self._col_jobs.update_one(
             query,
             {
                 "$push": (push if push else {}) | {
-                    models.FLD_JOB_TRANS_TIMES:
-                          (_not_falsy(state, "state").value, _not_falsy(time, "time")
-                    )
+                    models.FLD_COMMON_TRANS_TIMES:
+                        {
+                            models.FLD_COMMON_STATE_TRANSITION_STATE:
+                               _not_falsy(state, "state").value,
+                            models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
+                        }
                 },
-                "$set": (set_ if set_ else {}) | {models.FLD_JOB_STATE: state.value}
+                "$set": (set_ if set_ else {}) | {models.FLD_COMMON_STATE: state.value}
             },
         )
         if not res.matched_count:
@@ -384,14 +389,9 @@ class MongoDAO:
         traceback - the error traceback.
         logpath - the path to any logs for the job.
         """
-        # TODO RETRIES will need to clear the error fields when attempting a retry
-        # TODO CODE just call method below w/o cpu hours
-        await self._update_job_state(job_id, state, time, set_={
-            models.FLD_JOB_ERROR: user_error,
-            models.FLD_JOB_ADMIN_ERROR: admin_error,
-            models.FLD_JOB_TRACEBACK: traceback,
-            models.FLD_JOB_LOGPATH: logpath
-        })
+        await self.set_job_error_with_cpu_hours(
+            job_id, user_error, admin_error, state, time, traceback=traceback, logpath=logpath
+        )
     
     async def set_job_error_with_cpu_hours(
         self,
@@ -413,9 +413,9 @@ class MongoDAO:
         """
         # TODO RETRIES will need to clear the error fields when attempting a retry
         set_ = {
-            models.FLD_JOB_ERROR: user_error,
-            models.FLD_JOB_ADMIN_ERROR: admin_error,
-            models.FLD_JOB_TRACEBACK: traceback,
+            models.FLD_COMMON_ERROR: user_error,
+            models.FLD_COMMON_ADMIN_ERROR: admin_error,
+            models.FLD_COMMON_TRACEBACK: traceback,
             models.FLD_JOB_LOGPATH: logpath
         }
         if cpu_hours is not None:  # Don't overwrite cpu hours if they exist
@@ -459,7 +459,7 @@ class MongoDAO:
         as_admin - get additional details about the reference data.
         """
         doc = await self._col_refdata.find_one(
-            {models.FLD_REFDATA_ID: _require_string(refdata_id, "refdata_id")}
+            {models.FLD_COMMON_ID: _require_string(refdata_id, "refdata_id")}
         )
         if not doc:
             raise NoSuchReferenceDataError(f"No reference data with ID '{refdata_id}' exists")
@@ -497,20 +497,24 @@ class MongoDAO:
         sub = f"{models.FLD_REFDATA_STATUSES}."
         subs = f"{sub}$."
         query = {
-            models.FLD_REFDATA_ID: _require_string(refdata_id, "refdata_id"),
+            models.FLD_COMMON_ID: _require_string(refdata_id, "refdata_id"),
             f"{sub}{models.FLD_REFDATA_CLUSTER}": _not_falsy(cluster, "cluster").value
         }
         set_ = {f"{subs}{k}": v for k, v in set_.items()} if set_ else {}
         push = {f"{subs}{k}": v for k, v in push.items()} if push else {}
         if current_state:
-            query[f"{sub}{models.FLD_REFDATA_STATE}"] = current_state.value
+            query[f"{sub}{models.FLD_COMMON_STATE}"] = current_state.value
         res = await self._col_refdata.update_one(
             query,
             {
-                "$push": push | {f"{subs}{models.FLD_JOB_TRANS_TIMES}":
-                        (_not_falsy(state, "state").value, _not_falsy(time, "time"))
+                "$push": push | {f"{subs}{models.FLD_COMMON_TRANS_TIMES}":
+                    {
+                        models.FLD_COMMON_STATE_TRANSITION_STATE:
+                           _not_falsy(state, "state").value,
+                        models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
+                    }
                 },
-                "$set": set_ | {f"{subs}{models.FLD_REFDATA_STATE}": state.value}
+                "$set": set_ | {f"{subs}{models.FLD_COMMON_STATE}": state.value}
             },
         )
         if not res.matched_count:
@@ -591,9 +595,9 @@ class MongoDAO:
         """
         # TODO RETRIES will need to clear the error fields when attempting a retry
         await self._update_refdata_state(cluster, refdata_id, state, time, set_={
-            models.FLD_REFDATA_ERROR: user_error,
-            models.FLD_REFDATA_ADMIN_ERROR: admin_error,
-            models.FLD_REFDATA_TRACEBACK: traceback,
+            models.FLD_COMMON_ERROR: user_error,
+            models.FLD_COMMON_ADMIN_ERROR: admin_error,
+            models.FLD_COMMON_TRACEBACK: traceback,
         })
 
 

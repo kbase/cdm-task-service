@@ -102,9 +102,9 @@ class JobState:
             user=user.user,
             image=image,
             state=models.JobState.CREATED,
-            transition_times=[
-                (models.JobState.CREATED, utcdatetime())
-            ]
+            transition_times=[models.JobStateTransition(
+                state=models.JobState.CREATED, time=utcdatetime()
+            )]
         )
         await self._mongo.save_job(job)
         # Pass in the meta to avoid potential race conditions w/ etag changes

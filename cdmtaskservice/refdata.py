@@ -88,7 +88,9 @@ class Refdata:
             statuses.append(models.ReferenceDataStatus(
                 cluster=c,
                 state=models.ReferenceDataState.CREATED,
-                transition_times=[(models.ReferenceDataState.CREATED, utcdatetime())]
+                transition_times=[models.RefDataStateTransition(
+                    state=models.ReferenceDataState.CREATED, time=utcdatetime()
+                )]
             ))
         if not statuses:
             # TODO REFDATA add a way to restart refdata staging and just save to mongo
