@@ -69,8 +69,6 @@ FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
 S3_PATH_MIN_LENGTH = 3 + 1 + 1  # 3 for bucket + / + 1 char
 S3_PATH_MAX_LENGTH = 63 + 1 + 1024  # 63 for bucket + / + 1024 bytes
 CRC64NVME_B64ENC_LENGTH=12
-ETAG_MIN_LENGTH = 32  # TODO CHEcKSUMS remove
-ETAG_MAX_LENGTH = 32 + 1 + 5  # 32 for the md5ish + dash + up to 10000 parts = 38
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
@@ -448,17 +446,6 @@ class S3File(BaseModel):
         min_length=CRC64NVME_B64ENC_LENGTH,
         max_length=CRC64NVME_B64ENC_LENGTH,
     )] = None
-    # Don't bother validating the etag beyond length, it'll be compared to the file etag on 
-    # the way in and will come from S3 on the way out
-    # TODO CHECKSUM remove
-    etag: Annotated[str | None, Field(
-        example="a70a4d1732484e75434df2c08570e1b2-3",
-        description="The S3 e-tag of the file. Weak e-tags are not supported. "
-            + "If provided on input it is checked against the "
-            + "target file e-tag before proceeding. Always provided with output.",
-        min_length=ETAG_MIN_LENGTH,
-        max_length=ETAG_MAX_LENGTH,
-    )] = None
     
     @field_validator("file", mode="before")
     @classmethod
@@ -560,7 +547,6 @@ class JobInput(BaseModel):
                 "file": "mybucket/foo/bat",
                 "data_id": "GCA_000146795.3",
                 "crc64name": "4ekt2WB1KO4=",
-                "etag": "a70a4d1732484e75434df2c08570e1b2-3"  # TODO CHECKSUM remove
             }
         ],
         description="The S3 input files for the job, either a list of file paths as strings or a "

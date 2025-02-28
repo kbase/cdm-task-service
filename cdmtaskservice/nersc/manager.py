@@ -60,7 +60,7 @@ _SEC_PER_GB = 2 * 60  # may want to make this configurable
 _JOB_FILES = Path("files")
 _JOB_MANIFESTS = Path("manifests")
 _MANIFEST_FILE_PREFIX = "manifest-"
-_MD5_JSON_FILE_NAME = "upload_md5s.json"
+_CRC64NVME_CHECKSUMS_JSON_FILE_NAME = "upload_checksums.json"
 _JOB_LOGS = "logs"
 _JOBS_DIR = "jobs"
 _REFDATA_DIR = "refdata"
@@ -89,7 +89,6 @@ _PYTHON_LOAD_HACK = "module use /global/common/software/nersc/pe/modulefiles/lat
 _RUN_CTS_REMOTE_CODE_FILENAME = "run_cts_remote_code.sh"
 # Might want to make a shared constants module for all these env var names and update this
 # file and remote.py
-# TODO CHECKSUM remove md5 stuff
 _RUN_CTS_REMOTE_CODE = f"""
 #!/usr/bin/env bash
 
@@ -101,7 +100,6 @@ export CTS_MODE=$CTS_MODE
 export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
 export CTS_ERRORS_JSON_LOCATION=$CTS_ERRORS_JSON_LOCATION
 export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
-export CTS_MD5_FILE_LOCATION=$CTS_MD5_FILE_LOCATION
 export CTS_JAWS_OUTPUT_DIR=$CTS_JAWS_OUTPUT_DIR
 export CTS_CHECKSUM_FILE_LOCATION=$CTS_CHECKSUM_FILE_LOCATION
 export CTS_RESULT_FILE_LOCATION=$CTS_RESULT_FILE_LOCATION
@@ -113,7 +111,6 @@ echo "CTS_MODE=[$CTS_MODE]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
 echo "CTS_ERRORS_JSON_LOCATION=[$CTS_ERRORS_JSON_LOCATION]"
 echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
-echo "CTS_MD5_FILE_LOCATION=[$CTS_MD5_FILE_LOCATION]"
 echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]
 echo "CTS_CHECKSUM_FILE_LOCATION=[$CTS_CHECKSUM_FILE_LOCATION]
 echo "CTS_RESULT_FILE_LOCATION=[$CTS_RESULT_FILE_LOCATION]"
@@ -444,7 +441,7 @@ class NERSCManager:
         maniio = self._create_upload_manifest(
             remote_files, presigned_urls, concurrency, insecure_ssl)
         return await self._process_manifest(
-            maniio, job_id, callback_url, "upload_manifest.json", "upload", upload_md5s_file=True
+            maniio, job_id, callback_url, "upload_manifest.json", "upload"
         )
     
     async def _process_manifest(
@@ -457,7 +454,6 @@ class NERSCManager:
         mode="manifest",
         error_json_file_location: str = None,
         container_logs_location: str = None,  # this is expected to be present if the above is
-        upload_md5s_file: bool = False,  # TDDO CHECKSUMS remove MD5 stuff
         refdata: bool = False
     ):
         if refdata:
@@ -479,8 +475,6 @@ class NERSCManager:
             f"export SCRATCH=$SCRATCH; ",
             f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
         ]
-        if upload_md5s_file:  # TODO CHECKSUM remove md5 stuff
-            command.insert(2, f"export CTS_MD5_FILE_LOCATION={rootpath / _MD5_JSON_FILE_NAME}; ")
         if error_json_file_location:
             command.insert(2, f"export CTS_ERRORS_JSON_LOCATION={error_json_file_location}; ")
             command.insert(3, f"export CTS_CONTAINER_LOGS_LOCATION={container_logs_location}; ")
@@ -752,13 +746,14 @@ class NERSCManager:
         cli = self._client_provider()
         dtns = await cli.compute(Machine.dtns)
         rootpath = self._get_job_scratch(job.id)
+        checksum_file = _CRC64NVME_CHECKSUMS_JSON_FILE_NAME
         command = [  # similar to the command in _process_manifest
             f"{_DT_WORKAROUND}; ",
             f"export CTS_MODE=checksum; ",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_RESULT_FILE_LOCATION={rootpath / 'upload_checksums_result.json'}; ",
             f"export CTS_JAWS_OUTPUT_DIR={jaws_output_dir}; ",
-            f"export CTS_CHECKSUM_FILE_LOCATION={rootpath / 'upload_checksums.json'}; ",
+            f"export CTS_CHECKSUM_FILE_LOCATION={rootpath / checksum_file}; ",
             f"export SCRATCH=$SCRATCH; ",
             f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
         ]
@@ -767,7 +762,7 @@ class NERSCManager:
         # Would require another set of job states and another callback URL so try to avoid
         await dtns.run(command)
         
-        checksumpath = rootpath / "upload_checksums.json"
+        checksumpath = rootpath / checksum_file
         checksums = await self._download_json_file_from_NERSC(Machine.dtns, checksumpath)
         s3_paths = []
         crc64nvmes = []
@@ -776,8 +771,6 @@ class NERSCManager:
             s3_paths.append(Path(c["s3path"]))
             crc64nvmes.append(c["crc64nvme"])
             nersc_rel_paths.append(c["respath"])
-        # TODO CHECKSUMS include checksums in saved job data
-        # TODO CHECKSUMS ensure checksums in S3 match checksums calculated at NERSC 
         presigns = await files_to_urls(s3_paths, crc64nvmes)
         return await self.upload_presigned_files(
             job.id,
@@ -788,20 +781,21 @@ class NERSCManager:
             insecure_ssl,
         )
 
-    # TODO CHECKSUMS get crc64s vs md5s
     async def get_uploaded_JAWS_files(self, job: models.Job) -> dict[str, str]:
         """
-        Get the list of files that were uploaded to S3 as part of a JAWS job.
+        Get the list of files that were uploaded to S3 as part of a successful JAWS job.
         
         Returns a dict of file paths relative to the output directory of a container to their
-        MD5s.
+        CRC64/NVME checksums.
         
         Expects that the upload_JAWS_job_files function has been run, and will error otherwise.
         """
         _not_falsy(job, "job")
-        path = self._get_job_scratch(job.id) / _MD5_JSON_FILE_NAME
-        file_to_md5 = await self._download_json_file_from_NERSC(Machine.dtns, path)
-        return {jaws_output.get_relative_file_path(f): md5 for f, md5 in file_to_md5.items()}
+        path = self._get_job_scratch(job.id) / _CRC64NVME_CHECKSUMS_JSON_FILE_NAME
+        # This uploads the same file from NERSC again. We could put the results in a temporary DB
+        # collection if it turns out to be too expensive. YAGNI 
+        checksums = await self._download_json_file_from_NERSC(Machine.dtns, path)
+        return {c["s3path"]: c["crc64nvme"] for c in checksums["files"]}
 
     async def upload_JAWS_log_files_on_error(
         self,
