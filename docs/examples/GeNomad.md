@@ -29,8 +29,11 @@ Prior to running the image it must be
 [registered in the CTS by an admin](../admin_image_setup.md). GN requires refdata - see the
 GN instructions for how to obtain it.
 
-The image can be run using the [OpenAPI UI](https://ci.kbase.us/services/cts/docs#/Jobs/submit_job_jobs__post)
+The image can be run using the
+[OpenAPI UI](https://ci.kbase.us/services/cts/docs#/Jobs/submit_job_jobs__post)
 or any software capable of making HTTP requests, like `curl` or Python's `request` library.
+Note that the OpenAPI UI renderer may crash your browser for jobs with large number of input
+or output files.
 
 Here we show an example using `requests` in an `ipython` terminal.
 
@@ -104,6 +107,10 @@ Out[4]: {'job_id': '490f83be-e880-4457-8647-8f9a55c56c54'}
     * `/ref_data` is set arbitrarily by `refdata_mount_point`.
     * `genomad_db` is coming from the structure of the GN supplied reference data
       archive, which internally stores all the reference data in that directory.
+* `input_files` contains the S3 paths of the files to be provided to the containers. Rather
+  than a literal string, each file may also be represented as a dictionary with the file path
+  and a CRC64/NVME checksum of the file to ensure the file doesn't change between the last time
+  it was checked and job creation. See the OpenAPI documentation for details.
 * `output_dir` determines where the GN output files will be placed in S3.
 * The job ID can be used to track progress of the job via the service API or OpenAPI UI.
    
