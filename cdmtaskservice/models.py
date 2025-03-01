@@ -48,6 +48,7 @@ FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_CPU_HOURS = "cpu_hours"
 FLD_JOB_OUTPUTS = "outputs"
+FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
 FLD_JOB_LOGPATH = "logpath"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
@@ -782,6 +783,7 @@ class Job(BaseModel):
     job_input: JobInput
     user: Annotated[str, Field(example="myuserid", description="The user that ran the job.")]
     image: Image
+    input_file_count: Annotated[int, Field(example=42, description="The number of input files.")]
     state: Annotated[JobState, Field(example=JobState.COMPLETE.value)]
     # hmm, should this be a dict vs a list of tuples?
     transition_times: Annotated[list[JobStateTransition], Field(
@@ -802,6 +804,9 @@ class Job(BaseModel):
     ] = None
     # May need to assemble jobs manually if path validation is too expensive.
     outputs: list[S3File] | None = None
+    output_file_count: Annotated[int | None, Field(
+        example=24, description="The number of output files, if available."
+    )] = None
     error: Annotated[str | None, Field(
         example="The front fell off",
         description="A description of the error that occurred."

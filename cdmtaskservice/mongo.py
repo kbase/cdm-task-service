@@ -365,7 +365,10 @@ class MongoDAO:
         """
         out = [o.model_dump() for o in _not_falsy(output, "output")]
         await self._update_job_state(
-            job_id, state, time, current_state=current_state, set_={models.FLD_JOB_OUTPUTS: out}
+            job_id, state, time, current_state=current_state, set_={
+                models.FLD_JOB_OUTPUTS: out,
+                models.FLD_JOB_OUTPUT_FILE_COUNT: len(out),
+            }
         )
 
     async def set_job_error(

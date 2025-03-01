@@ -101,6 +101,7 @@ class JobState:
             job_input=ji,
             user=user.user,
             image=image,
+            input_file_count=len(new_input),
             state=models.JobState.CREATED,
             transition_times=[models.JobStateTransition(
                 state=models.JobState.CREATED, time=utcdatetime()
