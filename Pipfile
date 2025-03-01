@@ -5,7 +5,7 @@ name = "pypi"
 
 [packages]
 aiobotocore = "==2.20.0"
-aiohttp = "==3.11.11"
+aiohttp = "==3.11.13"
 awscrt = "==0.23.10"
 bidict = "==0.23.1"
 cacheout = "==0.16.0"
