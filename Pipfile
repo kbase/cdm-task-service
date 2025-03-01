@@ -21,7 +21,7 @@ uvicorn = {version = "==0.34.0", extras = ["standard"]}
 
 [dev-packages]
 # for debugging
-boto3 = "==1.36.21"
+boto3 = "==1.37.4"
 coverage = "==7.6.10"
 ipython = "==8.32.0"
 pytest = "==8.3.4"
