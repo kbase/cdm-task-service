@@ -155,7 +155,7 @@ class MongoDAO:
     async def save_job(self, job: models.Job):
         """ Save a job. Job IDs are expected to be unique."""
         _not_falsy(job, "job")
-        jobd = job.model_dump()
+        jobd = job.model_dump(exclude_none=True)
         jobi = jobd[models.FLD_JOB_JOB_INPUT]
         jobi[models.FLD_JOB_INPUT_RUNTIME] = jobi[models.FLD_JOB_INPUT_RUNTIME].total_seconds()
         # don't bother checking for duplicate key exceptions since the service is supposed
@@ -416,8 +416,8 @@ class MongoDAO:
         """
         # TODO RETRIES will need to clear the error fields when attempting a retry
         set_ = {
-            models.FLD_COMMON_ERROR: user_error,
-            models.FLD_COMMON_ADMIN_ERROR: admin_error,
+            models.FLD_COMMON_ERROR: _require_string(user_error, "user_error"),
+            models.FLD_COMMON_ADMIN_ERROR: _require_string(admin_error, "admin_error"),
             models.FLD_COMMON_TRACEBACK: traceback,
             models.FLD_JOB_LOGPATH: logpath
         }
@@ -598,8 +598,8 @@ class MongoDAO:
         """
         # TODO RETRIES will need to clear the error fields when attempting a retry
         await self._update_refdata_state(cluster, refdata_id, state, time, set_={
-            models.FLD_COMMON_ERROR: user_error,
-            models.FLD_COMMON_ADMIN_ERROR: admin_error,
+            models.FLD_COMMON_ERROR: _require_string(user_error, "user_error"),
+            models.FLD_COMMON_ADMIN_ERROR: _require_string(admin_error, "admin_error"),
             models.FLD_COMMON_TRACEBACK: traceback,
         })
 
