@@ -4,13 +4,13 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-aiobotocore = "==2.20.0"
-aiohttp = "==3.11.11"
+aiobotocore = "==2.21.0"
+aiohttp = "==3.11.13"
 awscrt = "==0.23.10"
 bidict = "==0.23.1"
 cacheout = "==0.16.0"
 docker-image-py = "==0.1.13"
-fastapi = {version = "==0.115.8", extras = ["standard"]}
+fastapi = {version = "==0.115.11", extras = ["standard"]}
 jinja-cli = "==1.2.2"
 marisa-trie = "==1.2.1"
 motor = "==3.7.0"
@@ -21,9 +21,9 @@ uvicorn = {version = "==0.34.0", extras = ["standard"]}
 
 [dev-packages]
 # for debugging
-boto3 = "==1.36.21"
-coverage = "==7.6.10"
-ipython = "==8.32.0"
+boto3 = "==1.37.4"
+coverage = "==7.6.12"
+ipython = "==8.33.0"
 pytest = "==8.3.4"
 pytest-asyncio = "==0.25.3"
 pytest-cov = "==6.0.0"
