@@ -139,6 +139,7 @@ _ANN_JOB_ID = Annotated[str, FastPath(
 @ROUTER_JOBS.get(
     "/{job_id}",
     response_model=models.Job,
+    response_model_exclude_none=True,
     summary="Get a job",
     description="Get a job. Only the submitting user may view the job."
 )
@@ -345,6 +346,7 @@ async def create_refdata(
 @ROUTER_ADMIN.get(
     "/jobs/{job_id}",
     response_model=models.AdminJobDetails,
+    response_model_exclude_none=True,
     summary="Get a job as an admin",
     description="Get any job, regardless of ownership, with additional details about the job run."
 )
