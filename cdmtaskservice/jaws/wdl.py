@@ -274,7 +274,7 @@ def _process_parameter(
             case ParameterType.MANIFEST_FILE:  # implies manifest file is not None
                 param = _handle_manifest(job, manifest, param.get_flag())
             case ParameterType.CONTAINTER_NUMBER:
-                param = _handle_container_num(param.get_flag(), container_num)
+                param = _handle_container_num(param, container_num)
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
@@ -283,9 +283,12 @@ def _process_parameter(
     return [param] if as_list and not isinstance(param, list) else param
 
 
-def _handle_container_num(flag: str | None, container_num: int) -> str | list[str]:
+def _handle_container_num(p: Parameter, container_num: int) -> str | list[str]:
     # similar to the function below
-    cn = str(container_num)
+    pre = p.container_num_prefix if p.container_num_prefix else ""
+    suf = p.container_num_suffix if p.container_num_suffix else ""
+    cn = f"{pre}{container_num}{suf}"
+    flag = p.get_flag()
     if flag:
         if flag.endswith("="):
             # TODO TEST not sure if this will work

@@ -363,6 +363,8 @@ async def _run_tasks(
 # These arg checkers are duplicated in other places, but we want to minimize the number of files
 # we have to transfer to the remote cluster and they're simple enough that duplication isn't
 # a huge problem
+# TODO CODE the above is now outdated, we're pushing the arg checkers code to nersc.
+#           remove the arg checkers below
 
 
 def _require_string(string: str, name: str):
