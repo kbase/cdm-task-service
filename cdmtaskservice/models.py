@@ -207,6 +207,14 @@ class Parameter(BaseModel):
         min_length=1,
         max_length=1000,
     )] = None
+    container_num_prefix: Annotated[ArgumentString | None, Field(
+        example="/output/job-",
+        description="A string that will be prepended to the container number."
+    )] = None
+    container_num_suffix: Annotated[ArgumentString | None, Field(
+        example="_output",
+        description="A string that will be appended to the container number."
+    )] = None
     
     def get_flag(self):
         """

@@ -264,7 +264,7 @@ class NERSCManager:
                 deps = " ".join(
                     # may need to do something else if module doesn't have __version__
                     [f"{mod.__name__}=={mod.__version__}" for mod in _PIP_DEPENDENCIES])
-                logr.info(f"Installing pip mudules @ NERSC: {deps}")
+                logr.info(f"Installing pip modules @ NERSC: {deps}")
                 command = (
                     f"{_DT_WORKAROUND}; "
                     + f"{_PYTHON_LOAD_HACK}; "
