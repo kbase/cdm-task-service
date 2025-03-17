@@ -49,6 +49,10 @@ _AUTH = KBaseHTTPBearer()
 _SERVICE_USER = "***SERVICE***"
 
 
+# TODO EXAMPLES update example to examples when fastapi Path and Query work correctly with them
+#               currently the example doesn't show up in docs with `examples`
+#               https://github.com/fastapi/fastapi/discussions/11137
+
 def _ensure_admin(user: kb_auth.KBaseUser, err_msg: str):
     if user.admin_perm != kb_auth.AdminPermission.FULL:
         raise UnauthorizedError(err_msg)
@@ -57,17 +61,17 @@ def _ensure_admin(user: kb_auth.KBaseUser, err_msg: str):
 class Root(BaseModel):
     """ General information about the service """
     service_name: Annotated[
-        str, Field(example=SERVICE_NAME, description="The name of the service."
+        str, Field(examples=[SERVICE_NAME], description="The name of the service."
     )]
     version: Annotated[
-        str, Field(example=VERSION, description="The semantic version of the service."
+        str, Field(examples=[VERSION], description="The semantic version of the service."
     )]
     git_hash: Annotated[str, Field(
-        example="b78f6e15e85381a7df71d6005d99e866f3f868dc",
+        examples=["b78f6e15e85381a7df71d6005d99e866f3f868dc"],
         description="The git commit of the service code."
     )]
     server_time: Annotated[datetime.datetime, Field(
-        example="2022-10-07T17:58:53.188698Z",
+        examples=["2022-10-07T17:58:53.188698Z"],
         description="The server's time as an ISO8601 string."
     )]
 
@@ -88,9 +92,9 @@ async def root() -> Root:
 
 class WhoAmI(BaseModel):
     """ The username associated with the provided user token and the user's admin state. """
-    user: Annotated[str, Field(example="kbasehelp", description="The user's username.")]
+    user: Annotated[str, Field(examples=["kbasehelp"], description="The user's username.")]
     is_service_admin: Annotated[bool, Field(
-        example=False, description="Whether the user is a service administrator."
+        examples=[False], description="Whether the user is a service administrator."
     )]
     
 
@@ -381,11 +385,11 @@ class NERSCClientInfo(BaseModel):
     """ Provides information about the NERSC SFAPI client. """
     id: Annotated[str, Field(description="The opaque ID of the client.")]
     expires_at: Annotated[datetime.datetime, Field(
-        example="2024-10-24T22:35:40Z",
+        examples=["2024-10-24T22:35:40Z"],
         description="The time the client expires in ISO8601 format."
     )]
     expires_in: Annotated[datetime.timedelta, Field(
-        example="PT12H30M5S",
+        examples=["PT12H30M5S"],
         description="The time duration until the client expires as an ISO8601 duration string."
     )]
 
