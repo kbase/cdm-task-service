@@ -17,7 +17,7 @@ Importantly, the CTS should be decoupled from these processes and not send proce
 information, as that means that new processes can easily be added to the stream without needing
 changes in the CTS - e.g. standard separation of concerns.
 
-The general operations for the interactions between the CTS and downstream processes is:
+The general operations for the interactions between the CTS and downstream processes are:
 
 * A CTS job changes state.
 * The CTS sends a message with the new state, time of change, and job ID to kafka.
