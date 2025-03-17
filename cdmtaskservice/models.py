@@ -25,9 +25,6 @@ from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathS
 
 
 # TODO TEST
-# TODO EXAMPLES try using examples instead of the deprecated example. Last time I tried no joy
-#               still doesn't seem to work as of 24/11/11
-#               https://github.com/fastapi/fastapi/discussions/11137
 
 # WARNNING: Model field names also define field names in the MOngo database.
 # As such, field names cannot change without creating a mapping for field names in the mongo
@@ -194,25 +191,25 @@ class Parameter(BaseModel):
     # The Parameter and ParameterWithFlag pydoc is almost identical, be sure to edit in sync
     model_config = ConfigDict(extra='forbid')
     
-    type: Annotated[ParameterType, Field(example=ParameterType.INPUT_FILES)]
+    type: Annotated[ParameterType, Field(examples=[ParameterType.INPUT_FILES])]
     input_files_format: Annotated[InputFilesFormat | None, Field(
-        example=InputFilesFormat.COMMA_SEPARATED_LIST,
+        examples=[InputFilesFormat.COMMA_SEPARATED_LIST],
     )] = None
     manifest_file_format: Annotated[ManifestFileFormat | None, Field(
-        example=ManifestFileFormat.FILES,
+        examples=[ManifestFileFormat.FILES],
     )] = None
     manifest_file_header: Annotated[str | None, Field(
-        example="genome_id",
+        examples=["genome_id"],
         description="The header for the manifest file, if any.",
         min_length=1,
         max_length=1000,
     )] = None
     container_num_prefix: Annotated[ArgumentString | None, Field(
-        example="/output/job-",
+        examples=["/output/job-"],
         description="A string that will be prepended to the container number."
     )] = None
     container_num_suffix: Annotated[ArgumentString | None, Field(
-        example="_output",
+        examples=["_output"],
         description="A string that will be appended to the container number."
     )] = None
     
@@ -263,7 +260,7 @@ class ParameterWithFlag(Parameter):
     # The Parameter and ParameterWithFlag pydoc is almost identical, be sure to edit in sync
     model_config = ConfigDict(extra='forbid')
     flag: Annotated[Flag | None, Field(
-        example="--file",
+        examples=["--file"],
         description="A command line argument flag to precede the parameter. "
             + "If the flag ends with '=', no space is left between the flag and its value.",
     )] = None
@@ -306,7 +303,7 @@ class Parameters(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
     input_mount_point: Annotated[str, Field(
-        example="/input_files",
+        examples=["/input_files"],
         default="/input_files",
         description="Where to place input files in the container. "
             + "Must start from the container root and include at least one directory "
@@ -316,7 +313,7 @@ class Parameters(BaseModel):
         pattern=_PATH_REGEX,
     )] = "/input_files"
     output_mount_point: Annotated[str, Field(
-        example="/output_files",
+        examples=["/output_files"],
         default="/output_files",
         description="Where output files should be written in the container. "
             + "Must start from the container root and include at least one directory "
@@ -326,7 +323,7 @@ class Parameters(BaseModel):
         pattern=_PATH_REGEX,
     )] = "/output_files"
     refdata_mount_point: Annotated[str | None, Field(
-        example="/reference_data",
+        examples=["/reference_data"],
         description="Where reference data files should be pleased in the container. "
             + "Must start from the container root and include at least one directory "
             + "when resolved.",
@@ -335,7 +332,7 @@ class Parameters(BaseModel):
         pattern=_PATH_REGEX,
     )] = None
     args: Annotated[list[ArgumentString | Flag | ParameterWithFlag] | None, Field(
-        example=[
+        examples=[[
             "process",
             "--output-dir", "/output_files",
             {
@@ -347,19 +344,19 @@ class Parameters(BaseModel):
             {
                 "type": ParameterType.CONTAINTER_NUMBER,
             },
-        ],
+        ]],
         description="A list of command line arguments to be inserted after the container "
             + "entrypoint command. Strings are treated as literals."
     )] = None
     environment: Annotated[dict[EnvironmentVariable, ArgumentString | Parameter] | None, Field(
-        example={
+        examples=[{
             "DIAMOND_DB_PATH": "/reference_data",
             "FILE_MANIFEST": {
                 "type": ParameterType.MANIFEST_FILE.value,
                 "manifest_file_format": ManifestFileFormat.FILES.value,
                 "manifest_file_header": "infiles",
             },
-        },
+        }],
         description="A dictionary of environment variables to be inserted into the container. "
             + "String values are treated as literals."
     )] = None
@@ -438,7 +435,7 @@ class S3File(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     
     file: Annotated[str, Field(
-        example="mybucket/foo/bar/baz.jpg",
+        examples=["mybucket/foo/bar/baz.jpg"],
         description="A path to an object in an S3 instance, starting with the bucket. "
             + "Please note that spaces are valid S3 object characters, so be careful about "
             + "trailing spaces in the input.",
@@ -446,7 +443,7 @@ class S3File(BaseModel):
         max_length=S3_PATH_MAX_LENGTH,
     )]
     crc64nvme: Annotated[str | None, Field(
-        example="4ekt2WB1KO4=",
+        examples=["4ekt2WB1KO4="],
         description="The base64 encoded CRC64/NVME checksum of the file. "
             + "If provided on input it is checked against the "
             + "target file checksum before proceeding. Always provided with output.",
@@ -465,7 +462,7 @@ class S3FileWithDataID(S3File):
     model_config = ConfigDict(extra='forbid', frozen=True)
     
     data_id: Annotated[str | None, Field(
-        example="GCA_000146795.3",
+        examples=["GCA_000146795.3"],
         description="An arbitrary string representing the ID of the data in the file.",
         min_length=1,
         max_length=255,
@@ -500,10 +497,10 @@ class JobInput(BaseModel):
     # Similarly, the design allows for multiple S3 instances. We'll implement with a default
     # when actually needed.
     
-    cluster: Annotated[Cluster, Field(example=Cluster.PERLMUTTER_JAWS.value)]
+    cluster: Annotated[Cluster, Field(examples=[Cluster.PERLMUTTER_JAWS.value])]
     image: Annotated[str, Field(
-        example="ghcr.io/kbase/collections:checkm2_0.1.6"
-            + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+        examples=["ghcr.io/kbase/collections:checkm2_0.1.6"
+            + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380"],
         description="The Docker image to run for the job. Include the SHA to ensure the "
             + "exact code requested is run.",
         # Don't bother validating other than some basic checks, validation will occur when
@@ -513,7 +510,7 @@ class JobInput(BaseModel):
     )]
     params: Parameters
     num_containers: Annotated[int, Field(
-        example=1,
+        examples=[1],
         default=1,
         description="The number of containers to run in parallel. Input files will be split "
             + "between the containers. If there are more containers than input files the "
@@ -522,7 +519,7 @@ class JobInput(BaseModel):
         le=1000,
     )] = 1
     cpus: Annotated[int, Field(
-        example=1,
+        examples=[1],
         default=1,
         description="The number of CPUs to allocate per container.",
         ge=1,
@@ -530,7 +527,7 @@ class JobInput(BaseModel):
         le=256,
     )] = 1
     memory: Annotated[ByteSize, Field(
-        example="10MB",
+        examples=["10MB"],
         default="10MB",
         description="The amount of memory to allocate per container either as the number of "
             + "bytes or a specification string such as 100MB, 2GB, etc.",
@@ -539,7 +536,7 @@ class JobInput(BaseModel):
         le=492 * 1000 * 1000 * 1000
     )] = 10 * 1000 * 1000
     runtime: Annotated[datetime.timedelta, Field(
-        example="PT12H30M5S",  # TODO EXAMPLES add a seconds example if examples works
+        examples=["PT12H30M5S", 12 * 3600 + 30 * 60 + 5],
         default = "PT60S",
         description="The runtime required for each container as the number of seconds or an "
             + "ISO8601 duration string.",
@@ -549,12 +546,13 @@ class JobInput(BaseModel):
         le=2 * 24 * 60 * 60 - (15 * 60),  # max JAWS runtime
     )] = datetime.timedelta(seconds=60)
     input_files: Annotated[list[str] | list[S3FileWithDataID], Field(
-        example=[  # TODO EXAMPLES add a string example if examples works
-            {
+        examples=[
+            [{
                 "file": "mybucket/foo/bat",
                 "data_id": "GCA_000146795.3",
                 "crc64name": "4ekt2WB1KO4=",
-            }
+            }],
+            ["mybucket/foo/bat"]
         ],
         description="The S3 input files for the job, either a list of file paths as strings or a "
             + "list of data structures including the file path and optionally a data ID and / or "
@@ -571,7 +569,7 @@ class JobInput(BaseModel):
         max_length=10000,
     )]
     input_roots: Annotated[list[str] | None, Field(
-        example=["mybucket/foo/bar"],
+        examples=[["mybucket/foo/bar"]],
         description="If specified, preserves file hierarchies for S3 files below the given "
             + "root paths, starting from the bucket. Any files that are not prefixed by a "
             + "root path are placed in the root directory of the job input dir. "
@@ -586,7 +584,7 @@ class JobInput(BaseModel):
             + "Duplicate roots are ignored.",
     )] = None
     output_dir: Annotated[str, Field(
-        example="mybucket/out",
+        examples=["mybucket/out"],
         description="The S3 folder, starting with the bucket, in which to place results.",
         min_length=3 + 1 + 1,
         max_length=63 + 1 + 1024
@@ -703,11 +701,11 @@ class RegistrationInfo(BaseModel):
     """
     # Output only model, no validation
     registered_by: Annotated[str, Field(
-        example="aparkin",
+        examples=["aparkin"],
         description="The username of the user that performed the registration."
     )]
     registered_on: Annotated[datetime.datetime, Field(
-        example="2024-10-24T22:35:40Z",
+        examples=["2024-10-24T22:35:40Z"],
         description="The time of registration."
     )]
 
@@ -718,25 +716,25 @@ class Image(RegistrationInfo):
     """
     # This is an outgoing data structure only so we don't add validators
     name: Annotated[str, Field(
-        example="ghcr.io/kbase/collections",
+        examples=["ghcr.io/kbase/collections"],
         description="The normalized name of the a docker image, consisting of the "
             + "host and path.",
     )]
     digest: Annotated[str, Field(
-        example="sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+        examples=["sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380"],
         description="The image digest.",
     )]
     entrypoint: Annotated[list[str], Field(
-        example=["checkm2", "predict"],
+        examples=[["checkm2", "predict"]],
         description="The entrypoint command extracted from the image."
     )]
     tag: Annotated[str | None, Field(
-        example="checkm2_0.1.6",
+        examples=["checkm2_0.1.6"],
         description="The image tag at registration time. "
             + "The tag may no longer point to the same image."
     )] = None
     refdata_id: Annotated[str | None, Field(
-        example="3a28c155-ea8b-4e1b-baef-242d991a8200",
+        examples=["3a28c155-ea8b-4e1b-baef-242d991a8200"],
         description="The ID of reference data associated with the image. The image requires "
             + "this reference data to run, and it will be mounted into the image container at "
             + "the refdata mount point."
@@ -776,7 +774,7 @@ class JobStateTransition(BaseModel):
     # outgoing only, no validators
     state: JobState
     time: Annotated[datetime.datetime, Field(
-        example="2024-10-24T22:35:40Z",
+        examples=["2024-10-24T22:35:40Z"],
         description="The time at which the new state was entered."
     )]
 
@@ -789,17 +787,19 @@ class Job(BaseModel):
         description="An opaque, unique string that serves as the job's ID.",
     )]
     job_input: JobInput
-    user: Annotated[str, Field(example="myuserid", description="The user that ran the job.")]
+    user: Annotated[str, Field(examples=["myuserid"], description="The user that ran the job.")]
     image: Image
-    input_file_count: Annotated[int, Field(example=42, description="The number of input files.")]
-    state: Annotated[JobState, Field(example=JobState.COMPLETE.value)]
-    # hmm, should this be a dict vs a list of tuples?
+    input_file_count: Annotated[int, Field(
+        examples=[42],
+        description="The number of input files."
+    )]
+    state: Annotated[JobState, Field(examples=[JobState.COMPLETE.value])]
     transition_times: Annotated[list[JobStateTransition], Field(
-        example=[
+        examples=[[
             {"state": JobState.CREATED.value, "time": "2024-10-24T22:35:40Z"},
             {"state": JobState.UPLOAD_SUBMITTED.value, "time": "2024-10-24T22:35:41Z"},
             {"state": JobState.JOB_SUBMITTING, "time": "2024-10-24T22:47:67Z"},
-        ],
+        ]],
         description="A list of job state transitions."
     )]
     # This is different from the job_input field, which takes a iso8601 time delta,
@@ -807,20 +807,21 @@ class Job(BaseModel):
     # and understand a wide range of times but have a consistent output in a fairly standard
     # unit.
     cpu_hours: Annotated[float | None, Field(
-        example=52.4,
+        examples=[52.4],
         description="The total CPU hours used by the job, if available.")
     ] = None
     # May need to assemble jobs manually if path validation is too expensive.
     outputs: list[S3File] | None = None
     output_file_count: Annotated[int | None, Field(
-        example=24, description="The number of output files, if available."
+        examples=[24],
+        description="The number of output files, if available."
     )] = None
     error: Annotated[str | None, Field(
-        example="The front fell off",
+        examples=["The front fell off"],
         description="A description of the error that occurred."
     )] = None
     logpath: Annotated[str | None, Field(
-        example="cts-logs/container_logs/e14a21ba-032d-42f2-b235-d82606675b17",
+        examples=["cts-logs/container_logs/e14a21ba-032d-42f2-b235-d82606675b17"],
         description="A location in S3 where the logfiles for the job containers can be viewed."
     )] = None
 
@@ -867,7 +868,7 @@ class AdminJobDetails(Job):
     nersc_details: NERSCDetails | None = None
     jaws_details: JAWSDetails | None = None
     admin_error: Annotated[str | None, Field(
-        example="The back fell off",
+        examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
             + "admins, potentially including more details."
     )] = None
@@ -891,7 +892,7 @@ class RefDataStateTransition(BaseModel):
     # outgoing only, no validators
     state: ReferenceDataState
     time: Annotated[datetime.datetime, Field(
-        example="2024-10-24T22:35:40Z",
+        examples=["2024-10-24T22:35:40Z"],
         description="The time at which the new state was entered."
     )]
 
@@ -901,24 +902,24 @@ class ReferenceDataStatus(BaseModel):
     Status of a reference data staging process at a particular remote compute location.
     """
     # This is an outgoing structure only so we don't add validators
-    cluster: Annotated[Cluster, Field(example=Cluster.PERLMUTTER_JAWS.value)]
+    cluster: Annotated[Cluster, Field(examples=[Cluster.PERLMUTTER_JAWS.value])]
     state: Annotated[ReferenceDataState, Field(
-        example=ReferenceDataState.COMPLETE.value,
+        examples=[ReferenceDataState.COMPLETE.value],
         description="The state of the reference data staging process."
     )]
     transition_times: Annotated[list[RefDataStateTransition], Field(
-            example=[
+            examples=[[
                 {"state": ReferenceDataState.CREATED.value, "time": "2024-10-24T22:35:40Z"},
                 {
                     "state": ReferenceDataState.DOWNLOAD_SUBMITTED.value,
                     "time": "2024-10-24T22:35:41Z"
                 },
-            ],
+            ]],
             description="A list refdata state transitions."
         )
     ]
     error: Annotated[str | None, Field(
-        example="The front fell off",
+        examples=["The front fell off"],
         description="A description of the error that occurred."
     )] = None
 
@@ -936,7 +937,7 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
             + "Only present if the refdata is being downloaded to NERSC."
     )] = None
     admin_error: Annotated[str | None, Field(
-        example="The back fell off",
+        examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
             + "admins, potentially including more details."
     )] = None

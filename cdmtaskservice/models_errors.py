@@ -10,18 +10,18 @@ from cdmtaskservice.errors import ErrorType
 
 
 class ServerErrorDetail(BaseModel):
-    httpcode: int = Field(example=500, description="The HTTP error code")
-    httpstatus: str = Field(example="INTERNAL SERVER ERROR", description="The HTTP status string")
+    httpcode: int = Field(examples=[500], description="The HTTP error code")
+    httpstatus: str = Field(examples=["INTERNAL SERVER ERROR"], description="The HTTP status string")
     time: Annotated[datetime.datetime, Field(
-        example="2022-10-07T17:58:53.188698Z",
+        examples=["2022-10-07T17:58:53.188698Z"],
         description="The server's time as an ISO8601 string.",
     )]
     request_id: Annotated[str | None, Field(
-        example="172367b0-0099-4903-9a19-d12ff101b2da",
+        examples=["172367b0-0099-4903-9a19-d12ff101b2da"],
         description="The ID of the request, if available."
     )] = None
     message: Optional[str] = Field(
-        example="Well dang, that ain't good",
+        examples=["Well dang, that ain't good"],
         description="A free text string providing more information about the error"
     )
 
@@ -30,29 +30,29 @@ class RequestValidationDetail(BaseModel):
     # Note I have witnessed other fields in the response as well, which apparently aren't
     # included in the spec
     loc: list[str | int] = Field(
-        example=["body", "data_products", 2, "version"],
+        examples=[["body", "data_products", 2, "version"]],
         description="The location where the validation error occurred"
     )
     msg: str = Field(
-        example="ensure this value has at most 20 characters",
+        examples=["ensure this value has at most 20 characters"],
         description="A free text message explaining the validation problem"
     )
     type: str = Field(
-        example="value_error.any_str.max_length",
+        examples=["value_error.any_str.max_length"],
         description="The type of the validation error"
     )
 
 
 class ClientErrorDetail(ServerErrorDetail):
-    httpcode: int = Field(example=400, description="The HTTP error code")
-    httpstatus: str = Field(example="BAD REQUEST", description="The HTTP status string")
+    httpcode: int = Field(examples=[400], description="The HTTP error code")
+    httpstatus: str = Field(examples=["BAD REQUEST"], description="The HTTP status string")
     appcode: Optional[int] = Field(
-        example=30010,
+        examples=[30010],
         description="An application code providing more specific information about an error, "
             + "if available"
     )
     apperror: Optional[str] = Field(
-        example="Request validation failed",
+        examples=["Request validation failed"],
         description="The error string for the application error code. If the error code is "
             + "available, the string is always available"
     )
