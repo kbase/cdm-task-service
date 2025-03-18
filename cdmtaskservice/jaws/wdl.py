@@ -296,7 +296,7 @@ def _handle_container_num(p: Parameter, container_num: int) -> str | list[str]:
         else:
             param = [shlex.quote(flag), cn]
     else:
-        param = cn
+        param = shlex.quote(cn)
     return param
 
 
