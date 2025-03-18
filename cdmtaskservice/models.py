@@ -290,7 +290,7 @@ class Parameters(BaseModel):
     
     Specifying files as part of arguments to a job can be done in three ways:
     
-    * If the entrypoint command takes a glob or a directory as an argument, that glob or
+    * If the entrypoint command takes a directory as an argument, that
       directory can be specified literally in an argument. All files will be available in the
       input mount point, with paths resulting from the path in S3 as well as the input_roots
       parameter from the job input.
