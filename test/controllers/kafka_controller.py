@@ -8,7 +8,9 @@ Production use is not recommended.
 # I'd prefer to not use docker but asking a dev to install java 17 just to run tests for
 # a python module is a bit much
 
-from kafka import KafkaProducer, KafkaConsumer
+# TODO KAFKA will need to handle auth at some point
+
+from kafka import KafkaProducer, KafkaConsumer, KafkaAdminClient
 from kafka.errors import NoBrokersAvailable
 import subprocess
 import uuid
@@ -55,6 +57,7 @@ class KafkaController:
             self._print_kafka_logs()
             raise err
         self.startup_count = count + 1
+        self._admin = KafkaAdminClient(bootstrap_servers=f"localhost:{self.port}")
 
 
     def _get_kafka_env(self):
@@ -77,10 +80,17 @@ class KafkaController:
             "KAFKA_DELETE_TOPIC_ENABLE": "true"
         }
 
+    def delete_topics(self, *topics: str):
+        self._admin.delete_topics(topics)
+
+    def delete_all_topics(self):
+        topics = self._admin.list_topics()
+        topics = [t for t in topics if not t.startswith("_")]
+        self.delete_topics(*topics)
+
     def _print_kafka_logs(self):
         command = ["docker", "logs", self._container_name]
         subprocess.run(command, check=True)
-
 
     def destroy(self, print_logs=False):
         if print_logs:
@@ -96,23 +106,25 @@ class KafkaStartException(Exception):
 
 def main():
     kc = KafkaController(config.KAFKA_DOCKER_IMAGE)
-    print(f"kafka port: {kc.port}")
-    prod = KafkaProducer(bootstrap_servers=[f'localhost:{kc.port}'])
-    prod.send('mytopic', 'some message'.encode('utf-8'))
-
-    # TODO NEXT add methods to clear topics use the admin client to clear topics 
-    # kc.clear_topic('mytopic')  # comment out to test consumer getting message
-    # kc.clear_all_topics()  # comment out to test consumer getting message
-
-    cons = KafkaConsumer(
-        'mytopic',
-        bootstrap_servers=[f'localhost:{kc.port}'],
-        auto_offset_reset='earliest',
-        group_id='foo'
-    )
-    print(cons.poll(timeout_ms=1000))
-    input('press enter to shut down')
-    kc.destroy(True)
+    try:
+        print(f"kafka port: {kc.port}")
+        prod = KafkaProducer(bootstrap_servers=[f'localhost:{kc.port}'])
+        prod.send('mytopic', 'some message'.encode('utf-8'))
+        time.sleep(1)  # wait for message to be ready
+    
+        # kc.delete_topics("mytopic")  # comment out to test consumer getting message
+        # kc.delete_all_topics()  # comment out to test consumer getting message
+    
+        cons = KafkaConsumer(
+            'mytopic',
+            bootstrap_servers=[f'localhost:{kc.port}'],
+            auto_offset_reset='earliest',
+            group_id='foo'
+        )
+        print(cons.poll(timeout_ms=1000))
+        input('press enter to shut down')
+    finally:
+        kc.destroy(True)
 
 
 if __name__ == '__main__':
