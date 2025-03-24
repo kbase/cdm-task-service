@@ -15,11 +15,12 @@ if TEST_CFG_SEC not in _cfg.sections():
 TEST_CFG = dict(_cfg[TEST_CFG_SEC])
 del _cfg
 
-CRANE_EXE_PATH = Path(TEST_CFG.get("test.crane.exe"))
-MINIO_EXE_PATH = Path(TEST_CFG.get("test.minio.exe"))
-MINIO_MC_EXE_PATH = Path(TEST_CFG.get("test.minio.mc.exe"))
-TEMP_DIR       = Path(TEST_CFG.get("test.temp.dir"))
-TEMP_DIR_KEEP  = TEST_CFG.get("test.temp.dir.keep") == "true"
+CRANE_EXE_PATH     = Path(TEST_CFG.get("test.crane.exe"))
+MINIO_EXE_PATH     = Path(TEST_CFG.get("test.minio.exe"))
+MINIO_MC_EXE_PATH  = Path(TEST_CFG.get("test.minio.mc.exe"))
+KAFKA_DOCKER_IMAGE = TEST_CFG.get("test.kafka.docker.image")
+TEMP_DIR           = Path(TEST_CFG.get("test.temp.dir"))
+TEMP_DIR_KEEP      = TEST_CFG.get("test.temp.dir.keep") == "true"
 
 # Don't use these in automated tests, would require putting creds into github which would be
 # a huge pain since they expire frequently

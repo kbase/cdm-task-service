@@ -117,6 +117,8 @@ Metadata  :
 
 ### Running tests
 
+Docker must be installed.
+
 Copy `test.cfg.example` to `test.cfg` and fill it in appropriately.
 
 ```

@@ -15,6 +15,11 @@ test.minio.exe=/path/to/minio
 # Absolute path to a Minio client (`mc`) executable.
 test.minio.mc.exe=/path/to/mc
 
+# The kafka docker image to use in tests.
+# Note this should be the same as what's listed in the docker compose file and 
+# GHA test file.
+test.kafka.docker.image=apache/kafka-native:4.0.0
+
 # A directory in which to store temporary test files.
 test.temp.dir=cdm_task_service_temp
 
