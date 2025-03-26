@@ -13,11 +13,14 @@ _SEC_JAWS = "JAWS"
 _SEC_S3 = "S3"
 _SEC_MONGODB = "MongoDB"
 _SEC_JOBS = "Jobs"
+_SEC_KAFKA = "Kafka"
 _SEC_LOGGING = "Logging"
 _SEC_IMAGE = "Images"
 _SEC_SERVICE = "Service"
 
-_SECS=[_SEC_AUTH, _SEC_NERSC, _SEC_JAWS, _SEC_S3, _SEC_MONGODB, _SEC_IMAGE, _SEC_SERVICE]
+_SECS=[
+    _SEC_AUTH, _SEC_NERSC_JAWS, _SEC_NERSC, _SEC_JAWS, _SEC_S3, _SEC_MONGODB, _SEC_JOBS,
+    _SEC_KAFKA, _SEC_LOGGING, _SEC_IMAGE, _SEC_SERVICE]
 
 
 class CDMTaskServiceConfig:
@@ -54,6 +57,8 @@ class CDMTaskServiceConfig:
     mongo_user: str | None - the MongoDB password.
     mongo_user: bool - whether to set the MongoDB retry writes parameter on.
     job_max_cpu_hours: float - the maximum number of cpu hours per job.
+    kafka_bootstrap_servers: str - the Kafka bootstrap servers in standard format.
+    kafka_topic_jobs: str - the Kafka topic where job updates will be pubished.
     container_s3_log_dir: str - where to store container logs in S3.
     crane_path: str - the path to a `crane` executable.
     service_root_url: str - the URL for the service root.
@@ -112,6 +117,8 @@ class CDMTaskServiceConfig:
             raise ValueError("Either both or neither of the mongo user and password must "
                              + "be provided")
         self.job_max_cpu_hours = _get_float_required(config, _SEC_JOBS, "max_cpu_hours", minimum=1)
+        self.kafka_boostrap_servers = _get_string_required(config, _SEC_KAFKA, "bootstrap_servers")
+        self.kafka_topic_jobs = _get_string_required(config, _SEC_KAFKA, "topic_jobs")
         self.container_s3_log_dir = _get_string_required(
             config, _SEC_LOGGING, "container_s3_log_dir"
         )
@@ -150,6 +157,8 @@ class CDMTaskServiceConfig:
             f"MongoDB password: {pwd}",
             f"MongoDB retry writes: {self.mongo_retrywrites}",
             f"Max CPU hours per job: {self.job_max_cpu_hours}",
+            f"Kafka bootstrap servers: {self.kafka_boostrap_servers}",
+            f"Kafka jobs topic: {self.kafka_topic_jobs}",
             f"Directory in S3 for container logs: {self.container_s3_log_dir}",
             f"crane executable path: {self.crane_path}",
             f"Service root URL: {self.service_root_url}",

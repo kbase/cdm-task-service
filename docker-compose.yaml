@@ -19,6 +19,7 @@ services:
     depends_on:
       - mongodb
       - minio
+      - kafka
     environment:
       - KBCTS_KBASE_AUTH2_URL=https://ci.kbase.us/services/auth
       - KBCTS_KBASE_AUTH2_ADMIN_ROLES=CDM_TASK_SERVICE_ADMIN
@@ -53,6 +54,8 @@ services:
       # - KBCTS_MONGO_USER=root
       # - KBCTS_MONGO_PWD=secret
       - KBCTS_MONGO_RETRYWRITES=false
+      - KBCTS_KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+      - KBCTS_KAFKA_TOPIC_JOBS=cts-jobs
       - KBCTS_JOB_MAX_CPU_HOURS=200
       - KBCTS_CONTAINER_S3_LOG_DIR=cts-logs/container_logs
       - KBCTS_SERVICE_ROOT_URL=https://ci.kbase.us/services/cts

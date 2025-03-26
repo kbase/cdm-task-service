@@ -23,6 +23,7 @@ from cdmtaskservice.jaws.client import JAWSClient
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.job_state import JobState
+from cdmtaskservice.kafka_notifications import KafkaNotifier
 from cdmtaskservice.kb_auth import KBaseAuth, KBaseUser
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
@@ -64,6 +65,7 @@ async def build_app(
     """
     # This method is getting pretty long but it's stupid simple so...
     # May want to parallelize some of this for faster startups. would need to rework prints
+    # But NERSC startup takes 95% of the time, so YAGNI
     logr = logging.getLogger(__name__)
     # check that the path is a valid path
     logbuk = validate_path(cfg.container_s3_log_dir).split("/", 1)[0]
@@ -79,6 +81,7 @@ async def build_app(
     jaws_client = None
     sfapi_client = None
     mongocli = None
+    kafka_notifier = None
     try:
         sfapi_client, jaws_client, nerscman, failreason = await _build_NERSC_flow_deps(logr, cfg)
         logr.info("Initializing S3 client... ")
@@ -98,6 +101,11 @@ async def build_app(
         mongocli = await get_mongo_client(cfg)
         logr.info("Done")
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
+        logr.info("Initializing Kafka client...")
+        kafka_notifier = await KafkaNotifier.create(
+            cfg.kafka_boostrap_servers, cfg.kafka_topic_jobs
+        )
+        logr.info("Done")
         if failreason:
             flowman.mark_flow_inactive(models.Cluster.PERLMUTTER_JAWS, failreason)
         else:
@@ -109,6 +117,7 @@ async def build_app(
                 s3,
                 s3_external,
                 cfg.container_s3_log_dir,
+                kafka_notifier,
                 coman,
                 cfg.service_root_url,
                 s3_insecure_ssl=cfg.s3_allow_insecure,
@@ -130,6 +139,7 @@ async def build_app(
         app.state._mongo = mongocli
         app.state._coroman = coman
         app.state._jaws_cli = jaws_client
+        app.state._kafka = kafka_notifier
         app.state._cdmstate = AppState(auth, sfapi_client, job_state, refdata, images, flowman)
     except:
         if mongocli:
@@ -138,6 +148,9 @@ async def build_app(
             await jaws_client.close()
         if sfapi_client:
             await sfapi_client.destroy()
+        if kafka_notifier:
+            # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
+            await asyncio.wait_for(kafka_notifier.close(), 10)
         raise
 
 
@@ -222,6 +235,9 @@ async def destroy_app_state(app: FastAPI):
         await appstate.sfapi_client.destroy()
     if app.state._jaws_cli:
         await app.state._jaws_cli.close()
+    if app.state._kafka:
+        # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
+        await asyncio.wait_for(app.state._kafka.close(), 10)
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)
 

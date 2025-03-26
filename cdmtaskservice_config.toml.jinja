@@ -28,7 +28,7 @@ user = "{{ KBCTS_NERSC_JAWS_USER or "" }}"
 
 # The NERSC refdata directory root for the JAWS installation the service is using.
 # The JAWS installation is expected to be configured to use this directory to look up refdata.
-refdata_root_dir = "{{ KBCTS_NERSC_JAWS_REFDATA_DIR }}"
+refdata_root_dir = "{{ KBCTS_NERSC_JAWS_REFDATA_DIR or "" }}"
 
 [NERSC]
 
@@ -99,6 +99,15 @@ mongo_retrywrites = "{{ KBCTS_MONGO_RETRYWRITES or "" }}"
 # The maximum CPU hours allowed per job, calculated as
 # the number of CPUs * the number of containers * the time per container.
 max_cpu_hours = {{ KBCTS_JOB_MAX_CPU_HOURS or 100 }}
+
+[Kafka]
+
+# The Kafka boostrap servers in standard Kafka format
+bootstrap_servers = "{{ KBCTS_KAFKA_BOOTSTRAP_SERVERS or "" }}"
+
+# The topic where job status updates will be published.
+# Legal characters are alphanumerics and the hyphen.
+topic_jobs = "{{ KBCTS_KAFKA_TOPIC_JOBS or "cts-jobs" }}"
 
 [Logging]
 
