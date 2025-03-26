@@ -23,6 +23,7 @@ from cdmtaskservice.exceptions import InvalidJobStateError, InvalidReferenceData
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
+from cdmtaskservice.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, PresignedPost
@@ -49,6 +50,7 @@ class NERSCJAWSRunner(JobFlow):
         s3_client: S3Client,
         s3_external_client: S3Client,
         container_s3_log_dir: str,
+        kafka: KafkaNotifier, 
         coro_manager: CoroutineWrangler,
         service_root_url: str,
         s3_insecure_ssl: bool = False,
@@ -65,6 +67,7 @@ class NERSCJAWSRunner(JobFlow):
             that may not be accessible from the current process, but is accessible to remote
             processes at NERSC.
         container_s3_log_dir - where to store container logs in S3.
+        kafka - a kafka notifier.
         coro_manager - a coroutine manager.
         service_root_url - the URL of the service root, used for constructing service callbacks.
         s3_insecure_url - whether to skip checking the SSL certificate for the S3 instance,
@@ -78,6 +81,7 @@ class NERSCJAWSRunner(JobFlow):
         self._s3ext = _not_falsy(s3_external_client, "s3_external_client")
         self._s3insecure = s3_insecure_ssl
         self._s3logdir = _require_string(container_s3_log_dir, "container_s3_log_dir")
+        self._kafka = _not_falsy(kafka, "kafka")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")
         
