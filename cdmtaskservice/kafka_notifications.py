@@ -5,6 +5,7 @@ Sends job status notifications to Kafka.
 # Could make an interface here to allow for additional / swapping notification systems, but YAGNI
 
 from aiokafka import AIOKafkaProducer
+import asyncio
 import datetime
 import json
 import re
@@ -71,7 +72,11 @@ class KafkaNotifier:
             "state": _not_falsy(state, "state").value,
             "time": _not_falsy(time, "time").isoformat()
         }).encode("utf-8"))
-        await future  # throw exception, if any. This is a pain to test
+        # kafka client appears to enter an infinite loop if kafka is down
+        # may need to make this configurable, but 10s is a pretty long time to wait for a 
+        # tiny message to send. Don't worry about it for now
+        # https://github.com/aio-libs/aiokafka/issues/1101
+        await asyncio.wait_for(future, 10)  # throw exception, if any. This is a pain to test
 
     async def close(self):
         """
