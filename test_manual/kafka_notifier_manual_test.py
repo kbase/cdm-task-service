@@ -1,5 +1,14 @@
 """
 Test what happens when kafka is down and the notifier sends a message.
+
+To run:
+
+```
+PYTHONPATH=.:test python test_manual/kafka_notifier_manual_test.py
+```
+
+Add any argument to run the version of the test that acts directly on the
+aiokafka client vs. the CTS wrapper.
 """
 
 # Not sure if I want to or if it's worth it to integrate this into the std tests

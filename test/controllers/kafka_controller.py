@@ -92,6 +92,14 @@ class KafkaController:
         command = ["docker", "logs", self._container_name]
         subprocess.run(command, check=True)
 
+    def pause(self):
+        command = ["docker", "pause", self._container_name]
+        subprocess.run(command, check=True)
+
+    def unpause(self):
+        command = ["docker", "unpause", self._container_name]
+        subprocess.run(command, check=True)
+
     def destroy(self, print_logs=False):
         if print_logs:
             self._print_kafka_logs()
