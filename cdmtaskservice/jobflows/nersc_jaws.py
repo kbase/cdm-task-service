@@ -99,7 +99,7 @@ class NERSCJAWSRunner(JobFlow):
             # going to be fixable by users
             "An unexpected error occurred",
             str(e),
-            traceback.format_exc(),
+            traceback=traceback.format_exc(),
             refdata=refdata,
         )
     
@@ -134,7 +134,7 @@ class NERSCJAWSRunner(JobFlow):
                 entity_id,
                 f"An unexpected error occurred during file {op.lower()}",
                 res.message,
-                res.traceback,
+                traceback=res.traceback,
                 refdata=refdata,
             )
             raise ValueError(f"{op} failed: {res.message}")
@@ -142,7 +142,13 @@ class NERSCJAWSRunner(JobFlow):
             return data
     
     async def _save_err_to_mongo(
-        self, entity_id: str, user_err: str, admin_err: str, traceback: str, refdata=False,
+        self,
+        entity_id: str,
+        user_err: str,
+        admin_err: str,
+        traceback: str = None,
+        logpath: str = None,
+        refdata=False,
     ):
         # if this fails, well, then we're screwed
         # could probably simplify this with a partial fn to hold the cluster arg.. meh
@@ -166,6 +172,7 @@ class NERSCJAWSRunner(JobFlow):
                 # TODO TEST will need a way to mock out timestamps
                 timestamp.utcdatetime(),
                 traceback=traceback,
+                logpath=logpath,
             )
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
@@ -427,13 +434,10 @@ class NERSCJAWSRunner(JobFlow):
         else:  # will probably need to expand this as we learn about JAWS errors
             err = "An unexpected error occurred."
         # if we can't talk to mongo there's not much to do
-        await self._mongo.set_job_error(
+        await self._save_err_to_mongo(
             job.id,
             err,
             f"Example container error: {data[0][1]}",
-            models.JobState.ERROR,
-            # TODO TEST will need a way to mock out timestamps
-            timestamp.utcdatetime(),
             logpath=os.path.join(self._s3logdir, job.id),
         )
 

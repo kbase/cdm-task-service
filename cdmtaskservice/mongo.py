@@ -495,7 +495,7 @@ class MongoDAO:
         time: datetime.datetime,
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
-        current_state: models.JobState | None = None,
+        current_state: models.ReferenceDataState | None = None,
     ):
         sub = f"{models.FLD_REFDATA_STATUSES}."
         subs = f"{sub}$."
@@ -530,8 +530,8 @@ class MongoDAO:
         self,
         cluster: models.Cluster,
         refdata_id: str,
-        current_state: models.JobState,
-        state: models.JobState,
+        current_state: models.ReferenceDataState,
+        state: models.ReferenceDataState,
         time: datetime.datetime,
     ):
         """
