@@ -56,16 +56,48 @@ async def test_send(kafkacon):
     await kn.update_job_state(
         "id2", JobState.DOWNLOAD_SUBMITTED, datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
     )
+    await _check_send_results(kafkacon.port, "topichere")
+    await kn.close()
+
+
+@pytest.mark.asyncio
+async def test_send_with_recovery(kafkacon):
+    # There seems to be a delay between calling the delete all topics function and the topics
+    # actually being deleted. This test is flaky if it reuses the topic from the prior test
+    kn = await KafkaNotifier.create(f"localhost:{kafkacon.port}", "recovery")
+    await kn.update_job_state(
+        "id1", JobState.CREATED, datetime(2024, 3, 24, 12, 0, 0, tzinfo=timezone.utc)
+    )
+    try:
+        kafkacon.pause()
+        try:
+            # could speed this test up if needed by adding a timeout arg here
+            await kn.update_job_state(
+                "id2",
+                JobState.DOWNLOAD_SUBMITTED,
+                datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
+            )
+            assert 0, "Test failed, expected a timeout here"
+        except TimeoutError:
+            pass  # we expect an error
+    # Now test that we recover and the message still gets sent
+    finally:
+        kafkacon.unpause()
+    await _check_send_results(kafkacon.port, "recovery")
+    await kn.close()
+
+
+async def _check_send_results(port, topic):
     kc = AIOKafkaConsumer(
-        "topichere",
-        bootstrap_servers=f"localhost:{kafkacon.port}",
+        topic,
+        bootstrap_servers=f"localhost:{port}",
         auto_offset_reset="earliest"
     )
     await kc.start()
     res1 = await kc.getone()
     res2 = await kc.getone()
-    assert res1.topic == "topichere"
-    assert res2.topic == "topichere"
+    assert res1.topic == topic
+    assert res2.topic == topic
     if b"id1" not in res1.value:
         # messages aren't guaranteed to be in any particular order
         temp = res1
@@ -77,7 +109,6 @@ async def test_send(kafkacon):
     assert res2.value == (
         b'{"job_id": "id2", "state": "download_submitted", "time": "2025-07-24T12:00:00+00:00"}'
     )
-    await kn.close()
     await kc.stop()
 
 
