@@ -13,6 +13,7 @@ from typing import Any, Awaitable
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
+from cdmtaskservice.update_state import JobUpdate, UpdateField
 
 
 _INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
@@ -42,6 +43,7 @@ class MongoDAO:
         self._col_images = self._db.images
         self._col_jobs = self._db.jobs
         self._col_refdata = self._db.refdata
+        self._setup_job_field_mapping()
         
     async def _create_indexes(self):
         # Tested that trying to create a unique index on a key that is not unique within documents
@@ -183,27 +185,26 @@ class MongoDAO:
     async def _update_job_state(
         self,
         job_id: str,
-        state: models.JobState,
+        state: str,
         time: datetime.datetime,
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
-        current_state: models.JobState | None = None,
+        current_state: str | None = None,
     ):
         query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
         if current_state:
-            query[models.FLD_COMMON_STATE] = current_state.value
+            query[models.FLD_COMMON_STATE] = current_state
         res = await self._col_jobs.update_one(
             query,
             {
                 "$push": (push if push else {}) | {
                     models.FLD_COMMON_TRANS_TIMES:
                         {
-                            models.FLD_COMMON_STATE_TRANSITION_STATE:
-                               _not_falsy(state, "state").value,
+                            models.FLD_COMMON_STATE_TRANSITION_STATE: _not_falsy(state, "state"),
                             models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
                         }
                 },
-                "$set": (set_ if set_ else {}) | {models.FLD_COMMON_STATE: state.value}
+                "$set": (set_ if set_ else {}) | {models.FLD_COMMON_STATE: state}
             },
         )
         if not res.matched_count:
@@ -211,219 +212,56 @@ class MongoDAO:
             raise NoSuchJobError(
                 f"No job with ID '{job_id}' {cs}exists"
             )
-    
+
+    _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
+    _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
+    _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
+    _FLD_NERSC_LOG_UL_TASK = (
+        f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
+    )
+    def _setup_job_field_mapping(self):
+        self._FIELD_TO_KEY_AND_PUSH = {
+            UpdateField.NERSC_DOWNLOAD_TASK_ID: (self._FLD_NERSC_DL_TASK, True),
+            UpdateField.JAWS_RUN_ID: (self._FLD_JAWS_RUN_ID, True),
+            UpdateField.CPU_HOURS: (models.FLD_JOB_CPU_HOURS, False),
+            UpdateField.NERSC_UPLOAD_TASK_ID: (self._FLD_NERSC_UL_TASK, True),
+            UpdateField.OUTPUT_FILE_PATHS: (models.FLD_JOB_OUTPUTS, False),
+            UpdateField.OUTPUT_FILE_COUNT: (models.FLD_JOB_OUTPUT_FILE_COUNT, False),
+            UpdateField.NERSC_LOG_UPLOAD_TASK_ID: (self._FLD_NERSC_LOG_UL_TASK, True),
+            UpdateField.USER_ERROR: (models.FLD_COMMON_ERROR, False),
+            UpdateField.ADMIN_ERROR: (models.FLD_COMMON_ADMIN_ERROR, False),
+            UpdateField.TRACEBACK: (models.FLD_COMMON_TRACEBACK, False),
+            UpdateField.LOG_PATH: (models.FLD_JOB_LOGPATH, False),
+        }
+
     async def update_job_state(
         self,
         job_id: str,
-        current_state: models.JobState,
-        state: models.JobState,
+        update: JobUpdate,
         time: datetime.datetime,
     ):
         """
         Update the job state.
         
         job_id - the job ID.
-        current_state - the expected current state of the job. If the job is not in this state
-            an error is thrown.
-        state - the new state for the job.
+        update - the update to apply to the job.
         time - the time at which the job transitioned to the new state.
         """
-        await self._update_job_state(job_id, state, time, current_state=current_state)
-
-    _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
-    
-    async def add_NERSC_download_task_id(
-        self,
-        job_id: str,
-        task_id: str,
-        current_state: models.JobState,
-        state: models.JobState,
-        time: datetime.datetime
-    ):
-        """
-        Add a download task_id to the NERSC section of a job and update the state.
-        
-        Arguments are as update_job_state except for the addition of:
-        
-        task_id - the NERSC task ID.
-        """
-        # may need to make this more generic where the cluster is passed in and mapped to
-        # a job structure location or something if we support more than NERSC
-        await self._update_job_state(job_id, state, time, current_state=current_state, push={
-            self._FLD_NERSC_DL_TASK: _require_string(task_id, "task_id")
-        })
-
-    _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
-
-    async def add_JAWS_run_id(
-        self,
-        job_id: str,
-        run_id: str,
-        current_state: models.JobState,
-        state: models.JobState,
-        time: datetime.datetime
-    ):
-        """
-        Add a run ID to the JAWS section of a job and update the state.
-        
-        Arguments are as update_job_state except for the addition of:
-        
-        run_id - the JAWS run ID.
-        """
-        # may need to make this more generic where the cluster is passed in and mapped to
-        # a job structure location or something if we support more than NERSC
-        await self._update_job_state(job_id, state, time, current_state=current_state, push={
-            self._FLD_JAWS_RUN_ID: _require_string(run_id, "run_id")
-        })
-
-    async def update_job_state_with_cpu_hours(
-        self,
-        job_id: str,
-        current_state: models.JobState,
-        state: models.JobState,
-        time: datetime.datetime,
-        cpu_hours: float | None = None
-    ):
-        """
-        Add output files to a job and update the state.
-        
-        Arguments are as update_job_state except for the addition of:
-        
-        cpu_hours - the job cpu hours, if available.
-        """
+        # Could merge this and and the above method...? Seems ok as is though
+        set_ = {}
+        push = {}
+        for fld, val in update.update_fields.items():
+            jbfld, ispush = self._FIELD_TO_KEY_AND_PUSH[fld]
+            target = push if ispush else set_
+            target[jbfld] = val
         await self._update_job_state(
             job_id,
-            state,
+            update.new_state,
             time,
-            current_state=current_state,
-            # Don't overwrite cpu hours if they exist
-            set_={models.FLD_JOB_CPU_HOURS: cpu_hours} if cpu_hours is not None else {}
+            current_state=update.current_state,
+            set_=set_,
+            push=push
         )
-
-    _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
-    
-    async def add_NERSC_upload_task_id(
-        self,
-        job_id: str,
-        task_id: str,
-        current_state: models.JobState,
-        state: models.JobState,
-        time: datetime.datetime
-    ):
-        """
-        Add an upload task_id to the NERSC section of a job and update the state.
-        
-        Arguments are as update_job_state except for the addition of:
-        
-        task_id - the NERSC task ID.
-        """
-        # may need to make this more generic where the cluster is passed in and mapped to
-        # a job structure location or something if we support more than NERSC
-        await self._update_job_state(job_id, state, time, current_state=current_state, push={
-            self._FLD_NERSC_UL_TASK: _require_string(task_id, "task_id")
-        })
-    
-    _FLD_NERSC_LOG_UL_TASK = (
-        f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
-    )
-    
-    async def add_NERSC_log_upload_task_id(
-        self,
-        job_id: str,
-        task_id: str,
-        current_state: models.JobState,
-        state: models.JobState,
-        time: datetime.datetime
-    ):
-        """
-        Add a log upload task_id to the NERSC section of a job and update the state.
-        
-        Arguments are as update_job_state except for the addition of:
-        
-        task_id - the NERSC task ID.
-        """
-        # may need to make this more generic where the cluster is passed in and mapped to
-        # a job structure location or something if we support more than NERSC
-        await self._update_job_state(job_id, state, time, current_state=current_state, push={
-            self._FLD_NERSC_LOG_UL_TASK: _require_string(task_id, "task_id")
-        })
-    
-    async def add_output_files_to_job(
-        self,
-        job_id: str,
-        output: list[models.S3File],
-        current_state: models.JobState,
-        state: models.JobState,
-        time: datetime.datetime
-    ):
-        """
-        Add output files to a job and update the state.
-        
-        Arguments are as update_job_state except for the addition of:
-        
-        output - the output files.
-        """
-        out = [o.model_dump() for o in _not_falsy(output, "output")]
-        await self._update_job_state(
-            job_id, state, time, current_state=current_state, set_={
-                models.FLD_JOB_OUTPUTS: out,
-                models.FLD_JOB_OUTPUT_FILE_COUNT: len(out),
-            }
-        )
-
-    async def set_job_error(
-        self,
-        job_id: str,
-        user_error: str,
-        admin_error: str,
-        state: models.JobState,
-        time: datetime.datetime,
-        traceback: str | None = None,
-        logpath: str | None = None,
-    ):
-        """
-        Put the job into an error state.
-        
-        job_id - the job ID.
-        user_error - an error message targeted towards a service user.
-        admin_error - an error message targeted towards a service admin.
-        state - the new state for the job.
-        time - the time at which the job transitioned to the new state.
-        traceback - the error traceback.
-        logpath - the path to any logs for the job.
-        """
-        await self.set_job_error_with_cpu_hours(
-            job_id, user_error, admin_error, state, time, traceback=traceback, logpath=logpath
-        )
-    
-    async def set_job_error_with_cpu_hours(
-        self,
-        job_id: str,
-        user_error: str,
-        admin_error: str,
-        state: models.JobState,
-        time: datetime.datetime,
-        traceback: str | None = None,
-        logpath: str | None = None,
-        cpu_hours: float | None = None,
-    ):
-        """
-        Put the job into an error state.
-        
-        Arguments are as set_job_error except for the addition of:
-        
-        cpu_hours - the job cpu hours, if available.
-        """
-        # TODO RETRIES will need to clear the error fields when attempting a retry
-        set_ = {
-            models.FLD_COMMON_ERROR: _require_string(user_error, "user_error"),
-            models.FLD_COMMON_ADMIN_ERROR: _require_string(admin_error, "admin_error"),
-            models.FLD_COMMON_TRACEBACK: traceback,
-            models.FLD_JOB_LOGPATH: logpath
-        }
-        if cpu_hours is not None:  # Don't overwrite cpu hours if they exist
-            set_[models.FLD_JOB_CPU_HOURS: cpu_hours] = cpu_hours
-        await self._update_job_state(job_id, state, time, set_=set_)
 
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""

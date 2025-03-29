@@ -28,6 +28,18 @@ from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
+from cdmtaskservice.update_state import (
+    submitted_nersc_download,
+    submitting_job,
+    submitted_jaws_job,
+    submitting_upload,
+    submitted_nersc_upload,
+    complete,
+    submitting_error_processing,
+    submitted_nersc_error_processing,
+    error,
+    JobUpdate,
+)
 
 # Not sure how other flows would work and how much code they might share. For now just make
 # this work and pull it apart / refactor later.
@@ -164,16 +176,18 @@ class NERSCJAWSRunner(JobFlow):
                 traceback=traceback,
             )
         else:
-            await self._mongo.set_job_error(
-                entity_id,
-                user_err,
-                admin_err,
-                models.JobState.ERROR,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime(),
-                traceback=traceback,
-                logpath=logpath,
-            )
+            await self._update_job_state(entity_id, error(
+                user_err, admin_err, traceback=traceback, log_files_path=logpath
+            ))
+
+    async def _update_job_state(self, job_id: str, update: JobUpdate):
+        # may want to factor this to a shared module if we ever support other flows
+        # TODO TEST will need a way to mock out timestamps
+        update_time = timestamp.utcdatetime()
+        await self._mongo.update_job_state(job_id, update, update_time)
+        # TODO KAFKA send kafka message, catch and log but otherwise ignore timeout error
+        # TODO KAFKA add DB flag showing whether message is sent
+        # TODO KAFKA on startup, check for unsent messages, send, and set flag
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
@@ -210,14 +224,7 @@ class NERSCJAWSRunner(JobFlow):
             # May need to refactor this and the mongo method later to be more generic to
             # remote cluster and have job_state handle choosing the correct mongo method & params
             # to run
-            await self._mongo.add_NERSC_download_task_id(
-                job.id,
-                task_id,
-                models.JobState.CREATED,
-                models.JobState.DOWNLOAD_SUBMITTED,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime(),
-            )
+            await self._update_job_state(job.id, submitted_nersc_download(task_id))
         except Exception as e:
             await self._handle_exception(e, job.id, "starting file download for")
 
@@ -233,12 +240,7 @@ class NERSCJAWSRunner(JobFlow):
         await self._get_transfer_result(  # check for errors
             tfunc, job.id, "Download", "getting download results for",
         )
-        await self._mongo.update_job_state(
-            job.id,
-            models.JobState.DOWNLOAD_SUBMITTED,
-            models.JobState.JOB_SUBMITTING,
-            timestamp.utcdatetime()
-        )
+        await self._update_job_state(job.id, submitting_job())
         await self._coman.run_coroutine(self._submit_jaws_job(job))
     
     async def _submit_jaws_job(self, job: models.AdminJobDetails):
@@ -246,14 +248,7 @@ class NERSCJAWSRunner(JobFlow):
             # TODO PERF configure file download concurrency
             jaws_job_id = await self._nman.run_JAWS(job)
             # See notes above about adding the NERSC task id to the job
-            await self._mongo.add_JAWS_run_id(
-                job.id,
-                jaws_job_id,
-                models.JobState.JOB_SUBMITTING,
-                models.JobState.JOB_SUBMITTED,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime(),
-            )
+            await self._update_job_state(job.id, submitted_jaws_job(jaws_job_id))
             jaws_info = await poll_jaws(self._jaws, job.id, jaws_job_id)
             await self._job_complete(job, jaws_info)
         except Exception as e:
@@ -276,36 +271,23 @@ class NERSCJAWSRunner(JobFlow):
             raise InvalidJobStateError("JAWS run is incomplete")
         res = jaws_client.result(jaws_info)
         if res == jaws_client.JAWSResult.SUCCESS:
-            await self._mongo.update_job_state_with_cpu_hours(
-                job.id,
-                models.JobState.JOB_SUBMITTED,
-                models.JobState.UPLOAD_SUBMITTING,
-                timestamp.utcdatetime(),
-                cpu_hours=jaws_info["cpu_hours"],
-                
+            await self._update_job_state(
+                job.id, submitting_upload(cpu_hours=jaws_info["cpu_hours"])
             )
             await self._coman.run_coroutine(self._upload_files(job, jaws_info))
         elif res == jaws_client.JAWSResult.FAILED:
-            await self._mongo.update_job_state_with_cpu_hours(
-                job.id,
-                models.JobState.JOB_SUBMITTED,
-                models.JobState.ERROR_PROCESSING_SUBMITTING,
-                timestamp.utcdatetime(),
-                cpu_hours=jaws_info["cpu_hours"],
+            await self._update_job_state(
+                job.id, submitting_error_processing(cpu_hours=jaws_info["cpu_hours"])
             )
             await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
         elif res == jaws_client.JAWSResult.SYSTEM_ERROR:
             # there's no way to force a jaws system error that I'm aware of, will need to
             # test via unit tests
-            await self._mongo.set_job_error_with_cpu_hours(
-                job.id,
+            await self._update_job_state(job.id, error(
                 "An unexpected error occurred",
                 "JAWS failed to run the job - check the JAWS job logs",
-                models.JobState.ERROR,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime(),
                 cpu_hours=jaws_info["cpu_hours"],
-            )
+            ))
         else:  # should never happen
             raise ValueError(f"unexpected JAWS result: {res}")
     
@@ -328,14 +310,7 @@ class NERSCJAWSRunner(JobFlow):
                 get_error_log_upload_complete_callback(self._callback_root, job.id),
                 insecure_ssl=self._s3insecure,
             )
-            await self._mongo.add_NERSC_log_upload_task_id(
-                job.id,
-                task_id,
-                models.JobState.ERROR_PROCESSING_SUBMITTING,
-                models.JobState.ERROR_PROCESSING_SUBMITTED,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime(),
-            )
+            await self._update_job_state(job.id, submitted_nersc_error_processing(task_id))
         except Exception as e:
             await self._handle_exception(e, job.id, "starting error processing for")
     
@@ -358,14 +333,7 @@ class NERSCJAWSRunner(JobFlow):
                 insecure_ssl=self._s3insecure,
             )
             # See notes above about adding the NERSC task id to the job
-            await self._mongo.add_NERSC_upload_task_id(
-                job.id,
-                task_id,
-                models.JobState.UPLOAD_SUBMITTING,
-                models.JobState.UPLOAD_SUBMITTED,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime(),
-            )
+            await self._update_job_state(job.id, submitted_nersc_upload(task_id))
         except Exception as e:
             await self._handle_exception(e, job.id, "starting file upload for")
 
@@ -401,14 +369,7 @@ class NERSCJAWSRunner(JobFlow):
                     )
                 outfiles.append(models.S3File(file=o.path, crc64nvme=o.crc64nvme))
             # TODO DISKSPACE will need to clean up job results @ NERSC
-            await self._mongo.add_output_files_to_job(
-                job.id,
-                outfiles,
-                models.JobState.UPLOAD_SUBMITTED,
-                models.JobState.COMPLETE,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime()
-            )
+            await self._update_job_state(job.id, complete(outfiles))
         except Exception as e:
             await self._handle_exception(e, job.id, "completing")
 
