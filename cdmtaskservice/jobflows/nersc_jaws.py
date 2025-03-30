@@ -182,7 +182,7 @@ class NERSCJAWSRunner(JobFlow):
         # TODO TEST will need a way to mock out timestamps
         update_time = timestamp.utcdatetime()
         await self._mongo.update_job_state(job_id, update, update_time)
-        # TODO KAFKA send kafka message, catch and log but otherwise ignore timeout error
+        await self._kafka.update_job_state(job_id, update.new_state, update_time, callback=None)
         # TODO KAFKA add DB flag showing whether message is sent
         # TODO KAFKA on startup, check for unsent messages, send, and set flag
 
