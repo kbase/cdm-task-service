@@ -234,4 +234,51 @@ def error(
     return JobUpdate()._set_new_state(models.JobState.ERROR.value)._set_fields(flds)
 
 
-# TODO NOW refdata 
+####################
+### Refdata states
+####################
+
+
+def submitted_nersc_refdata_download(task_id: str) -> RefdataUpdate:
+    """
+    Update a refdata staging process's state from created to download submitted and add a NERSC
+    superfacility API download task ID.
+    """
+    return RefdataUpdate(
+        )._set_current_state(models.ReferenceDataState.CREATED.value
+        )._set_new_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED.value
+        )._set_fields(
+            {UpdateField.NERSC_DOWNLOAD_TASK_ID: _require_string(task_id, "task_id")}
+    )
+
+
+def refdata_complete():
+    """
+    Update a refdata staging process's state from download submitted to complete.
+    """
+    return RefdataUpdate(
+        )._set_current_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED.value
+        )._set_new_state(models.ReferenceDataState.COMPLETE.value
+    )
+
+
+def refdata_error(
+    user_error: str,
+    admin_error: str,
+    traceback: str = None,
+) -> JobUpdate:
+    """
+    Update a refdata staging process's state to error.
+    
+    user_error - an error message targeted towards a service user.
+    admin_error - an error message targeted towards a service admin.
+    traceback - the error traceback.
+    """ 
+    return JobUpdate(
+        )._set_new_state(models.JobState.ERROR.value
+        )._set_fields({
+            UpdateField.USER_ERROR:_require_string(user_error, "user_error"), 
+            UpdateField.ADMIN_ERROR:_require_string(admin_error, "admin_error"), 
+            UpdateField.TRACEBACK:traceback, 
+        }
+    )

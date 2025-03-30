@@ -39,6 +39,10 @@ from cdmtaskservice.update_state import (
     submitted_nersc_error_processing,
     error,
     JobUpdate,
+    submitted_nersc_refdata_download,
+    refdata_complete,
+    refdata_error,
+    RefdataUpdate,
 )
 
 # Not sure how other flows would work and how much code they might share. For now just make
@@ -165,15 +169,8 @@ class NERSCJAWSRunner(JobFlow):
         # if this fails, well, then we're screwed
         # could probably simplify this with a partial fn to hold the cluster arg.. meh
         if refdata:
-            await self._mongo.set_refdata_error(
-                self._cluster,
-                entity_id,
-                user_err,
-                admin_err,
-                models.ReferenceDataState.ERROR,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime(),
-                traceback=traceback,
+            await self._update_refdata_state(entity_id, refdata_error(
+                user_err, admin_err, traceback=traceback)
             )
         else:
             await self._update_job_state(entity_id, error(
@@ -188,6 +185,13 @@ class NERSCJAWSRunner(JobFlow):
         # TODO KAFKA send kafka message, catch and log but otherwise ignore timeout error
         # TODO KAFKA add DB flag showing whether message is sent
         # TODO KAFKA on startup, check for unsent messages, send, and set flag
+
+    async def _update_refdata_state(self, refdata_id: str, update: RefdataUpdate
+    ):
+        await self._mongo.update_refdata_state(
+            # TODO TEST will need a way to mock out timestamps
+            self._cluster, refdata_id, update, timestamp.utcdatetime()
+        )
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
@@ -433,15 +437,7 @@ class NERSCJAWSRunner(JobFlow):
                 refdata=True,
                 unpack=refdata.unpack,
             )
-            await self._mongo.add_NERSC_refdata_download_task_id(
-                self._cluster,
-                refdata.id,
-                task_id,
-                models.ReferenceDataState.CREATED,
-                models.ReferenceDataState.DOWNLOAD_SUBMITTED,
-                # TODO TEST will need a way to mock out timestamps
-                timestamp.utcdatetime(),
-            )
+            await self._update_refdata_state(refdata.id, submitted_nersc_refdata_download(task_id))
         except Exception as e:
             await self._handle_exception(e, refdata.id, "starting file download for", refdata=True)
 
@@ -463,10 +459,4 @@ class NERSCJAWSRunner(JobFlow):
             tfunc, refdata.id, "Download", "getting download results for", refdata=True
         )
         # TODO DISKSPACE will need to clean up refdata manifests & d/l result json files
-        await self._mongo.update_refdata_state(
-            self._cluster,
-            refdata.id,
-            models.ReferenceDataState.DOWNLOAD_SUBMITTED,
-            models.ReferenceDataState.COMPLETE,
-            timestamp.utcdatetime(),
-        )
+        await self._update_refdata_state(refdata.id, refdata_complete())
