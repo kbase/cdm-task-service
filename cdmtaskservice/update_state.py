@@ -4,7 +4,7 @@ might be updated.
 """
 
 from enum import StrEnum, auto
-from typing import Self, Any
+from typing import Self, Any, TypeVar, Generic
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
@@ -53,7 +53,10 @@ class UpdateField(StrEnum):
     """ The path to logs created by a process. """
 
 
-class Update:
+T = TypeVar("T", models.JobState, models.ReferenceDataState)
+
+
+class Update(Generic[T]):
     """
     An update for a process.
     """
@@ -76,14 +79,14 @@ class Update:
         return self
 
     @property
-    def new_state(self) -> str:
+    def new_state(self) -> T:
         """ The state to apply to the process. """
         if not self._new_state or not self._new_state.strip():
             raise ValueError("A programming error occurred, new state must be present")
         return self._new_state
 
     @property
-    def current_state(self) -> str | None:
+    def current_state(self) -> T | None:
         """ Get the expected current state of the process, if any. """
         return self._current_state
 
@@ -96,11 +99,11 @@ class Update:
         return dict(self._fields)  # don't bother with full immutability
 
 
-class JobUpdate(Update):
+class JobUpdate(Update[models.JobState]):
     """ An update for a job. """
 
 
-class RefdataUpdate(Update):
+class RefdataUpdate(Update[models.ReferenceDataState]):
     """ An update for a refdata staging process. """
 
 
@@ -110,8 +113,8 @@ def submitted_nersc_download(task_id: str) -> JobUpdate:
     superfacility API download task ID.
     """
     return JobUpdate(
-        )._set_current_state(models.JobState.CREATED.value
-        )._set_new_state(models.JobState.DOWNLOAD_SUBMITTED.value
+        )._set_current_state(models.JobState.CREATED
+        )._set_new_state(models.JobState.DOWNLOAD_SUBMITTED
         )._set_fields(
             {UpdateField.NERSC_DOWNLOAD_TASK_ID: _require_string(task_id, "task_id")}
     )
@@ -120,16 +123,16 @@ def submitted_nersc_download(task_id: str) -> JobUpdate:
 def submitting_job() -> JobUpdate:
     """ Update a job's state from download submitted to submitting job. """
     return JobUpdate(
-        )._set_current_state(models.JobState.DOWNLOAD_SUBMITTED.value
-        )._set_new_state(models.JobState.JOB_SUBMITTING.value
+        )._set_current_state(models.JobState.DOWNLOAD_SUBMITTED
+        )._set_new_state(models.JobState.JOB_SUBMITTING
     )
 
 
 def submitted_jaws_job(jaws_run_id: str) -> JobUpdate:
     """ Update a job's state from submitting job to submitted job and add the JAWS run ID. """
     return JobUpdate(
-        )._set_current_state(models.JobState.JOB_SUBMITTING.value
-        )._set_new_state(models.JobState.JOB_SUBMITTED.value
+        )._set_current_state(models.JobState.JOB_SUBMITTING
+        )._set_new_state(models.JobState.JOB_SUBMITTED
         )._set_fields({UpdateField.JAWS_RUN_ID: _require_string(jaws_run_id, "jaws_run_id")}
     )
 
@@ -139,8 +142,8 @@ def submitting_upload(cpu_hours: float = None) -> JobUpdate:
     Update a job's state from job submitted to upload submitting and add cpu hours, if available.
     """
     return JobUpdate(
-        )._set_current_state(models.JobState.JOB_SUBMITTED.value
-        )._set_new_state(models.JobState.UPLOAD_SUBMITTING.value
+        )._set_current_state(models.JobState.JOB_SUBMITTED
+        )._set_new_state(models.JobState.UPLOAD_SUBMITTING
         )._set_fields(
             {
                 UpdateField.CPU_HOURS: _check_num(cpu_hours, "cpu_hours", minimum=0)
@@ -154,8 +157,8 @@ def submitted_nersc_upload(task_id: str) -> JobUpdate:
     superfacility API upload task ID.
     """
     return JobUpdate(
-        )._set_current_state(models.JobState.UPLOAD_SUBMITTING.value
-        )._set_new_state(models.JobState.UPLOAD_SUBMITTED.value
+        )._set_current_state(models.JobState.UPLOAD_SUBMITTING
+        )._set_new_state(models.JobState.UPLOAD_SUBMITTED
         )._set_fields({UpdateField.NERSC_UPLOAD_TASK_ID: _require_string(task_id, "task_id")}
     )
 
@@ -166,8 +169,8 @@ def complete(output_file_paths: list[models.S3File]) -> JobUpdate:
     """
     out = [o.model_dump() for o in _not_falsy(output_file_paths, "output_file_paths")]
     return JobUpdate(
-        )._set_current_state(models.JobState.UPLOAD_SUBMITTED.value
-        )._set_new_state(models.JobState.COMPLETE.value
+        )._set_current_state(models.JobState.UPLOAD_SUBMITTED
+        )._set_new_state(models.JobState.COMPLETE
         )._set_fields({
             UpdateField.OUTPUT_FILE_PATHS: out,
             UpdateField.OUTPUT_FILE_COUNT: len(out),
@@ -185,8 +188,8 @@ def submitting_error_processing(cpu_hours: float = None) -> JobUpdate:
     if available.
     """
     return JobUpdate(
-        )._set_current_state(models.JobState.JOB_SUBMITTED.value
-        )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTING.value
+        )._set_current_state(models.JobState.JOB_SUBMITTED
+        )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTING
         )._set_fields(
             {
                 UpdateField.CPU_HOURS: _check_num(cpu_hours, "cpu_hours", minimum=0)
@@ -200,8 +203,8 @@ def submitted_nersc_error_processing(task_id: str) -> JobUpdate:
     a NERSC superfacility API upload task ID.
     """
     return JobUpdate(
-        )._set_current_state(models.JobState.ERROR_PROCESSING_SUBMITTING.value
-        )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTED.value
+        )._set_current_state(models.JobState.ERROR_PROCESSING_SUBMITTING
+        )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTED
         )._set_fields(
             {UpdateField.NERSC_LOG_UPLOAD_TASK_ID: _require_string(task_id, "task_id")}
     )
@@ -231,7 +234,7 @@ def error(
     }
     if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
         flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
-    return JobUpdate()._set_new_state(models.JobState.ERROR.value)._set_fields(flds)
+    return JobUpdate()._set_new_state(models.JobState.ERROR)._set_fields(flds)
 
 
 ####################
@@ -245,8 +248,8 @@ def submitted_nersc_refdata_download(task_id: str) -> RefdataUpdate:
     superfacility API download task ID.
     """
     return RefdataUpdate(
-        )._set_current_state(models.ReferenceDataState.CREATED.value
-        )._set_new_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED.value
+        )._set_current_state(models.ReferenceDataState.CREATED
+        )._set_new_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED
         )._set_fields(
             {UpdateField.NERSC_DOWNLOAD_TASK_ID: _require_string(task_id, "task_id")}
     )
@@ -257,8 +260,8 @@ def refdata_complete() -> RefdataUpdate:
     Update a refdata staging process's state from download submitted to complete.
     """
     return RefdataUpdate(
-        )._set_current_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED.value
-        )._set_new_state(models.ReferenceDataState.COMPLETE.value
+        )._set_current_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED
+        )._set_new_state(models.ReferenceDataState.COMPLETE
     )
 
 
@@ -273,9 +276,9 @@ def refdata_error(
     user_error - an error message targeted towards a service user.
     admin_error - an error message targeted towards a service admin.
     traceback - the error traceback.
-    """ 
+    """
     return RefdataUpdate(
-        )._set_new_state(models.JobState.ERROR.value
+        )._set_new_state(models.JobState.ERROR
         )._set_fields({
             UpdateField.USER_ERROR:_require_string(user_error, "user_error"), 
             UpdateField.ADMIN_ERROR:_require_string(admin_error, "admin_error"), 
