@@ -6,12 +6,16 @@ Sends job status notifications to Kafka.
 
 from aiokafka import AIOKafkaProducer
 import asyncio
+from asyncio.futures import Future
 import datetime
 import json
+import logging
 import re
+from typing import Coroutine, Any
 
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
 from cdmtaskservice.models import JobState
+
 
 class KafkaNotifier:
     """
@@ -56,8 +60,16 @@ class KafkaNotifier:
             raise ValueError(f'Illegal character in Kafka topic {topic}: {match.group()}')
         self._topic = topic
         self._closed = False
+        self._futures = set()
+        self._tasks = set()
 
-    async def update_job_state(self, job_id: str, state: JobState, time: datetime.datetime):
+    async def update_job_state(
+        self,
+        job_id: str,
+        state: JobState,
+        time: datetime.datetime,
+        callback: Coroutine[None, Any, None] | None = None,
+    ):
         """
         Update Kafka with the job state change.
         
@@ -72,11 +84,25 @@ class KafkaNotifier:
             "state": _not_falsy(state, "state").value,
             "time": _not_falsy(time, "time").isoformat()
         }).encode("utf-8"))
+        self._futures.add(future)  # ensure future isn't garbage collected
         # kafka client appears to enter an infinite loop if kafka is down
-        # may need to make this configurable, but 10s is a pretty long time to wait for a 
-        # tiny message to send. Don't worry about it for now
+        # will eventually send the messages if kafka comes back up
         # https://github.com/aio-libs/aiokafka/issues/1101
-        await asyncio.wait_for(future, 10)  # throw exception, if any. This is a pain to test
+        def cb(future: Future):
+            self._futures.discard(future)
+            try:
+                future.result()  # trigger exception and don't call callback if one occurs
+            except Exception:
+                # no idea how to test this, or what would trigger it
+                logging.getLogger(__name__).exception(
+                    f"Failed to send state update to Kafka for job {job_id}, state {state.value}"
+                )
+                return
+            if callback:
+                task = asyncio.create_task(callback)
+                self._tasks.add(task)  # prevent garbage collection
+                task.add_done_callback(self._tasks.discard)
+        future.add_done_callback(cb)
 
     async def close(self):
         """
@@ -84,3 +110,5 @@ class KafkaNotifier:
         """
         await self._prod.stop()
         self._closed = True
+        self._futures = None  # allow garbage collection
+        self._tasks = None  # allow garbage collection

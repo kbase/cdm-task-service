@@ -1,5 +1,6 @@
 from aiokafka import AIOKafkaConsumer
 from aiokafka.errors import KafkaConnectionError
+import asyncio
 from datetime import datetime, timezone
 import pytest
 import re
@@ -50,13 +51,24 @@ async def _fail_create(bootstrap: str, topic: str, expected: Exception):
 @pytest.mark.asyncio
 async def test_send(kafkacon):
     kn = await KafkaNotifier.create(f"localhost:{kafkacon.port}", "topichere")
+    passed = set()
+    async def cb():
+        passed.add("pass")
     await kn.update_job_state(
-        "id1", JobState.CREATED, datetime(2024, 3, 24, 12, 0, 0, tzinfo=timezone.utc)
+        "id1",
+        JobState.CREATED,
+        datetime(2024, 3, 24, 12, 0, 0, tzinfo=timezone.utc),
+        callback=cb()
     )
+    # test with no callback
     await kn.update_job_state(
         "id2", JobState.DOWNLOAD_SUBMITTED, datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
     )
     await _check_send_results(kafkacon.port, "topichere")
+    assert passed == {"pass"}
+    # reaching into the implementation is bad, but no need for adding an access method
+    assert len(kn._futures) == 0
+    assert len(kn._tasks) == 0
     await kn.close()
 
 
@@ -65,25 +77,36 @@ async def test_send_with_recovery(kafkacon):
     # There seems to be a delay between calling the delete all topics function and the topics
     # actually being deleted. This test is flaky if it reuses the topic from the prior test
     kn = await KafkaNotifier.create(f"localhost:{kafkacon.port}", "recovery")
+    passed = set()
+    async def cb(add: str):
+        passed.add(add)
     await kn.update_job_state(
-        "id1", JobState.CREATED, datetime(2024, 3, 24, 12, 0, 0, tzinfo=timezone.utc)
+        "id1",
+        JobState.CREATED,
+        datetime(2024, 3, 24, 12, 0, 0, tzinfo=timezone.utc),
+        callback=cb("1")
     )
+    await asyncio.sleep(1)  # wait for message to send and future to be removed
     try:
         kafkacon.pause()
-        try:
-            # could speed this test up if needed by adding a timeout arg here
-            await kn.update_job_state(
-                "id2",
-                JobState.DOWNLOAD_SUBMITTED,
-                datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
-            )
-            assert 0, "Test failed, expected a timeout here"
-        except TimeoutError:
-            pass  # we expect an error
+        await kn.update_job_state(
+            "id2",
+            JobState.DOWNLOAD_SUBMITTED,
+            datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc),
+            callback=cb("2")
+        )
+        await asyncio.sleep(2)
+        # reaching into the implementation is bad, but no need for adding an access method
+        assert len(kn._futures) == 1
+        assert len(kn._tasks) == 0
     # Now test that we recover and the message still gets sent
     finally:
         kafkacon.unpause()
     await _check_send_results(kafkacon.port, "recovery")
+    assert passed == {"1", "2"}
+    # reaching into the implementation is bad, but no need for adding an access method
+    assert len(kn._futures) == 0
+    assert len(kn._tasks) == 0
     await kn.close()
 
 
