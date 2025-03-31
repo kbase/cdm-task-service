@@ -19,6 +19,11 @@ from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 _INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
 _INDEX_DIGEST = "UNIQUE_IMAGE_DIGEST_INDEX"
 
+# TODO KAFKA need to figure out an indexing scheme to find jobs w/o notifications
+#            should be a partial / sparse index
+_FLD_UPDATE_ID = "notif_id"
+_FLD_UPDATE_SENT = "notif_sent"
+
 
 class MongoDAO:
     """
@@ -190,29 +195,27 @@ class MongoDAO:
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
         current_state: models.JobState | None = None,
+        update_id: str | None = None,
     ):
         query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
         if current_state:
             query[models.FLD_COMMON_STATE] = current_state.value
+        transition = {
+            models.FLD_COMMON_STATE_TRANSITION_STATE: _not_falsy(state, "state").value,
+            models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
+        }
+        if update_id:
+            transition.update({_FLD_UPDATE_ID: update_id, _FLD_UPDATE_SENT: False})
         res = await self._col_jobs.update_one(
             query,
             {
-                "$push": (push if push else {}) | {
-                    models.FLD_COMMON_TRANS_TIMES:
-                        {
-                            models.FLD_COMMON_STATE_TRANSITION_STATE:
-                                _not_falsy(state, "state").value,
-                            models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
-                        }
-                },
+                "$push": (push if push else {}) | {models.FLD_COMMON_TRANS_TIMES: transition},
                 "$set": (set_ if set_ else {}) | {models.FLD_COMMON_STATE: state.value}
             },
         )
         if not res.matched_count:
             cs = f"in state {current_state.value} " if current_state else ""
-            raise NoSuchJobError(
-                f"No job with ID '{job_id}' {cs}exists"
-            )
+            raise NoSuchJobError(f"No job with ID '{job_id}' {cs}exists")
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
@@ -246,6 +249,7 @@ class MongoDAO:
         job_id: str,
         update: JobUpdate,
         time: datetime.datetime,
+        update_id: str | None = None,
     ):
         """
         Update the job state.
@@ -253,7 +257,12 @@ class MongoDAO:
         job_id - the job ID.
         update - the update to apply to the job.
         time - the time at which the job transitioned to the new state.
+        update_id - a unique string representing an ID for the update, to be used for sending
+            to notification systems.
+            If an update ID is provided, the update is marked as not sent yet.
+            The caller is responsible for ensuring uniqueness of IDs.
         """
+        # If we need to send notifications to more than one place this will need a refactor. YAGNI
         # Could merge this and and the above method...? Seems ok as is though
         set_ = {}
         push = {}
@@ -267,9 +276,24 @@ class MongoDAO:
             time,
             current_state=update.current_state,
             set_=set_,
-            push=push
+            push=push,
+            update_id = update_id
         )
 
+    async def job_update_sent(self, job_id: str, update_id: str):
+        """
+        Mark a job update as sent to a notification system.
+        """
+        query = {
+            models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
+            f"{models.FLD_COMMON_TRANS_TIMES}.{_FLD_UPDATE_ID}":
+                _require_string(update_id, "update_id")
+        }
+        update = {"$set": {f"{models.FLD_COMMON_TRANS_TIMES}.$.{_FLD_UPDATE_SENT}": True}}
+        res = await self._col_jobs.update_one(query, update)
+        if not res.matched_count:
+            raise NoSuchJobError(f"No job with ID '{job_id}' and update ID '{update_id}' exists")
+    
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""
         # don't bother checking for duplicate key exceptions since the service is supposed
