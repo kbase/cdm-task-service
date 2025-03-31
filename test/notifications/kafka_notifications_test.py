@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 import re
 
-from cdmtaskservice.kafka_notifications import KafkaNotifier
+from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.models import JobState
 from controllers.kafka_controller import KafkaController
 from test_common import config
