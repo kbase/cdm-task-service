@@ -58,11 +58,15 @@ async def test_send(kafkacon):
         "id1",
         JobState.CREATED,
         datetime(2024, 3, 24, 12, 0, 0, tzinfo=timezone.utc),
+        "trans_id1",
         callback=cb()
     )
     # test with no callback
     await kn.update_job_state(
-        "id2", JobState.DOWNLOAD_SUBMITTED, datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
+        "id2",
+        JobState.DOWNLOAD_SUBMITTED,
+        datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc),
+        "trans_id2"
     )
     await _check_send_results(kafkacon.port, "topichere")
     assert passed == {"pass"}
@@ -84,7 +88,8 @@ async def test_send_with_recovery(kafkacon):
         "id1",
         JobState.CREATED,
         datetime(2024, 3, 24, 12, 0, 0, tzinfo=timezone.utc),
-        callback=cb("1")
+        "trans_id1",
+        callback=cb("1"),
     )
     await asyncio.sleep(1)  # wait for message to send and future to be removed
     try:
@@ -93,7 +98,8 @@ async def test_send_with_recovery(kafkacon):
             "id2",
             JobState.DOWNLOAD_SUBMITTED,
             datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc),
-            callback=cb("2")
+            "trans_id2",
+            callback=cb("2"),
         )
         await asyncio.sleep(2)
         # reaching into the implementation is bad, but no need for adding an access method
@@ -127,10 +133,12 @@ async def _check_send_results(port, topic):
         res1 = res2
         res2 = temp
     assert res1.value == (
-        b'{"job_id": "id1", "state": "created", "time": "2024-03-24T12:00:00+00:00"}'
+        b'{"job_id": "id1", "state": "created", "time": "2024-03-24T12:00:00+00:00", '
+        + b'"trans_id": "trans_id1"}'
     )
     assert res2.value == (
-        b'{"job_id": "id2", "state": "download_submitted", "time": "2025-07-24T12:00:00+00:00"}'
+        b'{"job_id": "id2", "state": "download_submitted", "time": "2025-07-24T12:00:00+00:00", '
+        + b'"trans_id": "trans_id2"}'
     )
     await kc.stop()
 
@@ -140,5 +148,5 @@ async def test_fail_send_on_close(kafkacon):
     kn = await KafkaNotifier.create(f"localhost:{kafkacon.port}", "topichere")
     await kn.close()
     with pytest.raises(ValueError, match="client is closed"):
-        await kn.update_job_state("id", JobState.DOWNLOAD_SUBMITTED, datetime.now())
+        await kn.update_job_state("id", JobState.DOWNLOAD_SUBMITTED, datetime.now(), "foo")
     await kn.close()

@@ -27,6 +27,7 @@ from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client, S3BucketInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
+from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 
 
 class JobState:
@@ -40,6 +41,7 @@ class JobState:
         mongo: MongoDAO,
         s3client: S3Client,
         images: Images,
+        kafka: KafkaNotifier,
         refdata: Refdata,
         coro_manager: CoroutineWrangler,
         flow_manager: JobFlowManager,
@@ -52,6 +54,7 @@ class JobState:
         mongo - a MongoDB DAO object.
         s3Client - an S3Client pointed at the S3 storage system to use.
         images - a handler for getting images.
+        kafka - a Kafka notifier.
         refdata - a manager for reference data.
         coro_manager - a coroutine manager.
         flow_manager- the job flow manager.
@@ -61,6 +64,8 @@ class JobState:
         self._mongo = _not_falsy(mongo, "mongo")
         self._s3 = _not_falsy(s3client, "s3client")
         self._images = _not_falsy(images, "images")
+        # Maybe should make a wrapper around mongo & kafka for updates...?
+        self._kafka = _not_falsy(kafka, "kafka")
         self._ref = _not_falsy(refdata, "refdata")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._flowman = _not_falsy(flow_manager, "flow_manager")
@@ -96,18 +101,30 @@ class JobState:
         flow = self._flowman.get_flow(job_input.cluster)
         ji = job_input.model_copy(update={"input_files": new_input})
         job_id = str(uuid.uuid4())  # TODO TEST for testing we'll need to set up a mock for this
-        job = models.Job(
+        # TODO TEST will need a way to mock out timestamps
+        update_time = utcdatetime()
+        # TODO TEST will need to mock out uuid
+        trans_id = str(uuid.uuid4())
+        job = models.AdminJobDetails(
             id=job_id,
             job_input=ji,
             user=user.user,
             image=image,
             input_file_count=len(new_input),
             state=models.JobState.CREATED,
-            transition_times=[models.JobStateTransition(
-                state=models.JobState.CREATED, time=utcdatetime()
+            transition_times=[models.AdminJobStateTransition(
+                state=models.JobState.CREATED,
+                time=update_time,
+                trans_id=trans_id,
+                notif_sent=False,
             )]
         )
+        async def cb():
+            await self._mongo.job_update_sent(job_id, trans_id)
         await self._mongo.save_job(job)
+        await self._kafka.update_job_state(
+            job_id, models.JobState.CREATED, update_time, trans_id, callback=cb()
+        )
         # Pass in the meta to avoid potential race conditions w/ etag changes
         await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id

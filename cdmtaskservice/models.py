@@ -37,6 +37,8 @@ FLD_IMAGE_DIGEST = "digest"
 FLD_IMAGE_TAG = "tag"
 FLD_JOB_JOB_INPUT = "job_input"
 FLD_JOB_INPUT_RUNTIME = "runtime"
+FLD_JOB_STATE_TRANSITION_ID = "trans_id"
+FLD_JOB_STATE_TRANSITION_NOTIFICATiON_SENT = "notif_sent"
 FLD_JOB_NERSC_DETAILS = "nersc_details"
 FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
 FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
@@ -860,11 +862,45 @@ class JAWSDetails(BaseModel):
             + "failures.")]
 
 
+class AdminJobStateTransition(JobStateTransition):
+    
+    trans_id: Annotated[str, Field(
+        description="An opaque, unique ID identifying this state transition"
+    )]
+    # Only allows for one notification system... YAGNI
+    notif_sent: Annotated[bool, Field(
+        description="Whether an update has been sent to the notification system for "
+        + "this state transition."
+    )]
+
 class AdminJobDetails(Job):
     """
     Information about a job with added details of interest to service administrators.
     """
     # Output only model, no validation
+    transition_times: Annotated[list[AdminJobStateTransition], Field(
+        examples=[[
+            {
+                "state": JobState.CREATED.value,
+                "time": "2024-10-24T22:35:40Z",
+                "trans_id": "foo",
+                "notif_sent": True,
+            },
+            {
+                "state": JobState.UPLOAD_SUBMITTED.value,
+                "time": "2024-10-24T22:35:41Z",
+                "trans_id": "bar",
+                "notif_sent": True,
+            },
+            {
+                "state": JobState.JOB_SUBMITTING,
+                "time": "2024-10-24T22:47:67Z",
+                "trans_id": "baz",
+                "notif_sent": False, 
+            },
+        ]],
+        description="A list of job state transitions."
+    )]
     nersc_details: NERSCDetails | None = None
     jaws_details: JAWSDetails | None = None
     admin_error: Annotated[str | None, Field(

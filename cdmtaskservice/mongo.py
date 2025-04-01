@@ -21,8 +21,6 @@ _INDEX_DIGEST = "UNIQUE_IMAGE_DIGEST_INDEX"
 
 # TODO KAFKA need to figure out an indexing scheme to find jobs w/o notifications
 #            should be a partial / sparse index
-_FLD_UPDATE_ID = "notif_id"
-_FLD_UPDATE_SENT = "notif_sent"
 
 
 class MongoDAO:
@@ -72,7 +70,7 @@ class MongoDAO:
         ])
         # Only need and want a single unique index for jobs so they can be sharded
         await self._col_jobs.create_indexes([
-            IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True)
+            IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
         ])
         await self._col_refdata.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
@@ -159,8 +157,8 @@ class MongoDAO:
             raise ValueError("A digest or tag is required")
         return await fn(query), err
 
-    async def save_job(self, job: models.Job):
-        """ Save a job. Job IDs are expected to be unique."""
+    async def save_job(self, job: models.AdminJobDetails):
+        """ Save a job. Job IDs are expected to be unique. """
         _not_falsy(job, "job")
         jobd = job.model_dump(exclude_none=True)
         jobi = jobd[models.FLD_JOB_JOB_INPUT]
@@ -192,10 +190,10 @@ class MongoDAO:
         job_id: str,
         state: models.JobState,
         time: datetime.datetime,
+        trans_id: str,
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
         current_state: models.JobState | None = None,
-        update_id: str | None = None,
     ):
         query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
         if current_state:
@@ -203,9 +201,10 @@ class MongoDAO:
         transition = {
             models.FLD_COMMON_STATE_TRANSITION_STATE: _not_falsy(state, "state").value,
             models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
+            models.FLD_JOB_STATE_TRANSITION_ID: _require_string(trans_id, "trans_id"),
+            models.FLD_JOB_STATE_TRANSITION_NOTIFICATiON_SENT: False
+            
         }
-        if update_id:
-            transition.update({_FLD_UPDATE_ID: update_id, _FLD_UPDATE_SENT: False})
         res = await self._col_jobs.update_one(
             query,
             {
@@ -249,17 +248,16 @@ class MongoDAO:
         job_id: str,
         update: JobUpdate,
         time: datetime.datetime,
-        update_id: str | None = None,
+        trans_id: str,
     ):
         """
-        Update the job state.
+        Update the job state, marking it as not yet sent to the notification system.
         
         job_id - the job ID.
         update - the update to apply to the job.
         time - the time at which the job transitioned to the new state.
-        update_id - a unique string representing an ID for the update, to be used for sending
-            to notification systems.
-            If an update ID is provided, the update is marked as not sent yet.
+        trans_id - a unique string representing an ID for the job state transition,
+            to be used for sending to notification systems.
             The caller is responsible for ensuring uniqueness of IDs.
         """
         # If we need to send notifications to more than one place this will need a refactor. YAGNI
@@ -277,23 +275,31 @@ class MongoDAO:
             current_state=update.current_state,
             set_=set_,
             push=push,
-            update_id = update_id
+            trans_id = trans_id
         )
 
-    async def job_update_sent(self, job_id: str, update_id: str):
+    async def job_update_sent(self, job_id: str, trans_id: str):
         """
-        Mark a job update as sent to a notification system.
+        Mark a job state transition as sent to a notification system.
+        
+        job_id - the ID of the job.
+        trans_id - the ID of the job state transition.
         """
         query = {
             models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
-            f"{models.FLD_COMMON_TRANS_TIMES}.{_FLD_UPDATE_ID}":
-                _require_string(update_id, "update_id")
+            f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_JOB_STATE_TRANSITION_ID}":
+                _require_string(trans_id, "update_id")
         }
-        update = {"$set": {f"{models.FLD_COMMON_TRANS_TIMES}.$.{_FLD_UPDATE_SENT}": True}}
-        res = await self._col_jobs.update_one(query, update)
+        fld = (
+            f"{models.FLD_COMMON_TRANS_TIMES}.$."
+            + f"{models.FLD_JOB_STATE_TRANSITION_NOTIFICATiON_SENT}"
+        )
+        res = await self._col_jobs.update_one(query, {"$set": {fld: True}})
         if not res.matched_count:
-            raise NoSuchJobError(f"No job with ID '{job_id}' and update ID '{update_id}' exists")
-    
+            raise NoSuchJobError(
+                f"No job with ID '{job_id}' and state transition ID '{trans_id}' exists"
+            )
+
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""
         # don't bother checking for duplicate key exceptions since the service is supposed
