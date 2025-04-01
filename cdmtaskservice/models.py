@@ -542,10 +542,10 @@ class JobInput(BaseModel):
         default = "PT60S",
         description="The runtime required for each container as the number of seconds or an "
             + "ISO8601 duration string.",
-        ge=1,
+        ge=datetime.timedelta(seconds=1),
         # https://jaws-docs.readthedocs.io/en/latest/Resources/compute_resources.html#table-of-available-resources
         # TODO LAWRENCIUM can handle 3 days, need to check per site. same for CPU
-        le=2 * 24 * 60 * 60 - (15 * 60),  # max JAWS runtime
+        le=datetime.timedelta(seconds=2 * 24 * 60 * 60 - (15 * 60)),  # max JAWS runtime
     )] = datetime.timedelta(seconds=60)
     input_files: Annotated[list[str] | list[S3FileWithDataID], Field(
         examples=[
