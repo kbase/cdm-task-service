@@ -14,6 +14,7 @@ REQUEST_ID = "request_id"
 
 # Fields to use in log extra dicts
 JOB_ID = "job_id"
+TRANS_ID = "trans_id"
 REFDATA_ID = "refdata_id"
 NERSC_STATUS = "nersc_status"
 NERSC_TASK_ID = "nersc_task"

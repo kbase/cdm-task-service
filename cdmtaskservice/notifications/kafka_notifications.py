@@ -14,6 +14,7 @@ import re
 from typing import Coroutine, Any
 
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
+from cdmtaskservice import logfields
 from cdmtaskservice.models import JobState
 
 
@@ -99,7 +100,11 @@ class KafkaNotifier:
             except Exception:
                 # no idea how to test this, or what would trigger it
                 logging.getLogger(__name__).exception(
-                    f"Failed to send state update to Kafka for job {job_id}, state {state.value}"
+                    f"Failed to send state update to Kafka",
+                    extra={
+                        logfields.JOB_ID: job_id,
+                        logfields.TRANS_ID: trans_id,
+                    }
                 )
                 return
             if callback:
