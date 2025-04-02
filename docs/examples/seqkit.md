@@ -32,7 +32,7 @@ Here we show an example using `requests` in an `ipython` terminal.
 In [2]: import requests
 
 In [3]: res = requests.post(
-   ...:     "http://localhost:5000/jobs/",
+   ...:     "https://ci.kbase.us/services/cts/jobs/",
    ...:     headers={"Authorization": f"Bearer {token_ci}"},
    ...:     json={
    ...:         "cluster": "perlmutter-jaws",
