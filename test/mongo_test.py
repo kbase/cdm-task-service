@@ -161,7 +161,7 @@ async def test_process_jobs_with_unsent_updates_noop(mondb):
     assert count == 0
 
 
-async def _set_up_jobs(mc: MongoDAO) -> tuple[models.AdminJobDetails]:
+async def set_up_jobs(mc: MongoDAO) -> tuple[models.AdminJobDetails]:
     old_dt = datetime.datetime(2000, 1, 1, 1, 1, 1, tzinfo=datetime.timezone.utc)
     newer_dt = datetime.datetime(2020, 1, 1, 1, 1, 2, tzinfo=datetime.timezone.utc)
     
@@ -183,7 +183,7 @@ async def _set_up_jobs(mc: MongoDAO) -> tuple[models.AdminJobDetails]:
     job2.transition_times[0].time = old_dt
     await mc.save_job(job2)
     
-    # should hit 2nd position
+    # should hit 2nd position and miss the first position because the notification is sent
     job3 = _BASEJOB.model_copy(deep=True)
     job3.id = "job3"
     job3.transition_times[0].notif_sent = True
@@ -191,12 +191,10 @@ async def _set_up_jobs(mc: MongoDAO) -> tuple[models.AdminJobDetails]:
     job3.transition_times[1].time = newer_dt
     await mc.save_job(job3)
     
-    # should hit 1st position
+    # should hit 1st position and miss the 2nd position because the time is new
     job4 = _BASEJOB.model_copy(deep=True)
     job4.id = "job4"
     job4.transition_times[0].time = newer_dt
-    job4.transition_times[1].notif_sent = True
-    job4.transition_times[1].time = old_dt
     await mc.save_job(job4)
     
     # should hit both positions
@@ -216,7 +214,7 @@ async def test_process_jobs_with_unsent_updates(mondb):
     async def collector(j: models.AdminJobDetails):
         jobs[j.id] = j
         
-    job3, job4, job5 = await _set_up_jobs(mc)
+    job3, job4, job5 = await set_up_jobs(mc)
     
     # check no jobs are found
     dt = datetime.datetime(2020, 1, 1, 1, 1, 2, tzinfo=datetime.timezone.utc)
@@ -235,10 +233,10 @@ async def test_process_jobs_with_unsent_updates(mondb):
 
 
 @pytest.mark.asyncio
-async def test_process_jobs_with_unset_updates_using_index(mondb):
+async def test_process_jobs_with_unsent_updates_using_index(mondb):
     # This tests that the mongo query for the respective function uses the correct index.
     mc = await MongoDAO.create(mondb)
-    await _set_up_jobs(mc)
+    await set_up_jobs(mc)
     
     dt = datetime.datetime(2020, 1, 1, 1, 1, 3, tzinfo=datetime.timezone.utc)
     # This query is copied from the function and needs to be kept in sync
