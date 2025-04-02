@@ -9,18 +9,23 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import IndexModel, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 from pymongo.results import DeleteResult
-from typing import Any, Awaitable
+from typing import Any, Awaitable, Callable, Coroutine
 
 from cdmtaskservice import models
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
+from cdmtaskservice.arg_checkers import (
+    not_falsy as _not_falsy,
+    require_string as _require_string,
+    verify_aware_datetime
+)
 from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 
 
 _INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
 _INDEX_DIGEST = "UNIQUE_IMAGE_DIGEST_INDEX"
 
-# TODO KAFKA need to figure out an indexing scheme to find jobs w/o notifications
-#            should be a partial / sparse index
+_FLD_TRANS_TIME_SEND = (
+    f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT}"
+)
 
 
 class MongoDAO:
@@ -68,9 +73,15 @@ class MongoDAO:
                 name=_INDEX_TAG
             ),
         ])
+        timefield = f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_COMMON_STATE_TRANSITION_TIME}"
         # Only need and want a single unique index for jobs so they can be sharded
         await self._col_jobs.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
+            # find jobs with unsent updates
+            IndexModel(
+                [(timefield, DESCENDING)],
+                partialFilterExpression={_FLD_TRANS_TIME_SEND: False}
+            )
         ])
         await self._col_refdata.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
@@ -124,7 +135,7 @@ class MongoDAO:
         """
         # TODO FEATURE IMAGE paging - not really needed until > 1000 images
         # TODO FEATURE IMAGE sorting and filtering - not really needed until > 1000 images
-        # For now osrting and filtering can be done client side. Seems likely we'll never have
+        # For now sorting and filtering can be done client side. Seems likely we'll never have
         # 1000 active images
         images = []
         async for d in self._col_images.find().limit(1000):
@@ -181,6 +192,10 @@ class MongoDAO:
         )
         if not doc:
             raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+        return self._doc_to_job(doc, as_admin=as_admin)
+        
+    def _doc_to_job(self, doc: dict[str, Any], as_admin: bool = False
+    ) -> models.Job | models.AdminJobDetails:
         # TODO PERF build up the job piece by piece to skip S3 path validation
         doc = self._clean_doc(doc)
         return models.AdminJobDetails(**doc) if as_admin else models.Job(**doc)
@@ -202,7 +217,7 @@ class MongoDAO:
             models.FLD_COMMON_STATE_TRANSITION_STATE: _not_falsy(state, "state").value,
             models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
             models.FLD_JOB_STATE_TRANSITION_ID: _require_string(trans_id, "trans_id"),
-            models.FLD_JOB_STATE_TRANSITION_NOTIFICATiON_SENT: False
+            models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT: False
             
         }
         res = await self._col_jobs.update_one(
@@ -292,13 +307,50 @@ class MongoDAO:
         }
         fld = (
             f"{models.FLD_COMMON_TRANS_TIMES}.$."
-            + f"{models.FLD_JOB_STATE_TRANSITION_NOTIFICATiON_SENT}"
+            + f"{models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT}"
         )
         res = await self._col_jobs.update_one(query, {"$set": {fld: True}})
         if not res.matched_count:
             raise NoSuchJobError(
                 f"No job with ID '{job_id}' and state transition ID '{trans_id}' exists"
             )
+
+    async def process_jobs_with_unsent_updates(
+        self,
+        processor: Callable[[models.AdminJobDetails], Coroutine[None, None, None]],
+        older_than: datetime.datetime,
+    ) -> int:
+        """
+        Find jobs with unsent state transitions older than a specified time and pass them to an
+        async function.
+        
+        processor - an async function that takes a job as an argument and has no return.
+            It will be called once per job found.
+        older_than - Only jobs with state transitions that are older than the given date
+            will be returned. Naive datetimes are not allowed.
+            
+        Returns the number of jobs found.
+        """
+        _not_falsy(processor, "processor")
+        verify_aware_datetime(older_than, "older_than")
+        # WARNING: There's a test in the mongo test file that ensures this query uses the
+        # correct partial index. Be sure to update the test there if the query changes.
+        query = {
+            # needed to get the query planner to use the partial index, even though it's
+            # redundant
+            _FLD_TRANS_TIME_SEND: False,
+            models.FLD_COMMON_TRANS_TIMES:{
+                "$elemMatch": {
+                    models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT: False,
+                    models.FLD_COMMON_STATE_TRANSITION_TIME: {"$lt": older_than}
+                }
+            }
+        }
+        count = 0
+        async for d in self._col_jobs.find(query):
+            count += 1
+            await processor(self._doc_to_job(d, as_admin=True))
+        return count
 
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""
