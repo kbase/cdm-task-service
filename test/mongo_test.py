@@ -2,17 +2,18 @@
 from bson.son import SON
 import datetime
 import pytest
-from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Coroutine, Callable
 
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO, NoSuchJobError
 
-from conftest import mongo_serv  # @UnusedImport
+from conftest import (
+    mongo,  # @UnusedImport
+    mondb,  # @UnusedImport
+    MONGO_TEST_DB,
+)
 
 # TODO TEST add more tests
-
-_TEST_DB = "testing"
 
 # Mongo only has millisecond precision
 _SAFE_TIME = datetime.datetime(2025, 3, 31, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
@@ -52,28 +53,12 @@ _BASEJOB = models.AdminJobDetails(
 )
 
 
-@pytest.fixture
-def mongo(mongo_serv):
-    mongo_serv.clear_database(_TEST_DB, drop_indexes=True)
-    
-    yield mongo_serv
-
-
-@pytest.fixture()
-def mondb(mongo):
-    mcli = AsyncIOMotorClient(f"mongodb://localhost:{mongo.port}", tz_aware=True)
-
-    yield mcli[_TEST_DB]
-
-    mcli.close()
-
-
 @pytest.mark.asyncio
 async def test_indexes(mongo, mondb):
     await MongoDAO.create(mondb)
-    cols = mongo.client[_TEST_DB].list_collection_names()
+    cols = mongo.client[MONGO_TEST_DB].list_collection_names()
     assert set(cols) == {"jobs", "refdata", "images"}
-    jobindex = mongo.client[_TEST_DB]["jobs"].index_information()
+    jobindex = mongo.client[MONGO_TEST_DB]["jobs"].index_information()
     assert jobindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
@@ -83,13 +68,13 @@ async def test_indexes(mongo, mondb):
             "partialFilterExpression": SON([("transition_times.notif_sent", False)])
         }
     }
-    refindex = mongo.client[_TEST_DB]["refdata"].index_information()
+    refindex = mongo.client[MONGO_TEST_DB]["refdata"].index_information()
     assert refindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
         "file_1": {"v": 2, "key": [("file", 1)]}
     }
-    imgindex = mongo.client[_TEST_DB]["images"].index_information()
+    imgindex = mongo.client[MONGO_TEST_DB]["images"].index_information()
     assert imgindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "UNIQUE_IMAGE_DIGEST_INDEX": {

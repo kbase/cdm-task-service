@@ -7,23 +7,9 @@ import re
 
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.models import JobState
-from controllers.kafka_controller import KafkaController
-from test_common import config
+
+from conftest import kafka  # @UnusedImport
 from utils import find_free_port
-
-
-@pytest.fixture(scope="module")
-def kafkacon():
-    kc = KafkaController(config.KAFKA_DOCKER_IMAGE)
-    
-    yield kc
-    
-    kc.destroy(False)
-
-
-@pytest.fixture
-def _clean_kafka(kafkacon):
-    kafkacon.delete_all_topics()
 
 
 @pytest.mark.asyncio
@@ -49,8 +35,8 @@ async def _fail_create(bootstrap: str, topic: str, expected: Exception):
 
 
 @pytest.mark.asyncio
-async def test_send(kafkacon):
-    kn = await KafkaNotifier.create(f"localhost:{kafkacon.port}", "topichere")
+async def test_send(kafka):
+    kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "topichere")
     passed = set()
     async def cb():
         passed.add("pass")
@@ -68,7 +54,7 @@ async def test_send(kafkacon):
         datetime(2025, 7, 24, 12, 0, 0, tzinfo=timezone.utc),
         "trans_id2"
     )
-    await _check_send_results(kafkacon.port, "topichere")
+    await _check_send_results(kafka.port, "topichere")
     assert passed == {"pass"}
     # reaching into the implementation is bad, but no need for adding an access method
     assert len(kn._futures) == 0
@@ -77,10 +63,8 @@ async def test_send(kafkacon):
 
 
 @pytest.mark.asyncio
-async def test_send_with_recovery(kafkacon):
-    # There seems to be a delay between calling the delete all topics function and the topics
-    # actually being deleted. This test is flaky if it reuses the topic from the prior test
-    kn = await KafkaNotifier.create(f"localhost:{kafkacon.port}", "recovery")
+async def test_send_with_recovery(kafka):
+    kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "topichere")
     passed = set()
     async def cb(add: str):
         passed.add(add)
@@ -93,7 +77,7 @@ async def test_send_with_recovery(kafkacon):
     )
     await asyncio.sleep(1)  # wait for message to send and future to be removed
     try:
-        kafkacon.pause()
+        kafka.pause()
         await kn.update_job_state(
             "id2",
             JobState.DOWNLOAD_SUBMITTED,
@@ -107,8 +91,8 @@ async def test_send_with_recovery(kafkacon):
         assert len(kn._tasks) == 0
     # Now test that we recover and the message still gets sent
     finally:
-        kafkacon.unpause()
-    await _check_send_results(kafkacon.port, "recovery")
+        kafka.unpause()
+    await _check_send_results(kafka.port, "topichere")
     assert passed == {"1", "2"}
     # reaching into the implementation is bad, but no need for adding an access method
     assert len(kn._futures) == 0
@@ -144,8 +128,8 @@ async def _check_send_results(port, topic):
 
 
 @pytest.mark.asyncio
-async def test_fail_send_on_close(kafkacon):
-    kn = await KafkaNotifier.create(f"localhost:{kafkacon.port}", "topichere")
+async def test_fail_send_on_close(kafka):
+    kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "topichere")
     await kn.close()
     with pytest.raises(ValueError, match="client is closed"):
         await kn.update_job_state("id", JobState.DOWNLOAD_SUBMITTED, datetime.now(), "foo")
