@@ -59,7 +59,9 @@ class CDMTaskServiceConfig:
     mongo_user: bool - whether to set the MongoDB retry writes parameter on.
     job_max_cpu_hours: float - the maximum number of cpu hours per job.
     kafka_bootstrap_servers: str - the Kafka bootstrap servers in standard format.
-    kafka_topic_jobs: str - the Kafka topic where job updates will be pubished.
+    kafka_topic_jobs: str - the Kafka topic where job updates will be published.
+    kafka_startup_unsent_delay_min: int | None - if present, indicates that unsent Kafka job
+        updates messages older than the given delay in minutes should be sent.
     container_s3_log_dir: str - where to store container logs in S3.
     crane_path: str - the path to a `crane` executable.
     service_root_url: str - the URL for the service root.
@@ -120,6 +122,11 @@ class CDMTaskServiceConfig:
         self.job_max_cpu_hours = _get_float_required(config, _SEC_JOBS, "max_cpu_hours", minimum=1)
         self.kafka_boostrap_servers = _get_string_required(config, _SEC_KAFKA, "bootstrap_servers")
         self.kafka_topic_jobs = _get_string_required(config, _SEC_KAFKA, "topic_jobs")
+        startup_delay = _get_int_optional(
+            config, _SEC_KAFKA, "check_unsent_messages_on_startup_delay_min"
+        )
+        startup_delay = None if startup_delay is not None and startup_delay < 1 else startup_delay
+        self.kafka_startup_unsent_delay_min = startup_delay
         self.container_s3_log_dir = _get_string_required(
             config, _SEC_LOGGING, "container_s3_log_dir"
         )
@@ -160,6 +167,7 @@ class CDMTaskServiceConfig:
             f"Max CPU hours per job: {self.job_max_cpu_hours}",
             f"Kafka bootstrap servers: {self.kafka_boostrap_servers}",
             f"Kafka jobs topic: {self.kafka_topic_jobs}",
+            f"Kafka unsent messages startup send delay: {self.kafka_startup_unsent_delay_min}",
             f"Directory in S3 for container logs: {self.container_s3_log_dir}",
             f"crane executable path: {self.crane_path}",
             f"Service root URL: {self.service_root_url}",
@@ -171,6 +179,16 @@ class CDMTaskServiceConfig:
 def _check_missing_section(config, section):
     if section not in config:
         raise ValueError(f"Missing section {section}")
+
+
+def _get_int_optional(config, section, key) -> int | None:
+    putative = config[section].get(key)
+    if putative is None:
+        return None
+    if type(putative) != int:
+        raise ValueError(
+            f"Expected integer value for key {key} in section {section}, got {putative}")
+    return putative
 
 
 def _get_float_required(config, section, key, minimum: float = None) -> float:

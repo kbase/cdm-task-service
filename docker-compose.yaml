@@ -54,11 +54,12 @@ services:
       # - KBCTS_MONGO_USER=root
       # - KBCTS_MONGO_PWD=secret
       - KBCTS_MONGO_RETRYWRITES=false
+      - KBCTS_JOB_MAX_CPU_HOURS=200
       - KBCTS_KAFKA_BOOTSTRAP_SERVERS=localhost:9092
       - KBCTS_KAFKA_TOPIC_JOBS=cts-jobs
-      - KBCTS_JOB_MAX_CPU_HOURS=200
       - KBCTS_CONTAINER_S3_LOG_DIR=cts-logs/container_logs
       - KBCTS_SERVICE_ROOT_URL=https://ci.kbase.us/services/cts
+      - KBCTS_SERVICE_GROUP=local_development
     volumes:
       - ./tmp_creds:/creds
 
@@ -86,7 +87,7 @@ services:
       KAFKA_DELETE_TOPIC_ENABLE: true
 
   minio:
-    image: minio/minio:RELEASE.2024-10-02T17-50-41Z
+    image: minio/minio:RELEASE.2025-02-07T23-21-09Z
     environment:
       MINIO_ROOT_USER: miniouser
       MINIO_ROOT_PASSWORD: miniopassword
