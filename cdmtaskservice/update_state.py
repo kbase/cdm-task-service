@@ -252,7 +252,7 @@ def submitted_nersc_refdata_download(task_id: str) -> RefdataUpdate:
     )
 
 
-def refdata_complete():
+def refdata_complete() -> RefdataUpdate:
     """
     Update a refdata staging process's state from download submitted to complete.
     """
@@ -266,7 +266,7 @@ def refdata_error(
     user_error: str,
     admin_error: str,
     traceback: str = None,
-) -> JobUpdate:
+) -> RefdataUpdate:
     """
     Update a refdata staging process's state to error.
     
@@ -274,7 +274,7 @@ def refdata_error(
     admin_error - an error message targeted towards a service admin.
     traceback - the error traceback.
     """ 
-    return JobUpdate(
+    return RefdataUpdate(
         )._set_new_state(models.JobState.ERROR.value
         )._set_fields({
             UpdateField.USER_ERROR:_require_string(user_error, "user_error"), 
