@@ -35,6 +35,7 @@ from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathS
 FLD_IMAGE_NAME = "name"
 FLD_IMAGE_DIGEST = "digest"
 FLD_IMAGE_TAG = "tag"
+FLD_JOB_USER = "user"
 FLD_JOB_JOB_INPUT = "job_input"
 FLD_JOB_INPUT_RUNTIME = "runtime"
 FLD_JOB_STATE_TRANSITION_ID = "trans_id"
