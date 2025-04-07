@@ -489,8 +489,11 @@ class Cluster(str, Enum):
     # TODO LAWRENCIUM add when available
 
 
-class JobInput(BaseModel):
-    """ Input to a Job. """
+class JobInputPreview(BaseModel):
+    """
+    Input to a Job, consisting of fields containing small amounts of data.
+    Suitable for a list of jobs.
+    """
     model_config = ConfigDict(extra='forbid')
     
     # In the design there's a field for authentication source. This seems so unlikely to ever
@@ -547,29 +550,6 @@ class JobInput(BaseModel):
         # TODO LAWRENCIUM can handle 3 days, need to check per site. same for CPU
         le=datetime.timedelta(seconds=2 * 24 * 60 * 60 - (15 * 60)),  # max JAWS runtime
     )] = datetime.timedelta(seconds=60)
-    input_files: Annotated[list[str] | list[S3FileWithDataID], Field(
-        examples=[
-            [{
-                "file": "mybucket/foo/bat",
-                "data_id": "GCA_000146795.3",
-                "crc64name": "4ekt2WB1KO4=",
-            }],
-            ["mybucket/foo/bat"]
-        ],
-        description="The S3 input files for the job, either a list of file paths as strings or a "
-            + "list of data structures including the file path and optionally a data ID and / or "
-            + "CRC64/NVME checksum. The file paths always start with the bucket. "
-            + "All S3 input files are expected to have a CRC64/NVME checksum available, even "
-            + "if it is not provided in the input data structure. "
-            + "Either all or no files must have data IDs associated with them. "
-            + "When returned from the service, the checksum is always included.",
-        min_length=1,
-        # Need to see how well this performs. If we need more files per job,
-        # can test performance & tweak S3 client concurrency. Alternatively, add a file set
-        # endpoint where file sets of size < some reasonable number can be submitted, and then
-        # multiple file sets can be combined in a JobInput
-        max_length=10000,
-    )]
     input_roots: Annotated[list[str] | None, Field(
         examples=[["mybucket/foo/bar"]],
         description="If specified, preserves file hierarchies for S3 files below the given "
@@ -591,30 +571,6 @@ class JobInput(BaseModel):
         min_length=3 + 1 + 1,
         max_length=63 + 1 + 1024
     )]
-    
-    @field_validator("input_files", mode="before")
-    @classmethod
-    def _check_input_files(cls, v):
-        if v is None:
-            return None
-        newlist = []
-        for i, f in enumerate(v):
-            if isinstance(f, str):
-                newlist.append(_validate_s3_path(f, index=i))
-            else:
-                newlist.append(f)
-        return newlist
-    
-    @field_validator("input_files", mode="after")
-    @classmethod
-    def _check_data_ids(cls, v):
-        if not isinstance(v[0], S3FileWithDataID):
-            return v
-        data_ids = bool(v[0].data_id)
-        for f in v:
-            if bool(f.data_id) is not data_ids:
-                raise ValueError("Either all or no files must have data IDs")
-        return v
     
     @field_validator("input_roots", mode="before")
     @classmethod
@@ -641,6 +597,68 @@ class JobInput(BaseModel):
     @classmethod
     def _check_outdir(cls, v):
         return _validate_s3_path(v)
+    
+    def get_total_compute_time_sec(self) -> float:
+        """
+        Return the total compute time as seconds for the job, calculated as
+        cpus * containers * runtime.
+        """ 
+        return self.cpus * self.num_containers * self.runtime.total_seconds()
+
+
+class JobInput(JobInputPreview):
+    """
+    Input to a Job.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    input_files: Annotated[list[str] | list[S3FileWithDataID], Field(
+        examples=[
+            [{
+                "file": "mybucket/foo/bat",
+                "data_id": "GCA_000146795.3",
+                "crc64name": "4ekt2WB1KO4=",
+            }],
+            ["mybucket/foo/bat"]
+        ],
+        description="The S3 input files for the job, either a list of file paths as strings or a "
+            + "list of data structures including the file path and optionally a data ID and / or "
+            + "CRC64/NVME checksum. The file paths always start with the bucket. "
+            + "All S3 input files are expected to have a CRC64/NVME checksum available, even "
+            + "if it is not provided in the input data structure. "
+            + "Either all or no files must have data IDs associated with them. "
+            + "When returned from the service, the checksum is always included.",
+        min_length=1,
+        # Need to see how well this performs. If we need more files per job,
+        # can test performance & tweak S3 client concurrency. Alternatively, add a file set
+        # endpoint where file sets of size < some reasonable number can be submitted, and then
+        # multiple file sets can be combined in a JobInput
+        max_length=10000,
+    )]
+    
+    @field_validator("input_files", mode="before")
+    @classmethod
+    def _check_input_files(cls, v):
+        if v is None:
+            return None
+        newlist = []
+        for i, f in enumerate(v):
+            if isinstance(f, str):
+                newlist.append(_validate_s3_path(f, index=i))
+            else:
+                newlist.append(f)
+        return newlist
+    
+    @field_validator("input_files", mode="after")
+    @classmethod
+    def _check_data_ids(cls, v):
+        if not isinstance(v[0], S3FileWithDataID):
+            return v
+        data_ids = bool(v[0].data_id)
+        for f in v:
+            if bool(f.data_id) is not data_ids:
+                raise ValueError("Either all or no files must have data IDs")
+        return v
     
     @model_validator(mode="after")
     def _check_manifest_data_ids(self) -> Self:
@@ -688,13 +706,6 @@ class JobInput(BaseModel):
             files.append(infiles[:fcount])
             infiles = infiles[fcount:]
         return files
-    
-    def get_total_compute_time_sec(self) -> float:
-        """
-        Return the total compute time as seconds for the job, calculated as
-        cpus * containers * runtime.
-        """ 
-        return self.cpus * self.num_containers * self.runtime.total_seconds()
 
 
 class RegistrationInfo(BaseModel):
@@ -780,15 +791,16 @@ class JobStateTransition(BaseModel):
         description="The time at which the new state was entered."
     )]
 
-class Job(BaseModel):
+class JobPreview(BaseModel):
     """
-    Information about a job.
+    Information about a job, consisting of fields containing small amounts of data.
+    Suitable for a list of jobs.
     """
     # This is an outgoing data structure only so we don't add validators
     id: Annotated[str, Field(
         description="An opaque, unique string that serves as the job's ID.",
     )]
-    job_input: JobInput
+    job_input: JobInputPreview
     user: Annotated[str, Field(examples=["myuserid"], description="The user that ran the job.")]
     image: Image
     input_file_count: Annotated[int, Field(
@@ -812,8 +824,6 @@ class Job(BaseModel):
         examples=[52.4],
         description="The total CPU hours used by the job, if available.")
     ] = None
-    # May need to assemble jobs manually if path validation is too expensive.
-    outputs: list[S3File] | None = None
     output_file_count: Annotated[int | None, Field(
         examples=[24],
         description="The number of output files, if available."
@@ -826,6 +836,16 @@ class Job(BaseModel):
         examples=["cts-logs/container_logs/e14a21ba-032d-42f2-b235-d82606675b17"],
         description="A location in S3 where the logfiles for the job containers can be viewed."
     )] = None
+
+
+class Job(JobPreview):
+    """
+    Information about a job.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    job_input: JobInput
+    # May need to assemble jobs manually if path validation is too expensive.
+    outputs: list[S3File] | None = None
 
 
 class NERSCDetails(BaseModel):
