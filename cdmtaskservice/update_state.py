@@ -1,5 +1,5 @@
 """
-Cpntains enums and classes to represent various ways in which a job or refdata staging process
+Contains enums and classes to represent various ways in which a job or refdata staging process
 might be updated.
 """
 
@@ -160,7 +160,7 @@ def submitted_nersc_upload(task_id: str) -> JobUpdate:
     )
 
 
-def complete(output_file_paths: list[models.S3File]):
+def complete(output_file_paths: list[models.S3File]) -> JobUpdate:
     """
     Update a job's state from upload submitted to complete and add output files.
     """
