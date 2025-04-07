@@ -185,15 +185,15 @@ class MongoDAO:
     async def _update_job_state(
         self,
         job_id: str,
-        state: str,
+        state: models.JobState,
         time: datetime.datetime,
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
-        current_state: str | None = None,
+        current_state: models.JobState | None = None,
     ):
         query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
         if current_state:
-            query[models.FLD_COMMON_STATE] = current_state
+            query[models.FLD_COMMON_STATE] = current_state.value
         res = await self._col_jobs.update_one(
             query,
             {
@@ -201,11 +201,11 @@ class MongoDAO:
                     models.FLD_COMMON_TRANS_TIMES:
                         {
                             models.FLD_COMMON_STATE_TRANSITION_STATE:
-                                _require_string(state, "state"),
+                                _not_falsy(state, "state").value,
                             models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
                         }
                 },
-                "$set": (set_ if set_ else {}) | {models.FLD_COMMON_STATE: state}
+                "$set": (set_ if set_ else {}) | {models.FLD_COMMON_STATE: state.value}
             },
         )
         if not res.matched_count:
@@ -336,11 +336,11 @@ class MongoDAO:
         self,
         cluster: models.Cluster,
         refdata_id: str,
-        state: str,
+        state: models.ReferenceDataState,
         time: datetime.datetime,
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
-        current_state: str | None = None,
+        current_state: models.ReferenceDataState | None = None,
     ):
         sub = f"{models.FLD_REFDATA_STATUSES}."
         subs = f"{sub}$."
@@ -351,18 +351,18 @@ class MongoDAO:
         set_ = {f"{subs}{k}": v for k, v in set_.items()} if set_ else {}
         push = {f"{subs}{k}": v for k, v in push.items()} if push else {}
         if current_state:
-            query[f"{sub}{models.FLD_COMMON_STATE}"] = current_state
+            query[f"{sub}{models.FLD_COMMON_STATE}"] = current_state.value
         res = await self._col_refdata.update_one(
             query,
             {
                 "$push": push | {f"{subs}{models.FLD_COMMON_TRANS_TIMES}":
                     {
                         models.FLD_COMMON_STATE_TRANSITION_STATE:
-                           _require_string(state, "state"),
+                           _not_falsy(state, "state").value,
                         models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
                     }
                 },
-                "$set": set_ | {f"{subs}{models.FLD_COMMON_STATE}": state}
+                "$set": set_ | {f"{subs}{models.FLD_COMMON_STATE}": state.value}
             },
         )
         if not res.matched_count:
