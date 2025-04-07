@@ -13,7 +13,7 @@ from typing import Any, Awaitable
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
-from cdmtaskservice.update_state import JobUpdate, UpdateField
+from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 
 
 _INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
@@ -43,7 +43,7 @@ class MongoDAO:
         self._col_images = self._db.images
         self._col_jobs = self._db.jobs
         self._col_refdata = self._db.refdata
-        self._setup_job_field_mapping()
+        self._setup_field_mappings()
         
     async def _create_indexes(self):
         # Tested that trying to create a unique index on a key that is not unique within documents
@@ -200,7 +200,8 @@ class MongoDAO:
                 "$push": (push if push else {}) | {
                     models.FLD_COMMON_TRANS_TIMES:
                         {
-                            models.FLD_COMMON_STATE_TRANSITION_STATE: _not_falsy(state, "state"),
+                            models.FLD_COMMON_STATE_TRANSITION_STATE:
+                                _require_string(state, "state"),
                             models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
                         }
                 },
@@ -219,7 +220,7 @@ class MongoDAO:
     _FLD_NERSC_LOG_UL_TASK = (
         f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
     )
-    def _setup_job_field_mapping(self):
+    def _setup_field_mappings(self):
         self._FIELD_TO_KEY_AND_PUSH = {
             UpdateField.NERSC_DOWNLOAD_TASK_ID: (self._FLD_NERSC_DL_TASK, True),
             UpdateField.JAWS_RUN_ID: (self._FLD_JAWS_RUN_ID, True),
@@ -232,6 +233,12 @@ class MongoDAO:
             UpdateField.ADMIN_ERROR: (models.FLD_COMMON_ADMIN_ERROR, False),
             UpdateField.TRACEBACK: (models.FLD_COMMON_TRACEBACK, False),
             UpdateField.LOG_PATH: (models.FLD_JOB_LOGPATH, False),
+        }
+        self._REFDATA_FIELD_TO_KEY_AND_PUSH = {
+            UpdateField.NERSC_DOWNLOAD_TASK_ID: (models.FLD_REFDATA_NERSC_DL_TASK_ID, True),
+            UpdateField.USER_ERROR: (models.FLD_COMMON_ERROR, False),
+            UpdateField.ADMIN_ERROR: (models.FLD_COMMON_ADMIN_ERROR, False),
+            UpdateField.TRACEBACK: (models.FLD_COMMON_TRACEBACK, False),
         }
 
     async def update_job_state(
@@ -329,11 +336,11 @@ class MongoDAO:
         self,
         cluster: models.Cluster,
         refdata_id: str,
-        state: models.ReferenceDataState,
+        state: str,
         time: datetime.datetime,
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
-        current_state: models.ReferenceDataState | None = None,
+        current_state: str | None = None,
     ):
         sub = f"{models.FLD_REFDATA_STATUSES}."
         subs = f"{sub}$."
@@ -344,18 +351,18 @@ class MongoDAO:
         set_ = {f"{subs}{k}": v for k, v in set_.items()} if set_ else {}
         push = {f"{subs}{k}": v for k, v in push.items()} if push else {}
         if current_state:
-            query[f"{sub}{models.FLD_COMMON_STATE}"] = current_state.value
+            query[f"{sub}{models.FLD_COMMON_STATE}"] = current_state
         res = await self._col_refdata.update_one(
             query,
             {
                 "$push": push | {f"{subs}{models.FLD_COMMON_TRANS_TIMES}":
                     {
                         models.FLD_COMMON_STATE_TRANSITION_STATE:
-                           _not_falsy(state, "state").value,
+                           _require_string(state, "state"),
                         models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
                     }
                 },
-                "$set": set_ | {f"{subs}{models.FLD_COMMON_STATE}": state.value}
+                "$set": set_ | {f"{subs}{models.FLD_COMMON_STATE}": state}
             },
         )
         if not res.matched_count:
@@ -368,78 +375,33 @@ class MongoDAO:
         self,
         cluster: models.Cluster,
         refdata_id: str,
-        current_state: models.ReferenceDataState,
-        state: models.ReferenceDataState,
+        update: RefdataUpdate,
         time: datetime.datetime,
     ):
         """
-        Update the reference data state.
+        Update the reference data process state.
         
         cluster - the cluster to which this update applies.
         refdata_id - the reference data ID.
-        current_state - the expected current state of the reference data. If the reference
-            data is not in this state an error is thrown.
-        state - the new state for the reference data.
-        time - the time at which the reference data transitioned to the new state.
+        update - the update to apply to the process.
+        time - the time at which the process transitioned to the new state.
         """
-        await self._update_refdata_state(
-            cluster, refdata_id, state, time, current_state=current_state
-        )
-
-    async def add_NERSC_refdata_download_task_id(
-        self,
-        cluster: models.Cluster,
-        refdata_id: str,
-        task_id: str,
-        current_state: models.ReferenceDataState,
-        state: models.ReferenceDataState,
-        time: datetime.datetime
-    ):
-        """
-        Add a task_id to the NERSC section of a reference data download and update the state.
-        
-        Arguments are as update_refdata_state except for the addition of:
-        
-        task_id - the NERSC task ID.
-        """
-        # may need to make this more generic where the cluster is passed in and mapped to
-        # a job structure location or something if we support more than NERSC
+        # Could merge this and and the above method...? Seems ok as is though
+        set_ = {}
+        push = {}
+        for fld, val in update.update_fields.items():
+            rffld, ispush = self._REFDATA_FIELD_TO_KEY_AND_PUSH[fld]
+            target = push if ispush else set_
+            target[rffld] = val
         await self._update_refdata_state(
             cluster,
             refdata_id,
-            state,
+            update.new_state,
             time,
-            current_state=current_state,
-            push={models.FLD_REFDATA_NERSC_DL_TASK_ID: _require_string(task_id, "task_id")}
+            current_state=update.current_state,
+            set_=set_,
+            push=push
         )
-
-    async def set_refdata_error(
-        self,
-        cluster: models.Cluster,
-        refdata_id: str,
-        user_error: str,
-        admin_error: str,
-        state: models.ReferenceDataState,
-        time: datetime.datetime,
-        traceback: str | None = None,
-    ):
-        """
-        Put the reference data operation into an error state.
-        
-        cluster - the cluster to which this update applies.
-        refdata_id - the reference data ID.
-        user_error - an error message targeted towards a service user.
-        admin_error - an error message targeted towards a service admin.
-        state - the new state for the reference data operation.
-        time - the time at which the operation transitioned to the new state.
-        traceback - the error traceback.
-        """
-        # TODO RETRIES will need to clear the error fields when attempting a retry
-        await self._update_refdata_state(cluster, refdata_id, state, time, set_={
-            models.FLD_COMMON_ERROR: _require_string(user_error, "user_error"),
-            models.FLD_COMMON_ADMIN_ERROR: _require_string(admin_error, "admin_error"),
-            models.FLD_COMMON_TRACEBACK: traceback,
-        })
 
 
 class NoSuchImageError(Exception):
