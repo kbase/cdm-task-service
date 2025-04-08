@@ -26,7 +26,7 @@ boto3 = "==1.37.4"
 coverage = "==7.6.12"
 ipython = "==8.33.0"
 # redundant to the aio client, but makes some test rigs simpler
-kafka-python = "==2.1.2"
+kafka-python = "==2.1.5"
 # redundant to motor, but makes some test rigs simpler
 pymongo = "==4.11.3"
 pytest = "==8.3.4"

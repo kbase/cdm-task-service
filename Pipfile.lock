@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "efab8218f51d239bfb956497db0dddcd0996a45b23a2768df6130b82858c3f14"
+            "sha256": "bc5f5ad9f9ca64acc8a0146c69bfad5522bc65290075433ae2556dc3ff8edc50"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -2185,11 +2185,11 @@
         },
         "kafka-python": {
             "hashes": [
-                "sha256:2a31ecfe4bb91d6009dd97593dcbe8dc7ba161accde2cb9342583a8f862abda7",
-                "sha256:446235fdce7ed5d9ff48de2c31651a85659105a8d2ac0b4abb249f7758d8cfc6"
+                "sha256:205953e581c0371cada35bebdacc58ac7dee6c3f9e8d95b9a6a0a7bacc054ca0",
+                "sha256:6765c25440046cdadeb9c31469566be259d50802d27d4f8aae86d9ae755b78e2"
             ],
             "index": "pypi",
-            "version": "==2.1.2"
+            "version": "==2.1.5"
         },
         "matplotlib-inline": {
             "hashes": [
