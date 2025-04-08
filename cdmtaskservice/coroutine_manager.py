@@ -8,7 +8,7 @@ to the coroutine task so that it's not garbage collected.
 
 import asyncio
 import logging
-from typing import Awaitable
+from typing import Coroutine, Any
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 
@@ -21,7 +21,7 @@ class CoroutineWrangler:
         self._coros = set()
         self._destroy = False
 
-    async def run_coroutine(self, coro: Awaitable):
+    async def run_coroutine(self, coro: Coroutine[None, Any, None]):
         """ Run a coroutine to completion. """
         if self._destroy:
             raise ValueError("Manager is destroyed")
