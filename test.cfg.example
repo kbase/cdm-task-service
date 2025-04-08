@@ -9,6 +9,9 @@
 # If you install via a package manager you can use `which crane` to get the path.
 test.crane.exe=/path/to/crane
 
+# Absolute path to a Mongo server ('mongod') excecutable.
+test.mongo.exe=/path/to/mongod
+
 # Absolute path to a Minio server (`minio`) executable.
 test.minio.exe=/path/to/minio
 

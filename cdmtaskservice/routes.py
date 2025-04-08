@@ -409,7 +409,7 @@ async def get_nersc_client_info(
         description="The required remaining lifetime of the client as an "
             + "ISO8601 duration string. If the lifetime is shorter than this value, an error "
             + "will be returned.",
-        ge=1
+        ge=datetime.timedelta(seconds=1)
     )] = None,
     user: kb_auth.KBaseUser=Depends(_AUTH)
 ) -> NERSCClientInfo:
