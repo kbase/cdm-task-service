@@ -24,7 +24,7 @@ from cdmtaskservice.exceptions import InvalidJobStateError, InvalidReferenceData
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
-from cdmtaskservice.kafka_notifications import KafkaNotifier
+from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, PresignedPost

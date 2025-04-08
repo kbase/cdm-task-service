@@ -23,7 +23,7 @@ from cdmtaskservice.jaws.client import JAWSClient
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.job_state import JobState
-from cdmtaskservice.kafka_notifications import KafkaNotifier
+from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.kb_auth import KBaseAuth, KBaseUser
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
