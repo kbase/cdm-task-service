@@ -23,7 +23,7 @@ uvicorn = {version = "==0.34.0", extras = ["standard"]}
 [dev-packages]
 # for debugging
 boto3 = "==1.37.4"
-coverage = "==7.6.12"
+coverage = "==7.8.0"
 ipython = "==8.33.0"
 # redundant to the aio client, but makes some test rigs simpler
 kafka-python = "==2.1.2"
