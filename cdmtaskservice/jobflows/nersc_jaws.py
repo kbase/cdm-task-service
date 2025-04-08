@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import traceback
 from typing import Any, Callable, Awaitable
+import uuid
 
 from cdmtaskservice import logfields
 from cdmtaskservice import models
@@ -179,11 +180,16 @@ class NERSCJAWSRunner(JobFlow):
 
     async def _update_job_state(self, job_id: str, update: JobUpdate):
         # may want to factor this to a shared module if we ever support other flows
+        # TODO TEST will need to mock out uuid
+        update_id = str(uuid.uuid4())
         # TODO TEST will need a way to mock out timestamps
         update_time = timestamp.utcdatetime()
-        await self._mongo.update_job_state(job_id, update, update_time)
-        await self._kafka.update_job_state(job_id, update.new_state, update_time, callback=None)
-        # TODO KAFKA add DB flag showing whether message is sent
+        async def cb():
+            await self._mongo.job_update_sent(job_id, update_id)
+        await self._mongo.update_job_state(job_id, update, update_time, update_id=update_id)
+        await self._kafka.update_job_state(
+            job_id, update.new_state, update_time, update_id=update_id, callback=cb()
+        )
         # TODO KAFKA on startup, check for unsent messages, send, and set flag
 
     async def _update_refdata_state(self, refdata_id: str, update: RefdataUpdate
