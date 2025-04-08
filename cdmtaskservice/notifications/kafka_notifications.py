@@ -68,7 +68,7 @@ class KafkaNotifier:
         job_id: str,
         state: JobState,
         time: datetime.datetime,
-        update_id: str | None = None,
+        trans_id: str,
         callback: Coroutine[None, Any, None] | None = None,
     ):
         """
@@ -77,17 +77,16 @@ class KafkaNotifier:
         job_id - the job's ID.
         state - the new state of the job.
         time - the time at which the state change occurred.
-        update_id - a unique ID for the update. 
+        trans_id - a unique ID for the state transition. 
         """
         if self._closed:
             raise ValueError('client is closed')
         msg = {
             "job_id": _require_string(job_id, "job_id"),
             "state": _not_falsy(state, "state").value,
-            "time": _not_falsy(time, "time").isoformat()
+            "time": _not_falsy(time, "time").isoformat(),
+            "trans_id": _require_string(trans_id, "trans_id")
         }
-        if update_id:
-            msg["update_id"] = update_id
         future = await self._prod.send(self._topic, json.dumps(msg).encode("utf-8"))
         self._futures.add(future)  # ensure future isn't garbage collected
         # kafka client appears to enter an infinite loop if kafka is down

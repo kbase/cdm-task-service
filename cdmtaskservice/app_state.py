@@ -130,6 +130,7 @@ async def build_app(
             mongodao,
             s3,
             images,
+            kafka_notifier,
             refdata,
             coman,
             flowman,
