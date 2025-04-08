@@ -288,7 +288,7 @@ class MongoDAO:
         query = {
             models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
             f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_JOB_STATE_TRANSITION_ID}":
-                _require_string(trans_id, "update_id")
+                _require_string(trans_id, "trans_id")
         }
         fld = (
             f"{models.FLD_COMMON_TRANS_TIMES}.$."
