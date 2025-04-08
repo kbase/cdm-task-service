@@ -22,7 +22,7 @@ jobs:
       matrix:
         include:
           - python-version: "3.11"
-            mongo: "mongodb-linux-aarch64-ubuntu2204-7.0.17"
+            mongo: "mongodb-linux-x86_64-ubuntu2204-7.0.18"
             minio: "2025-02-07T23-21-09Z"  # minimum supported version
             mc: "2024-08-13T05-33-17Z"
 
