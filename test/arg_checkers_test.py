@@ -1,6 +1,7 @@
+import datetime
 from pytest import raises
 
-from cdmtaskservice.arg_checkers import not_falsy, require_string, check_num
+from cdmtaskservice.arg_checkers import not_falsy, require_string, check_num, verify_aware_datetime
 
 
 def test_not_falsy():
@@ -59,3 +60,32 @@ def test_check_num_fail_minimum():
     for k, v in test_set.items():
         with raises(ValueError, match=f"^Luke must be >= {v}$"):
             check_num(k, "Luke", minimum=v)
+
+
+def test_verify_aware_datetime():
+    dts = [
+        datetime.datetime(2025, 3, 31, 12, 0, 0, tzinfo=datetime.timezone.utc),
+        datetime.datetime(2025, 3, 31, 12, 0, 0, tzinfo=datetime.timezone(
+            datetime.timedelta(hours=5, minutes=30))
+        )
+    ]
+    for dt in dts:
+        assert verify_aware_datetime(dt, "whatever") == dt
+
+
+def test_verify_aware_datetime_fail():
+    _fail_verify_aware_datetime(None, "oops", ValueError("oops is required"))
+    
+    dt = datetime.datetime(2025, 3, 31, 12, 0, 0)
+    _fail_verify_aware_datetime(dt, "foo", ValueError("foo must be a timezone aware datetime"))
+    
+    class NoOffsetTimezone(datetime.tzinfo):
+        def utcoffset(self, dt):
+            return None
+    dt = datetime.datetime(2025, 3, 31, 12, 0, 0, tzinfo=NoOffsetTimezone())
+    _fail_verify_aware_datetime(dt, "bar", ValueError("bar must be a timezone aware datetime"))
+
+
+def _fail_verify_aware_datetime(dt: datetime.datetime, name: str, expected: Exception):
+    with raises(type(expected), match=expected.args[0]):
+        verify_aware_datetime(dt, name)

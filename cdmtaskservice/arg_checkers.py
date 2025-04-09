@@ -6,6 +6,8 @@ imports should be kept to a minimum and the newest
 python features should be avoided to make setup on the remote cluster simple and allow for older
 python versions.
 '''
+
+import datetime
 from typing import Any
 import unicodedata
 
@@ -70,3 +72,15 @@ def contains_control_characters(string: str, allowed_chars: list[str] = None) ->
         if unicodedata.category(c)[0] == 'C' and c not in allowed_chars:
                 return i
     return -1
+
+
+def verify_aware_datetime(dt: datetime.datetime, name: str) -> datetime.datetime:
+    """
+    Confirm that a datetime in timezone aware and return the datetime.
+    
+    dt - the datetime to check.
+    name - the name of the argument for error messages.
+    """
+    if not_falsy(dt, name).tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        raise ValueError(f"{name} must be a timezone aware datetime")
+    return dt
