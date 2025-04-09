@@ -49,7 +49,7 @@ class KafkaChecker:
         self._mongo = _not_falsy(mongo, "mongo")
         self._kafka = _not_falsy(kafka, "kafka")
     
-    async def check(self, older_than: datetime.datetime) -> (int, int):
+    async def check(self, older_than: datetime.datetime) -> tuple[int, int]:
         """
         WARNING: read the module documentation completely before running this method. 
         Check for unsent job updates in Mongo and send them to Kafka.
