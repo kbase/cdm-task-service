@@ -5,7 +5,10 @@ import pytest
 import shutil
 import tempfile
 
-from conftest import assert_exception_correct, minio  # @UnusedImport
+from conftest import (
+    assert_exception_correct,
+    minio,  # @UnusedImport
+)
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.s3.remote import (
