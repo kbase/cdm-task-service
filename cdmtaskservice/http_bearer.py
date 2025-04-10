@@ -5,9 +5,9 @@ Also adds an `optional` keyword argument that allows for missing auth. If true a
 authorization information is provided, `None` is returned as the user.
 """
 
-from fastapi.security.http import HTTPBase
 from fastapi.openapi.models import HTTPBearer as HTTPBearerModel
 from fastapi.requests import Request
+from fastapi.security.http import HTTPBase
 from typing import Optional
 
 from cdmtaskservice import app_state
