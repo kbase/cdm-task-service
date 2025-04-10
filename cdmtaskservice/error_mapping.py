@@ -45,7 +45,7 @@ _H404 = status.HTTP_404_NOT_FOUND
 class ErrorMapping(NamedTuple):
     """ The application error type and HTTP status code for an exception. """
     err_type: ErrorType | None
-    """ The type of application error. None if a 5XX error or Not Found."""
+    """ The type of application error. None if a 5XX error or Not Found based on the url."""
     http_code: int
     """ The HTTP code of the error. """
 
@@ -79,7 +79,7 @@ _ERR_MAP = {
 }
 
 
-def map_error(err: Exception) -> tuple[ErrorType, int]:
+def map_error(err: Exception) -> ErrorMapping:
     """
     Map an error to an optional error type and a HTTP code.
     """

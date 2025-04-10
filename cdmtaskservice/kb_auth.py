@@ -42,7 +42,7 @@ async def _check_error(r):
         try:
             j = await r.json()
         except Exception:
-            err = ("Non-JSON response from KBase auth server, status code: " + str(r.status))
+            err = "Non-JSON response from KBase auth server, status code: " + str(r.status)
             logging.getLogger(__name__).info("%s, response:\n%s", err, r.text)
             raise IOError(err)
         # assume that if we get json then at least this is the auth server and we can
@@ -63,8 +63,8 @@ class KBaseAuth:
         auth_url: str,
         required_roles: list[str] = None,
         full_admin_roles: list[str] = None,
-        cache_max_size: int=10000,
-        cache_expiration: int=300
+        cache_max_size: int = 10000,
+        cache_expiration: int = 300,
     ) -> Self:
         """
         Create the client.
@@ -76,8 +76,8 @@ class KBaseAuth:
         cache_expiration -  the expiration time for the token cache in
             seconds.
         """
-        if not _not_falsy(auth_url, "auth_url").endswith('/'):
-            auth_url += '/'
+        if not _not_falsy(auth_url, "auth_url").endswith("/"):
+            auth_url += "/"
         j = await _get(auth_url, {"Accept": "application/json"})
         return KBaseAuth(
             auth_url,
@@ -85,28 +85,31 @@ class KBaseAuth:
             full_admin_roles,
             cache_max_size,
             cache_expiration,
-            j.get("servicename")
+            j.get("servicename"),
         )
 
     def __init__(
-            self,
-            auth_url: str,
-            required_roles: list[str],
-            full_admin_roles: list[str],
-            cache_max_size: int,
-            cache_expiration: int,
-            service_name: str):
+        self,
+        auth_url: str,
+        required_roles: list[str],
+        full_admin_roles: list[str],
+        cache_max_size: int,
+        cache_expiration: int,
+        service_name: str,
+    ):
         self._url = auth_url
         self._me_url = self._url + "api/V2/me"
         self._req_roles = set(required_roles) if required_roles else None
         self._full_roles = set(full_admin_roles) if full_admin_roles else set()
         self._cache_timer = time.time  # TODO TEST figure out how to replace the timer to test
-        self._cache = LRUCache(timer=self._cache_timer, maxsize=cache_max_size,
-            ttl=cache_expiration)
+        self._cache = LRUCache(
+            timer=self._cache_timer, maxsize=cache_max_size, ttl=cache_expiration
+        )
 
         if service_name != "Authentication Service":
-            raise IOError(f"The service at {self._url} does not appear to be the KBase " +
-                          "Authentication Service")
+            raise IOError(f"The service at {self._url} does not appear to be the KBase "
+                          + "Authentication Service"
+            )
 
         # could use the server time to adjust for clock skew, probably not worth the trouble
 
