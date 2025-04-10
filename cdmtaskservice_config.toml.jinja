@@ -109,6 +109,29 @@ bootstrap_servers = "{{ KBCTS_KAFKA_BOOTSTRAP_SERVERS or "" }}"
 # Legal characters are alphanumerics and the hyphen.
 topic_jobs = "{{ KBCTS_KAFKA_TOPIC_JOBS or "cts-jobs" }}"
 
+# WARNING: read this documentation fully before enabling this setting
+#
+# On service startup, check for unsent Kafka job updates older than the specified time in
+# minutes and send them.
+#
+# Note that it is possible to cause messages to be sent multiple times by enabling this setting.
+# For instance, if two services are brought up at the same time and there are unsent
+# messages in the database, it's possible both of them could process the messages, leading
+# to duplicates. Similarly, if there is a large message backlog and a new CTS service is
+# brought up, it might process the backlogged messages, leading to duplicates.
+
+# It it safe to enable this setting when:
+# * all other CTS servers are down and Kafka is up, or
+# * other CTS servers and Kafka are up, and both have been up long enough such that
+# there is a minimal update queue in the CTS servers; e.g. the CTS servers should send
+# messages before the specified time delay expires.
+  
+# It is not safe to run this code when updates are not sent to Kafka within the time delay; in
+# that case running this code may cause duplicate messages.
+
+# A number less than 1 indicates that unsent messages will not be checked on startup.
+check_unsent_messages_on_startup_delay_min = {{ KBCTS_KAFKA_STARTUP_UNSENT_MSG_DELAY_MIN or -1 }}
+
 [Logging]
 
 # An S3 path, starting with the bucket, to where container log files should be uploaded from jobs.

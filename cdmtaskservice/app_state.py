@@ -6,6 +6,7 @@ calling the build_app() method
 """
 
 import asyncio
+import datetime
 import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
@@ -29,9 +30,11 @@ from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.nersc.status import NERSCStatus
 from cdmtaskservice.nersc.manager import NERSCManager
+from cdmtaskservice.notifications.kafka_checker import KafkaChecker
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import validate_path
+from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.version import VERSION
 
 # The main point of this module is to handle all the application state in one place
@@ -46,6 +49,7 @@ class AppState(NamedTuple):
     refdata: Refdata
     images: Images
     jobflow_manager: JobFlowManager
+    kafka_checker: KafkaChecker
 
 
 class RequestState(NamedTuple):
@@ -141,7 +145,11 @@ async def build_app(
         app.state._coroman = coman
         app.state._jaws_cli = jaws_client
         app.state._kafka = kafka_notifier
-        app.state._cdmstate = AppState(auth, sfapi_client, job_state, refdata, images, flowman)
+        kc = KafkaChecker(mongodao, kafka_notifier)
+        app.state._cdmstate = AppState(
+            auth, sfapi_client, job_state, refdata, images, flowman, kc
+        )
+        await _check_unsent_kafka_messages(logr, cfg, kc)
     except:
         if mongocli:
             mongocli.close()
@@ -153,6 +161,16 @@ async def build_app(
             # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
             await asyncio.wait_for(kafka_notifier.close(), 10)
         raise
+
+
+async def _check_unsent_kafka_messages(
+    logr: logging.Logger, cfg: CDMTaskServiceConfig, kc: KafkaChecker
+):
+    if cfg.kafka_startup_unsent_delay_min:
+        older_than = utcdatetime() - datetime.timedelta(minutes=cfg.kafka_startup_unsent_delay_min)
+        logr.info(f"Checking for unsent kafka messages older than {older_than.isoformat()}...")
+        jobs, notifs = await kc.check(older_than)
+        logr.info(f"Sending {notifs} kafka updates for {jobs} jobs")
 
 
 async def _build_NERSC_flow_deps(

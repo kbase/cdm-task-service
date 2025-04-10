@@ -77,6 +77,7 @@ Metadata  :
 * [crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md)
 * An S3 instance for use as a file store, but see "S3 requirements" below
 * MongoDB 7+
+* Kafka 2.1+
 
 ### S3 requirements
 
