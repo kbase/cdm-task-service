@@ -429,6 +429,68 @@ async def get_nersc_client_info(
     )
 
 
+class UnsentNotifications(BaseModel):
+    """ Provides information about unsent job state transition notifications. """
+    jobs: Annotated[int, Field(
+        description="The number of jobs with unsent job state transition notifications."
+    )]
+    transitions: Annotated[int, Field(
+        description="The number of unsent job state transition notifications."
+    )]
+
+
+@ROUTER_ADMIN.post(
+    "/unsent_notifications",
+    response_model=UnsentNotifications,
+    summary="Send unsent job state transition notifications",
+    description="""
+**WARNING**: Read the documentation here fully before using this endpoint.
+
+Check for unsent Kafka job state transition notifications older than the specified
+time and send them.
+
+Note that it is possible to cause messages to be sent multiple times by calling this
+endpoint.
+
+For instance, if Kafka is down and at least one CTS server is up and processing jobs, the
+job updates will be cached by the CTS's Kafka client. Calling this endpoint will cache
+all those updates as well. If Kafka comes back up, all the updates, the originals
+and the updates generated from this endpoint, will be sent to the server.
+
+It it safe to call this endpoint when any running CTS servers and Kafka have been up
+long enough such that there is a minimal update queue in the CTS servers; e.g.
+the CTS servers should send messages before the time delay specified in the
+arguments expires.
+  
+It is not safe to run this code when updates are not sent to Kafka within the time delay;
+in that case running this code may cause duplicate messages.
+
+Returns the number of jobs found that need notifications sent and the number of
+notifications to send, which may be > 1 per job. The endpoint may return before
+sending of notifications completes.
+""",
+)
+async def handle_unsent_notifications(
+    r: Request,
+    notification_age: Annotated[datetime.timedelta, Query(
+        example="PT10M",
+        description="The amount of time the transition must have occurred in the past "
+            + "to trigger a send as an ISO8601 duration string. "
+            + "Transitions newer than this will be ignored.",
+        ge=datetime.timedelta(minutes=1)
+    )] = "PT10M",
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators may send notifications.")
+    kc = app_state.get_app_state(r).kafka_checker
+    older_than = utcdatetime() - notification_age
+    logging.getLogger(__name__).info(
+        f"Checking for unsent kafka messages older than {older_than.isoformat()}"
+    )
+    jobs, notifs = await kc.check(older_than)
+    return UnsentNotifications(jobs=jobs, transitions=notifs)
+
+
 @ROUTER_CALLBACKS.get(
     f"/{get_download_complete_callback()}/{{job_id}}",
     summary="Report data download complete",
