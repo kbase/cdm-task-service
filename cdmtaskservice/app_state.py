@@ -55,6 +55,7 @@ class AppState(NamedTuple):
 class RequestState(NamedTuple):
     """ Holds request specific state. """
     user: KBaseUser | None
+    token: str | None
 
 
 async def build_app(
@@ -267,17 +268,26 @@ def _get_app_state_from_app(app: FastAPI) -> AppState:
     return app.state._cdmstate
 
 
-def set_request_user(r: Request, user: KBaseUser):
+def set_request_user(r: Request, user: KBaseUser | None, token: str | None):
     """ Set the user for the current request. """
     # if we add more stuff in the request state we'll need to not blow away the old state
-    r.state._cdmstate = RequestState(user=user)
+    r.state._cdmstate = RequestState(user=user, token=token)
+
+
+def _get_request_state(r: Request, field: str) -> RequestState:
+    if not getattr(r.state, "_cdmstate", None) or not r.state._cdmstate:
+        return None
+    return getattr(r.state._cdmstate, field)
 
 
 def get_request_user(r: Request) -> KBaseUser:
     """ Get the user for a request. """
-    if not getattr(r.state, "_cdmstate", None) or not r.state._cdmstate:
-        return None
-    return r.state._cdmstate.user
+    return _get_request_state(r, "user")
+
+
+def get_request_token(r: Request) -> str:
+    """ Get the token for a request. """
+    return _get_request_state(r, "token")
 
 
 async def get_mongo_client(cfg: CDMTaskServiceConfig) -> AsyncIOMotorClient:

@@ -12,7 +12,7 @@ import logging
 import time
 from typing import NamedTuple, Self
 
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+from cdmtaskservice.arg_checkers import require_string as _require_string
 
 
 class AdminPermission(IntEnum):
@@ -47,8 +47,13 @@ async def _check_error(r):
             raise IOError(err)
         # assume that if we get json then at least this is the auth server and we can
         # rely on the error structure.
-        if j["error"].get("appcode") == 10020:  # Invalid token
+        err = j["error"].get("appcode")
+        if err == 10020:  # Invalid token
             raise InvalidTokenError("KBase auth server reported token is invalid.")
+        if err == 30010:  # Illegal username
+            # The auth server does some goofy stuff when propagating errors, should be cleaned up
+            # at some point
+            raise InvalidUserError(j["error"]["message"].split(":", 3)[-1])
         # don't really see any other error codes we need to worry about - maybe disabled?
         # worry about it later.
         raise IOError("Error from KBase auth server: " + j["error"]["message"])
@@ -76,7 +81,7 @@ class KBaseAuth:
         cache_expiration -  the expiration time for the token cache in
             seconds.
         """
-        if not _not_falsy(auth_url, "auth_url").endswith("/"):
+        if not _require_string(auth_url, "auth_url").endswith("/"):
             auth_url += "/"
         j = await _get(auth_url, {"Accept": "application/json"})
         return KBaseAuth(
@@ -123,7 +128,7 @@ class KBaseAuth:
         Returns the user.
         """
         # TODO CODE should check the token for \n etc.
-        _not_falsy(token, "token")
+        _require_string(token, "token")
 
         admin_cache = self._cache.get(token, default=False)
         if admin_cache:
@@ -144,12 +149,34 @@ class KBaseAuth:
         return AdminPermission.NONE
 
 
+    async def is_valid_user(self, user: str, token: str) -> bool:
+        """
+        Check if a user name is valid in the KBase auth service.
+        
+        user - the user name to check.
+        token - a token to provide to the auth service to allow accessing the lookup endpoint.
+        
+        Throws an exception if the user name is illegally formatted.
+        """
+        # TODO PERF add a cache here. Currently this is only used by an admin endpoint so
+        #           probably fine for now. If a user endpoint starts using it a cache may not be
+        #           a bad idea.
+        _require_string(user, "user")
+        _require_string(token, "token")
+        j = await _get(f"{self._url}api/V2/users/?list={user}", {"Authorization": token})
+        return len(j) == 1
+
+
 class AuthenticationError(Exception):
     """ An error thrown from the authentication service. """
 
 
 class InvalidTokenError(AuthenticationError):
     """ An error thrown when a token is invalid. """
+
+
+class InvalidUserError(AuthenticationError):
+    """ An error thrown when a username is invalid. """
 
 
 class MissingRoleError(AuthenticationError):
