@@ -198,3 +198,16 @@ class JobState:
             msg = f"Admin user {user} accessed {job.user}'s job {job_id}"
         logging.getLogger(__name__).info(msg, extra={logfields.JOB_ID: job_id})
         return job
+    
+    async def list_jobs(self, user: str, limit: int = 1000) -> list[models.JobPreview]:
+        """
+        List jobs for a user.
+        
+        user - the user requesting jobs.
+        limit - the maximum number of jobs to return between 1 and 1000.
+        """
+        # mostly a pass through method
+        limit = 1000 if limit is None else limit
+        if limit < 1 or limit > 1000:
+            raise IllegalParameterError("Limit must be between 1 and 1000 inclusive")
+        return await self._mongo.list_jobs(user=_require_string(user, "user"), limit=limit)

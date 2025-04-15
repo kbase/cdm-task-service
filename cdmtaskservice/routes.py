@@ -111,6 +111,32 @@ async def whoami(user: kb_auth.KBaseUser=Depends(_AUTH)) -> WhoAmI:
     }
 
 
+class ListJobsResponse(BaseModel):
+    """ The response to a successful job listing request. """
+    jobs: Annotated[list[models.JobPreview], Field(description="The jobs")]
+
+
+@ROUTER_JOBS.get(
+    "/",
+    response_model=ListJobsResponse,
+    response_model_exclude_none=True,
+    summary="List jobs",
+    description="List jobs for the current user."
+)
+async def list_jobs(
+    r: Request,
+    limit: Annotated[int, Query(
+        example=1000,
+        description="The maximum number of jobs to return",
+        ge=1,
+        le=1000,
+    )] = 1000,
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+) -> ListJobsResponse:
+    job_state = app_state.get_app_state(r).job_state
+    return ListJobsResponse(jobs=await job_state.list_jobs(user.user, limit))
+
+
 class SubmitJobResponse(BaseModel):
     """ The response to a successful job submission request. """
     job_id: Annotated[str, Field(description="An opaque job ID.")]
@@ -128,6 +154,8 @@ async def submit_job(
     user: kb_auth.KBaseUser=Depends(_AUTH),
 ) -> SubmitJobResponse:
     job_state = app_state.get_app_state(r).job_state
+    # TODO CODE this is inconsistent with the other job endpoints in that it passes in the
+    #           user class vs. a str. Doesn't really cause any issues though
     return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
 
 

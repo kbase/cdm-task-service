@@ -15,6 +15,7 @@ from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
     require_string as _require_string,
+    check_num as _check_num,
     verify_aware_datetime
 )
 from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
@@ -218,6 +219,32 @@ class MongoDAO:
         # TODO PERF build up the job piece by piece to skip S3 path validation
         doc = self._clean_doc(doc)
         return models.AdminJobDetails(**doc) if as_admin else models.Job(**doc)
+
+    async def list_jobs(self, user: str | None = None, limit: int = 1000
+    ) -> list[models.JobPreview]:
+        """
+        List jobs.
+        
+        user - filter jobs by user.
+        limit - the maximum number of jobs to return.
+        """
+        # TODO LISTJOBS filter by state
+        # TODO LISTJOBS filter by time
+        query = {models.FLD_JOB_USER: user} if user else {}
+        # drop the potentially large fields
+        project = {
+            models.FLD_JOB_OUTPUTS: 0,
+            f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_INPUT_FILES}": 0
+        }
+        sort = [(_FLD_UPDATE_TIME, DESCENDING)]
+        jobs = []
+        async for j in self._col_jobs.find(
+            query, project
+            ).sort(sort
+            ).limit(_check_num(limit, "limit")
+        ):
+            jobs.append(models.JobPreview(**self._clean_doc(j)))
+        return jobs
 
     async def _update_job_state(
         self,

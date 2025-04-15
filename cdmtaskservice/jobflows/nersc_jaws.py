@@ -190,7 +190,6 @@ class NERSCJAWSRunner(JobFlow):
         await self._kafka.update_job_state(
             job_id, update.new_state, update_time, trans_id, callback=cb()
         )
-        # TODO KAFKA on startup, check for unsent messages, send, and set flag
 
     async def _update_refdata_state(self, refdata_id: str, update: RefdataUpdate
     ):
