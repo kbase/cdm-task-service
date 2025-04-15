@@ -2,6 +2,7 @@
 Manages job state.
 """
 
+import datetime
 import logging
 import uuid
 
@@ -199,15 +200,31 @@ class JobState:
         logging.getLogger(__name__).info(msg, extra={logfields.JOB_ID: job_id})
         return job
     
-    async def list_jobs(self, user: str, limit: int = 1000) -> list[models.JobPreview]:
+    async def list_jobs(
+        self, user: str,
+        state: models.JobState | None = None,
+        after: datetime.datetime | None = None,
+        before: datetime.datetime | None = None,
+        limit: int = 1000
+    ) -> list[models.JobPreview]:
         """
         List jobs for a user.
         
         user - the user requesting jobs.
+        state - filter the jobs by the given state.
+        after - filter jobs to jobs that entered the current state after the given time, inclusive.
+        before - filter jobs to jobs that entered the current state before the given time,
+            exclusive.
         limit - the maximum number of jobs to return between 1 and 1000.
         """
         # mostly a pass through method
         limit = 1000 if limit is None else limit
         if limit < 1 or limit > 1000:
             raise IllegalParameterError("Limit must be between 1 and 1000 inclusive")
-        return await self._mongo.list_jobs(user=_require_string(user, "user"), limit=limit)
+        return await self._mongo.list_jobs(
+            user=_require_string(user, "user"),
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
