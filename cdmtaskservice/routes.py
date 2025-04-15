@@ -13,7 +13,7 @@ from fastapi import (
     Query,
     Path as FastPath
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AwareDatetime
 from typing import Annotated
 
 from cdmtaskservice import app_state, logfields
@@ -125,6 +125,20 @@ class ListJobsResponse(BaseModel):
 )
 async def list_jobs(
     r: Request,
+    state: Annotated[models.JobState, Query(
+        example=models.JobState.COMPLETE,
+        description="Filter jobs by the state of the job."
+    )] = None,
+    after: Annotated[AwareDatetime, Query(
+        example="2024-10-24T22:35:40Z",
+        description="Filter jobs where the last update time is newer than the provided date, "
+            + "inclusive",
+    )] = None,
+    before: Annotated[AwareDatetime, Query(
+        example="2024-10-24T22:35:59.999Z",
+        description="Filter jobs where the last update time is older than the provided date, "
+            + "exclusive",
+    )] = None,
     limit: Annotated[int, Query(
         example=1000,
         description="The maximum number of jobs to return",
@@ -134,7 +148,13 @@ async def list_jobs(
     user: kb_auth.KBaseUser=Depends(_AUTH),
 ) -> ListJobsResponse:
     job_state = app_state.get_app_state(r).job_state
-    return ListJobsResponse(jobs=await job_state.list_jobs(user.user, limit))
+    return ListJobsResponse(jobs=await job_state.list_jobs(
+        user.user,
+        state=state,
+        after=after,
+        before=before,
+        limit=limit,
+    ))
 
 
 class SubmitJobResponse(BaseModel):

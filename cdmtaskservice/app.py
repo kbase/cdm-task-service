@@ -50,7 +50,6 @@ from cdmtaskservice.exceptions import InvalidAuthHeaderError
 # TODO FEATURE GPU support
 # TODO FEATURE lawrencium support - dealing with refdata will be fun
 # TODO FEATURE job restarts / recovery (automatic?)
-# TODO FEATURE list jobs (see design)
 # TODO FEATURE refdata restarts / recovery (automatic?)
 
 

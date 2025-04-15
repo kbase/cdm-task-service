@@ -220,17 +220,36 @@ class MongoDAO:
         doc = self._clean_doc(doc)
         return models.AdminJobDetails(**doc) if as_admin else models.Job(**doc)
 
-    async def list_jobs(self, user: str | None = None, limit: int = 1000
+    async def list_jobs(
+        self,
+        user: str | None = None,
+        state: models.JobState | None = None,
+        after: datetime.datetime | None = None,
+        before: datetime.datetime | None = None,
+        limit: int = 1000
     ) -> list[models.JobPreview]:
         """
         List jobs.
         
         user - filter jobs by user.
+        state - filter jobs by the job's current state.
+        after - filter jobs to jobs that entered the current state after the given time, inclusive.
+        before - filter jobs to jobs that entered the current state before the given time,
+            exclusive.
         limit - the maximum number of jobs to return.
         """
-        # TODO LISTJOBS filter by state
-        # TODO LISTJOBS filter by time
-        query = {models.FLD_JOB_USER: user} if user else {}
+        timequery = {}
+        if after:
+            timequery["$gte"] = verify_aware_datetime(after, "after")
+        if before:
+            timequery["$lt"] = verify_aware_datetime(before, "before")
+        query = {}
+        if user:
+            query[models.FLD_JOB_USER] = user
+        if state:
+            query[models.FLD_COMMON_STATE] = state.value
+        if timequery:
+            query[_FLD_UPDATE_TIME] = timequery
         # drop the potentially large fields
         project = {
             models.FLD_JOB_OUTPUTS: 0,
