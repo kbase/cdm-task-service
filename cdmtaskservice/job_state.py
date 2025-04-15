@@ -177,7 +177,7 @@ class JobState:
     async def get_job(
         self,
         job_id: str,
-        user: str,
+        user: str,  # can't be a KBaseUser since may be the system calling the method
         as_admin: bool = False
     ) -> models.Job | models.AdminJobDetails:
         """
@@ -201,16 +201,18 @@ class JobState:
         return job
     
     async def list_jobs(
-        self, user: str,
+        self,
+        # can't be a KBaseUser since it may be provided by an admin as a parameter
+        user: str | None = None,
         state: models.JobState | None = None,
         after: datetime.datetime | None = None,
         before: datetime.datetime | None = None,
         limit: int = 1000
     ) -> list[models.JobPreview]:
         """
-        List jobs for a user.
+        List jobs in the system.
         
-        user - the user requesting jobs.
+        user - filter the jobs by a specific user.
         state - filter the jobs by the given state.
         after - filter jobs to jobs that entered the current state after the given time, inclusive.
         before - filter jobs to jobs that entered the current state before the given time,
@@ -222,7 +224,7 @@ class JobState:
         if limit < 1 or limit > 1000:
             raise IllegalParameterError("Limit must be between 1 and 1000 inclusive")
         return await self._mongo.list_jobs(
-            user=_require_string(user, "user"),
+            user=user,
             state=state,
             after=after,
             before=before,

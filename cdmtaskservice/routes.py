@@ -116,6 +116,28 @@ class ListJobsResponse(BaseModel):
     jobs: Annotated[list[models.JobPreview], Field(description="The jobs")]
 
 
+_ANN_JOB_STATE = Annotated[models.JobState, Query(
+    example=models.JobState.COMPLETE,
+    description="Filter jobs by the state of the job."
+)]
+_ANN_JOB_AFTER = Annotated[AwareDatetime, Query(
+    example="2024-10-24T22:35:40Z",
+    description="Filter jobs where the last update time is newer than the provided date, "
+        + "inclusive",
+)]
+_ANN_JOB_BEFORE = Annotated[AwareDatetime, Query(
+    example="2024-10-24T22:35:59.999Z",
+    description="Filter jobs where the last update time is older than the provided date, "
+        + "exclusive",
+)]
+_ANN_JOB_LIMIT = Annotated[int, Query(
+    example=1000,
+    description="The maximum number of jobs to return",
+    ge=1,
+    le=1000,
+)]
+
+
 @ROUTER_JOBS.get(
     "/",
     response_model=ListJobsResponse,
@@ -125,31 +147,15 @@ class ListJobsResponse(BaseModel):
 )
 async def list_jobs(
     r: Request,
-    state: Annotated[models.JobState, Query(
-        example=models.JobState.COMPLETE,
-        description="Filter jobs by the state of the job."
-    )] = None,
-    after: Annotated[AwareDatetime, Query(
-        example="2024-10-24T22:35:40Z",
-        description="Filter jobs where the last update time is newer than the provided date, "
-            + "inclusive",
-    )] = None,
-    before: Annotated[AwareDatetime, Query(
-        example="2024-10-24T22:35:59.999Z",
-        description="Filter jobs where the last update time is older than the provided date, "
-            + "exclusive",
-    )] = None,
-    limit: Annotated[int, Query(
-        example=1000,
-        description="The maximum number of jobs to return",
-        ge=1,
-        le=1000,
-    )] = 1000,
+    state: _ANN_JOB_STATE = None,
+    after: _ANN_JOB_AFTER = None,
+    before: _ANN_JOB_BEFORE = None,
+    limit: _ANN_JOB_LIMIT = 1000,
     user: kb_auth.KBaseUser=Depends(_AUTH),
 ) -> ListJobsResponse:
     job_state = app_state.get_app_state(r).job_state
     return ListJobsResponse(jobs=await job_state.list_jobs(
-        user.user,
+        user=user.user,
         state=state,
         after=after,
         before=before,
@@ -174,8 +180,6 @@ async def submit_job(
     user: kb_auth.KBaseUser=Depends(_AUTH),
 ) -> SubmitJobResponse:
     job_state = app_state.get_app_state(r).job_state
-    # TODO CODE this is inconsistent with the other job endpoints in that it passes in the
-    #           user class vs. a str. Doesn't really cause any issues though
     return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
 
 
@@ -394,6 +398,41 @@ async def create_refdata(
     refdata = app_state.get_app_state(r).refdata
     return await refdata.create_refdata(refdata_s3_path, user, crc64nvme=crc64nvme, unpack=unpack)
 
+
+@ROUTER_ADMIN.get(
+    "/jobs",
+    response_model=ListJobsResponse,
+    response_model_exclude_none=True,
+    summary="List jobs as an admin",
+    description="List jobs for a provided user or all users."
+)
+async def list_jobs_admin(
+    r: Request,
+    user: Annotated[str, Query(
+        example="kbasehelp",
+        description="Filter jobs by the owner of the job.",
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-z][a-z\d_]*$",
+    )] = None,
+    state: _ANN_JOB_STATE = None,
+    after: _ANN_JOB_AFTER = None,
+    before: _ANN_JOB_BEFORE = None,
+    limit: _ANN_JOB_LIMIT = 1000,
+    methoduser: kb_auth.KBaseUser=Depends(_AUTH),
+) -> ListJobsResponse:
+    _ensure_admin(methoduser, "Only service administrators can list other users' jobs.")
+    kbauth = app_state.get_app_state(r).auth
+    if user and not await kbauth.is_valid_user(user, app_state.get_request_token(r)):
+        raise kb_auth.InvalidUserError(f"No such user: {user}")
+    job_state = app_state.get_app_state(r).job_state
+    return ListJobsResponse(jobs=await job_state.list_jobs(
+        user=user,
+        state=state,
+        after=after,
+        before=before,
+        limit=limit,
+    ))
 
 @ROUTER_ADMIN.get(
     "/jobs/{job_id}",

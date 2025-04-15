@@ -80,12 +80,9 @@ class MongoDAO:
         await self._col_jobs.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
             # find & sort jobs by transition time (admin only) (job sharing may require changes)1
-            # TODO ADMIN add endpoint to list all jobs
             IndexModel([(_FLD_UPDATE_TIME, DESCENDING)]),
             # find jobs by current state and state transition time (admin only)
-            IndexModel(
-                [(models.FLD_COMMON_STATE, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)],
-            ),
+            IndexModel([(models.FLD_COMMON_STATE, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
             # find jobs by user and state transition time
             IndexModel([(models.FLD_JOB_USER, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
             # find jobs by user, current state and state transition time
