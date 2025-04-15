@@ -17,7 +17,7 @@ from cdmtaskservice.exceptions import (
 from cdmtaskservice.http_bearer import MissingTokenError
 from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
-from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError
+from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError, InvalidUserError
 from cdmtaskservice.mongo import (
     ImageTagExistsError,
     ImageDigestExistsError,
@@ -54,6 +54,7 @@ _ERR_MAP = {
     MissingTokenError: ErrorMapping(ErrorType.NO_TOKEN, _H401),
     InvalidAuthHeaderError: ErrorMapping(ErrorType.INVALID_AUTH_HEADER, _H401),
     InvalidTokenError: ErrorMapping(ErrorType.INVALID_TOKEN, _H401),
+    InvalidUserError: ErrorMapping(ErrorType.INVALID_USERNAME, _H400),
     MissingRoleError: ErrorMapping(ErrorType.UNAUTHORIZED, _H403),
     UnauthorizedError: ErrorMapping(ErrorType.UNAUTHORIZED, _H403),
     ClientLifeTimeError: ErrorMapping(ErrorType.CLIENT_LIFETIME, _H400),

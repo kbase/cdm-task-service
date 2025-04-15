@@ -157,6 +157,7 @@ class _AppMiddleWare(BaseHTTPMiddleware):
         }
         logging_extra_var.set(extra_var)
         user = None
+        credentials = None
         authorization = request.headers.get("Authorization")
         if authorization:
             scheme, credentials = get_authorization_scheme_param(authorization)
@@ -167,7 +168,7 @@ class _AppMiddleWare(BaseHTTPMiddleware):
                 # don't put the received scheme in the error message, might be a token
                 raise InvalidAuthHeaderError(f"Authorization header requires {_SCHEME} scheme")
             user = await app_state.get_app_state(request).auth.get_user(credentials)
-        app_state.set_request_user(request, user)
+        app_state.set_request_user(request, user, credentials)
         extra_var[logfields.USER] = user.user if user else None
         logging_extra_var.set(extra_var)
         return await call_next(request)
