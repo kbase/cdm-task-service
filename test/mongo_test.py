@@ -6,6 +6,7 @@ from typing import Coroutine, Callable
 
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO, NoSuchJobError
+from cdmtaskservice.update_state import submitting_job, submitted_nersc_refdata_download
 
 from conftest import (
     mongo,  # @UnusedImport
@@ -62,6 +63,13 @@ async def test_indexes(mongo, mondb):
     assert jobindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
+        '_update_time_-1': {'key': [('_update_time', -1)], 'v': 2},
+        'user_1__update_time_-1': {'key': [('user', 1), ('_update_time', -1)], 'v': 2},
+        'state_1__update_time_-1': {'v': 2, 'key': [('state', 1), ('_update_time', -1)]},
+        'user_1_state_1__update_time_-1': {
+            'v': 2,
+            'key': [('user', 1), ('state', 1), ('_update_time', -1)]
+        },
         "transition_times.time_-1": {
             "v": 2,
             "key": [("transition_times.time", -1)],
@@ -89,6 +97,95 @@ async def test_indexes(mongo, mondb):
             "sparse": True
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_redundant_update_time(mondb):
+    # Tests that an internal update time field is set correctly when performing actions
+    # on a job. Does not test other job saving / updating code.
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+
+    # check job roundtripping works
+    got = await mc.get_job("foo", as_admin=True)
+    assert got == _BASEJOB
+    
+    # check that the update time is set correctly
+    job = await mondb.jobs.find_one({"id": "foo"})
+    assert job["_update_time"] == _SAFE_TIME
+    
+    # check that updating job state sets an internal update time
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_job_state("foo", submitting_job(), dt, "tid")
+    got = await mc.get_job("foo", as_admin=True)
+    
+    # check expected job structure
+    expected = _BASEJOB.model_copy(deep=True)
+    expected.state = models.JobState.JOB_SUBMITTING
+    expected.transition_times.append(models.AdminJobStateTransition(
+        state=models.JobState.JOB_SUBMITTING,
+        time=dt,
+        trans_id="tid",
+        notif_sent=False,
+    ))
+    assert got == expected
+    
+    # check that the update time is set correctly
+    job = await mondb.jobs.find_one({"id": "foo"})
+    assert job["_update_time"] == dt
+
+
+@pytest.mark.asyncio
+async def test_refdata_redundant_update_time(mondb):
+    # Tests that an internal update time field is set correctly when performing actions
+    # on refdata. Does not test other refdata saving / updating code.
+    mc = await MongoDAO.create(mondb)
+    rd = models.ReferenceData(
+        registered_by="yermum",
+        registered_on=_SAFE_TIME,
+        id="foo",
+        file="bucket/key",
+        unpack=False,
+        statuses=[models.ReferenceDataStatus(
+            cluster=models.Cluster.PERLMUTTER_JAWS,
+            state=models.ReferenceDataState.CREATED,
+            transition_times=[models.RefDataStateTransition(
+                state=models.ReferenceDataState.CREATED,
+                time=_SAFE_TIME
+            )],
+        )]
+    )
+    await mc.save_refdata(rd)
+
+    # check refdata roundtripping works
+    got = await mc.get_refdata_by_id("foo")
+    assert got == rd
+    
+    # check that the update time is set correctly
+    refd = await mondb.refdata.find_one({"id": "foo"})
+    assert refd["statuses"][0]["_update_time"] == _SAFE_TIME
+    
+    # check that updating refdata state sets an internal update time
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_refdata_state(
+        models.Cluster.PERLMUTTER_JAWS,
+        "foo",
+        submitted_nersc_refdata_download("ntid"),
+        dt,
+    )
+    got = await mc.get_refdata_by_id("foo")
+    
+    # check expected refdata structure
+    rd.statuses[0].state = models.ReferenceDataState.DOWNLOAD_SUBMITTED
+    rd.statuses[0].transition_times.append(models.RefDataStateTransition(
+        state=models.ReferenceDataState.DOWNLOAD_SUBMITTED,
+        time=dt,
+    ))
+    assert got == rd
+    
+    # check that the update time is set correctly
+    refd = await mondb.refdata.find_one({"id": "foo"})
+    assert refd["statuses"][0]["_update_time"] == dt
 
 
 @pytest.mark.asyncio

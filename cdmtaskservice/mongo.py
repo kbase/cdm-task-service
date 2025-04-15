@@ -23,6 +23,7 @@ from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 _INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
 _INDEX_DIGEST = "UNIQUE_IMAGE_DIGEST_INDEX"
 
+_FLD_UPDATE_TIME = "_update_time"  # mark as internal field
 _FLD_TRANS_TIME_SEND = (
     f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT}"
 )
@@ -77,11 +78,26 @@ class MongoDAO:
         # Only need and want a single unique index for jobs so they can be sharded
         await self._col_jobs.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
+            # find & sort jobs by transition time (admin only) (job sharing may require changes)1
+            # TODO ADMIN add endpoint to list all jobs
+            IndexModel([(_FLD_UPDATE_TIME, DESCENDING)]),
+            # find jobs by current state and state transition time (admin only)
+            IndexModel(
+                [(models.FLD_COMMON_STATE, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)],
+            ),
+            # find jobs by user and state transition time
+            IndexModel([(models.FLD_JOB_USER, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
+            # find jobs by user, current state and state transition time
+            IndexModel([
+                (models.FLD_JOB_USER, ASCENDING),
+                (models.FLD_COMMON_STATE, ASCENDING),
+                (_FLD_UPDATE_TIME, DESCENDING)
+            ]),
             # find jobs with unsent updates
             IndexModel(
                 [(timefield, DESCENDING)],
                 partialFilterExpression={_FLD_TRANS_TIME_SEND: False}
-            )
+            ),
         ])
         await self._col_refdata.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
@@ -172,6 +188,9 @@ class MongoDAO:
         """ Save a job. Job IDs are expected to be unique. """
         _not_falsy(job, "job")
         jobd = job.model_dump(exclude_none=True)
+        # Could add a check in the job model that jobs have > 0 transitions and the last
+        # transition == the job state... probably not necessary.
+        jobd[_FLD_UPDATE_TIME] = job.transition_times[-1].time
         jobi = jobd[models.FLD_JOB_JOB_INPUT]
         jobi[models.FLD_JOB_INPUT_RUNTIME] = jobi[models.FLD_JOB_INPUT_RUNTIME].total_seconds()
         # don't bother checking for duplicate key exceptions since the service is supposed
@@ -224,7 +243,10 @@ class MongoDAO:
             query,
             {
                 "$push": (push if push else {}) | {models.FLD_COMMON_TRANS_TIMES: transition},
-                "$set": (set_ if set_ else {}) | {models.FLD_COMMON_STATE: state.value}
+                "$set": (set_ if set_ else {}) | {
+                    models.FLD_COMMON_STATE: state.value,
+                    _FLD_UPDATE_TIME: time,  # for indexing last state change time
+                }
             },
         )
         if not res.matched_count:
@@ -358,10 +380,16 @@ class MongoDAO:
         # to ensure unique IDs
 
         # TDOO REFDATA add a force option to allow for file overwrites if needed
+        r = refdata.model_dump()
+        # Could add a check in the refdata model that rds have > 0 statuses,
+        # statuses have > 0 transitions and the last
+        # transition == the redfdata cluster state... probably not necessary.
+        for c, cm in zip(refdata.statuses, r[models.FLD_REFDATA_STATUSES]):
+            cm[_FLD_UPDATE_TIME] = c.transition_times[-1].time
         res = await self._col_refdata.update_one(
             {"file": _not_falsy(refdata, "refdata").file},
             # do nothing if the document already exists
-            {"$setOnInsert": refdata.model_dump()},
+            {"$setOnInsert": r},
             upsert=True,
         )
         if not res.did_upsert:
@@ -444,7 +472,11 @@ class MongoDAO:
                         models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
                     }
                 },
-                "$set": set_ | {f"{subs}{models.FLD_COMMON_STATE}": state.value}
+                "$set": set_ | {
+                    f"{subs}{models.FLD_COMMON_STATE}": state.value,
+                    # for indexing last state change time. Unused currently
+                    f"{subs}{_FLD_UPDATE_TIME}": time,
+                }
             },
         )
         if not res.matched_count:
