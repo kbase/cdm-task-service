@@ -328,7 +328,7 @@ async def get_refdata_by_path(
 async def approve_image(
     r: Request,
     image_id: _ANN_IMAGE_ID,
-    refdata_id: Annotated[str | None, Query(
+    refdata_id: Annotated[str, Query(
         example="3a28c155-ea8b-4e1b-baef-242d991a8200",
         description="The ID of reference data to associate with the image. The reference data "
             + "must already be registered with the system, although it may still be staging "
@@ -381,10 +381,12 @@ async def create_refdata(
         min_length=models.S3_PATH_MIN_LENGTH,
         max_length=models.S3_PATH_MAX_LENGTH,
     )],
-    crc64nvme: Annotated[str | None, Query(
+    crc64nvme: Annotated[str, Query(
         example="4ekt2WB1KO4=",
         description="The base64 encoded CRC64/NVME checksum of the file. "
-            + "If provided it is checked against the target file checksum before proceeding.",
+            + "If provided it is checked against the target file checksum before proceeding. "
+            + "Note you may need to URL encode the checksum if your HTTP client or application "
+            + "doesn't do it for you.",
         min_length=models.CRC64NVME_B64ENC_LENGTH,
         max_length=models.CRC64NVME_B64ENC_LENGTH,
     )] = None,
