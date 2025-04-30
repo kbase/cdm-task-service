@@ -177,7 +177,13 @@ async def _check_unsent_kafka_messages(
 async def _build_NERSC_flow_deps(
     logr: logging.Logger, cfg: CDMTaskServiceConfig
 ) -> tuple[NERSCSFAPIClientProvider, NERSCManager, JAWSClient, str]:
-    # this is not helpful other than for testing, so it's undocumented and 
+    # This method is also getting too long, need to split it up if it gets any longer
+    # This is only useful for testing with other processes that just want to pull job records
+    # but not start or run jobs. As such it's undocumented.
+    if os.environ.get("KBCTS_SKIP_NERSC") == "true":
+        logr.info("KBCTS_SKIP_NERSC env var is 'true', skipping NERSC and JAWS startup")
+        return None, None, None, "Server started with KBCTS_SKIP_NERSC=true"
+    # This is not helpful other than for testing while NERSC is down, so it's undocumented and 
     # will need changes later. Managing a server running with jobflows turning on and off needs
     # more thought.
     start_wo_nersc = os.environ.get("KBCTS_START_WITHOUT_NERSC") == "true"
@@ -223,7 +229,7 @@ async def _build_NERSC_flow_deps(
         # May want to be smarter about this and return the sfapi client if it's available
         # so the expiration time for the creds can be checked.
         # Since this would only happen if the service is running for tests don't worry about it
-        # for now. Currently routes.py will throw an error if sfapi_client is null 
+        # for now.
         if jaws_client:
             await jaws_client.close()
         if sfapi_client:
