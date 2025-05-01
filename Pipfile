@@ -18,7 +18,7 @@ motor = "==3.7.0"
 python-json-logger = "==3.3.0"
 requests = "==2.32.3"
 sfapi-client = "==0.4.1"
-uvicorn = {version = "==0.34.0", extras = ["standard"]}
+uvicorn = {version = "==0.34.2", extras = ["standard"]}
 
 [dev-packages]
 # for debugging
