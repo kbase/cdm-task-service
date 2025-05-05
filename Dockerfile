@@ -1,4 +1,4 @@
-FROM python:3.12 as build
+FROM python:3.12 AS build
 
 ENV CRANE_VER=v0.20.2
 
