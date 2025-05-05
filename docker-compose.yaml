@@ -29,7 +29,8 @@ services:
       # Don't commit your token to github please
       - KBCTS_JAWS_TOKEN=tokengoeshere
       - KBCTS_JAWS_GROUP=kbase
-      # Note that the host minio must be bound to 0.0.0.0:9002
+      # Note that the host minio must be bound to 0.0.0.0:9002 or 172.17.0.1:9002 (the docker
+      # bridge interface)). The latter is safer but only works for bridge networks
       - KBCTS_S3_URL=http://host.docker.internal:9002
       # local Minio, only useful if not running jobs on NERSC
       #- KBCTS_S3_URL=http://minio:9000
