@@ -33,7 +33,8 @@ from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
 
-SERVICE_NAME = "CDM Task Service Prototype"
+SERVICE_NAME = "CDM Task Service"
+NOTES = "This service is a prototype"
 
 # may need to split these into different files if this file gets too big
 ROUTER_GENERAL = APIRouter(tags=["General"])
@@ -74,6 +75,7 @@ class Root(BaseModel):
         examples=["2022-10-07T17:58:53.188698Z"],
         description="The server's time as an ISO8601 string."
     )]
+    notes: Annotated[str, Field(description="Notes about the service.")]
 
 
 @ROUTER_GENERAL.get(
@@ -86,7 +88,8 @@ async def root() -> Root:
         "service_name": SERVICE_NAME,
         "version": VERSION,
         "git_hash": GIT_COMMIT,
-        "server_time": utcdatetime()
+        "server_time": utcdatetime(),
+        "notes": NOTES,
     }
 
 
