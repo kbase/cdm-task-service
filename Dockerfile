@@ -18,7 +18,11 @@ WORKDIR /git
 COPY .git /git
 RUN GITCOMMIT=$(git rev-parse HEAD) && echo "GIT_COMMIT=\"$GITCOMMIT\"" > /git/git_commit.py
 
-FROM python:3.11
+FROM python:3.12
+
+RUN apt update \
+    && apt install -y tini \
+    && rm -rf /var/lib/apt/lists/* 
 
 # install pipenv
 RUN pip install --upgrade pip && \
@@ -41,5 +45,5 @@ ENV KBCTS_CRANE_PATH=/cts/crane
 
 WORKDIR /cts
 
-ENTRYPOINT ["/cts/entrypoint.sh"]
+ENTRYPOINT ["tini", "--", "/cts/entrypoint.sh"]
 
