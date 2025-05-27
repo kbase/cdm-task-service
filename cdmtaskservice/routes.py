@@ -50,10 +50,6 @@ _AUTH = KBaseHTTPBearer()
 _SERVICE_USER = "***SERVICE***"
 
 
-# TODO EXAMPLES update example to examples when fastapi Path and Query work correctly with them
-#               currently the example doesn't show up in docs with `examples`
-#               https://github.com/fastapi/fastapi/discussions/11137
-
 def _ensure_admin(user: kb_auth.KBaseUser, err_msg: str):
     if user.admin_perm != kb_auth.AdminPermission.FULL:
         raise UnauthorizedError(err_msg)
@@ -120,21 +116,20 @@ class ListJobsResponse(BaseModel):
 
 
 _ANN_JOB_STATE = Annotated[models.JobState, Query(
-    example=models.JobState.COMPLETE,
     description="Filter jobs by the state of the job."
 )]
 _ANN_JOB_AFTER = Annotated[AwareDatetime, Query(
-    example="2024-10-24T22:35:40Z",
+    openapi_examples={"isodate": {"value": "2024-10-24T22:35:40Z"}},
     description="Filter jobs where the last update time is newer than the provided date, "
         + "inclusive",
 )]
 _ANN_JOB_BEFORE = Annotated[AwareDatetime, Query(
-    example="2024-10-24T22:35:59.999Z",
+    openapi_examples={"isodate": {"value": "2024-10-24T22:35:59.999Z"}},
     description="Filter jobs where the last update time is older than the provided date, "
         + "exclusive",
 )]
 _ANN_JOB_LIMIT = Annotated[int, Query(
-    example=1000,
+    openapi_examples={"max value": {"value": 1000}},
     description="The maximum number of jobs to return",
     ge=1,
     le=1000,
@@ -187,7 +182,7 @@ async def submit_job(
 
 
 _ANN_JOB_ID = Annotated[str, FastPath(
-    example="f0c24820-d792-4efa-a38b-2458ed8ec88f",
+    openapi_examples={"job id": {"value": "f0c24820-d792-4efa-a38b-2458ed8ec88f"}},
     description="The job ID.",
     pattern=r"^[\w-]+$",
     min_length=1,
@@ -212,8 +207,10 @@ async def get_job(
 
 
 _ANN_IMAGE_ID = Annotated[str, FastPath(
-    example="ghcr.io/kbase/collections:checkm2_0.1.6"
-        + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+    openapi_examples={"image with digest": {
+        "value": "ghcr.io/kbase/collections:checkm2_0.1.6"
+            + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380",
+    }},
     description="The name of a docker image. Include the SHA to ensure "
         + "referencing the correct image.",
     # Don't bother validating other than some basic checks, validation will occur when
@@ -253,7 +250,7 @@ async def get_image(r: Request, image_id: _ANN_IMAGE_ID):
 
 
 _ANN_REFDATA_ID = Annotated[str, FastPath(
-    example="f0c24820-d792-4efa-a38b-2458ed8ec88f",
+    openapi_examples={"refdata id": {"value": "f0c24820-d792-4efa-a38b-2458ed8ec88f"}},
     description="The reference data ID.",
     pattern=r"^[\w-]+$",
     min_length=1,
@@ -305,7 +302,7 @@ async def get_refdata_by_id(
 async def get_refdata_by_path(
     r: Request,
     s3_path: Annotated[str, FastPath(
-        example="refdata-bucket/checkm2/checkm2_refdata-2.4.tgz",
+        openapi_examples={"refdata path": {"value": "refdata-bucket/checkm2/checkm2_refdata-2.4.tgz"}},
         description="The S3 path to the reference data, starting with the bucket. "
             + "Please note that spaces are valid S3 object characters, so be careful about "
             + "trailing spaces in the input.",
@@ -332,7 +329,7 @@ async def approve_image(
     r: Request,
     image_id: _ANN_IMAGE_ID,
     refdata_id: Annotated[str, Query(
-        example="3a28c155-ea8b-4e1b-baef-242d991a8200",
+        openapi_examples={"refdata id": {"value": "3a28c155-ea8b-4e1b-baef-242d991a8200"}},
         description="The ID of reference data to associate with the image. The reference data "
             + "must already be registered with the system, although it may still be staging "
             + "at remote compute sites.",
@@ -376,7 +373,7 @@ async def create_refdata(
     r: Request,
     # will be validated later 
     refdata_s3_path: Annotated[str, FastPath(
-        example="refdata-bucket/checkm2/checkm2_refdata-2.4.tgz",
+        openapi_examples={"refdata path": {"value": "refdata-bucket/checkm2/checkm2_refdata-2.4.tgz"}},
         description="The S3 path to the reference data to register, starting with the bucket. "
             + "If the refdata consists of multiple files, they must be archived. "
             + "Please note that spaces are valid S3 object characters, so be careful about "
@@ -385,7 +382,7 @@ async def create_refdata(
         max_length=models.S3_PATH_MAX_LENGTH,
     )],
     crc64nvme: Annotated[str, Query(
-        example="4ekt2WB1KO4=",
+        openapi_examples={"checksum": {"value": "4ekt2WB1KO4="}},
         description="The base64 encoded CRC64/NVME checksum of the file. "
             + "If provided it is checked against the target file checksum before proceeding. "
             + "Note you may need to URL encode the checksum if your HTTP client or application "
@@ -414,7 +411,7 @@ async def create_refdata(
 async def list_jobs_admin(
     r: Request,
     user: Annotated[str, Query(
-        example="kbasehelp",
+        openapi_examples={"kbasehelp user": {"value": "kbasehelp"}},
         description="Filter jobs by the owner of the job.",
         min_length=1,
         max_length=100,
@@ -497,7 +494,7 @@ class NERSCClientInfo(BaseModel):
 async def get_nersc_client_info(
     r: Request,
     require_lifetime: Annotated[datetime.timedelta, Query(
-        example="P30DT12H30M5S",
+        openapi_examples={"iso8601 duration": {"value": "P30DT12H30M5S"}},
         description="The required remaining lifetime of the client as an "
             + "ISO8601 duration string. If the lifetime is shorter than this value, an error "
             + "will be returned.",
@@ -565,7 +562,7 @@ sending of notifications completes.
 async def handle_unsent_notifications(
     r: Request,
     notification_age: Annotated[datetime.timedelta, Query(
-        example="PT10M",
+        openapi_examples={"iso8601 duration": {"value": "PT10M"}},
         description="The amount of time the transition must have occurred in the past "
             + "to trigger a send as an ISO8601 duration string. "
             + "Transitions newer than this will be ignored.",
@@ -611,7 +608,6 @@ async def refdata_download_complete(
     r: Request,
     refdata_id: _ANN_REFDATA_ID,
     cluster: Annotated[models.Cluster, FastPath(
-        example=models.Cluster.PERLMUTTER_JAWS,
         description="The cluster for which the refdata download is complete."
     )]
 ):
