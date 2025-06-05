@@ -123,9 +123,8 @@ Docker must be installed.
 Copy `test.cfg.example` to `test.cfg` and fill it in appropriately.
 
 ```
-pipenv sync --dev  # only the first time or when Pipfile.lock changes
-pipenv shell
-PYTHONPATH=. pytest test
+uv sync --dev  # only the first time or when uv.lock changes
+PYTHONPATH=. uv run pytest test
 ```
 
 ### Exit from prototype status
