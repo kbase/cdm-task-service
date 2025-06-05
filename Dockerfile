@@ -24,16 +24,18 @@ RUN apt update \
     && apt install -y tini \
     && rm -rf /var/lib/apt/lists/* 
 
-# install pipenv
+# install uv
 RUN pip install --upgrade pip && \
-    pip install pipenv
-
-WORKDIR /pip
+    pip install uv	
 
 # install deps
-COPY Pipfile* ./
-RUN pipenv sync --system
+RUN mkdir /uvinstall
+WORKDIR /uvinstall
+COPY pyproject.toml uv.lock .python-version .
+ENV UV_PROJECT_ENVIRONMENT=/usr/local/
+RUN uv sync --locked --inexact --no-dev
 
+# install the actual code
 RUN mkdir /cts
 COPY cdmtaskservice /cts/cdmtaskservice
 COPY scripts/* /cts
