@@ -24,6 +24,8 @@ from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 _INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
 _INDEX_DIGEST = "UNIQUE_IMAGE_DIGEST_INDEX"
 
+_FLD_MONGO_ID = "_id"
+
 _FLD_UPDATE_TIME = "_update_time"  # mark as internal field
 _FLD_TRANS_TIME_SEND = (
     f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT}"
@@ -125,7 +127,7 @@ class MongoDAO:
 
     def _clean_doc(self, doc: dict[str, Any]) -> dict[str, Any]:
         # removes the mongo _id in place.
-        doc.pop("_id", None)
+        doc.pop(_FLD_MONGO_ID, None)
         return doc
 
     async def get_image(
@@ -216,6 +218,24 @@ class MongoDAO:
         # TODO PERF build up the job piece by piece to skip S3 path validation
         doc = self._clean_doc(doc)
         return models.AdminJobDetails(**doc) if as_admin else models.Job(**doc)
+
+    async def get_job_status(self, job_id: str) -> models.JobStatus:
+        """
+        Get minimal information about a job's status by the job's ID.
+        """
+        doc = await self._col_jobs.find_one(
+            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")},
+            {
+                _FLD_MONGO_ID: 0,
+                models.FLD_COMMON_ID: 1,
+                models.FLD_JOB_USER: 1,
+                models.FLD_COMMON_STATE: 1,
+                models.FLD_COMMON_TRANS_TIMES: 1,
+            },
+        )
+        if not doc:
+            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+        return models.JobStatus(**doc)
 
     async def list_jobs(
         self,

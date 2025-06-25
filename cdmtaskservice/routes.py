@@ -191,6 +191,22 @@ _ANN_JOB_ID = Annotated[str, FastPath(
 
 
 @ROUTER_JOBS.get(
+    "/{job_id}/status",
+    response_model=models.JobStatus,
+    summary="Get a job's minimal status",
+    description="Get minimal information about a job to determine the current status of the job. "
+        + "Suitable for polling for job completion. Only the submitting user may view the job."
+)
+async def get_job_status(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+) -> models.JobStatus:
+    job_state = app_state.get_app_state(r).job_state
+    return await job_state.get_job_status(job_id, user)
+
+
+@ROUTER_JOBS.get(
     "/{job_id}",
     response_model=models.Job,
     response_model_exclude_none=True,

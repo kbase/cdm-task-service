@@ -199,6 +199,29 @@ class JobState:
             msg = f"Admin user {user} accessed {job.user}'s job {job_id}"
         logging.getLogger(__name__).info(msg, extra={logfields.JOB_ID: job_id})
         return job
+
+    async def get_job_status(
+        self,
+        job_id: str,
+        user: kb_auth.KBaseUser,
+    ) -> models.JobStatus:
+        """
+        Get minimal information about a job's status based on the job's ID.
+        If the provided user doesn't match the job's owner, an error is thrown.
+        
+        job_id - the job ID.
+        user - the user requesting the job.
+        """
+        _not_falsy(user, "user")
+        job = await self._mongo.get_job_status(_require_string(job_id, "job_id"))
+        if job.user != user.user:
+            # reveals the job ID exists in the system but I don't see a problem with that
+            raise UnauthorizedError(f"User {user.user} may not access job {job_id}")
+        logging.getLogger(__name__).info(
+            f"User {user.user} accessed job {job_id}'s status",
+            extra={logfields.JOB_ID: job_id}
+        )
+        return job
     
     async def list_jobs(
         self,

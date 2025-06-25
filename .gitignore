@@ -30,3 +30,4 @@ __pycache__
 /test.cfg
 /cdm_task_service_temp
 /tmp_creds/
+/.venv/

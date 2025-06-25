@@ -793,22 +793,17 @@ class JobStateTransition(BaseModel):
         description="The time at which the new state was entered."
     )]
 
-class JobPreview(BaseModel):
+
+class JobStatus(BaseModel):
     """
-    Information about a job, consisting of fields containing small amounts of data.
-    Suitable for a list of jobs.
+    Minimal information about a job to determine the current state of the job, e.g. whether it's
+    complete, etc.
     """
     # This is an outgoing data structure only so we don't add validators
     id: Annotated[str, Field(
         description="An opaque, unique string that serves as the job's ID.",
     )]
-    job_input: JobInputPreview
     user: Annotated[str, Field(examples=["myuserid"], description="The user that ran the job.")]
-    image: Image
-    input_file_count: Annotated[int, Field(
-        examples=[42],
-        description="The number of input files."
-    )]
     state: Annotated[JobState, Field(examples=[JobState.COMPLETE.value])]
     transition_times: Annotated[list[JobStateTransition], Field(
         examples=[[
@@ -817,6 +812,20 @@ class JobPreview(BaseModel):
             {"state": JobState.JOB_SUBMITTING, "time": "2024-10-24T22:47:67Z"},
         ]],
         description="A list of job state transitions."
+    )]
+
+
+class JobPreview(JobStatus):
+    """
+    Information about a job, consisting of fields containing small amounts of data.
+    Suitable for a list of jobs.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    job_input: JobInputPreview
+    image: Image
+    input_file_count: Annotated[int, Field(
+        examples=[42],
+        description="The number of input files."
     )]
     # This is different from the job_input field, which takes a iso8601 time delta,
     # but I think the inconsistency is warranted. You want to make it easy for people to input
