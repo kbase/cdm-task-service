@@ -13,7 +13,7 @@ from fastapi import (
     Query,
     Path as FastPath
 )
-from pydantic import BaseModel, Field, AwareDatetime
+from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
 from typing import Annotated
 
 from cdmtaskservice import app_state, logfields
@@ -467,6 +467,44 @@ async def get_job_admin(
     _ensure_admin(user, "Only service administrators can get jobs as an admin.")
     job_state = app_state.get_app_state(r).job_state
     return await job_state.get_job(job_id, user.user, as_admin=True)
+
+
+class UpdateAdminMeta(BaseModel):
+    """ A specification for how to alter a job's administrative metadata. """
+    
+    model_config = ConfigDict(extra='forbid')
+    
+    set_fields: Annotated[dict[str, str | int | float], Field(
+        default_factory=dict,
+        examples=[{"foo": "bar", "count": 1}],
+        description="Keys and their values to set in the administrative metadata for the job."
+            + "Any matching keys will be overwritten."
+    )]
+    unset_keys: Annotated[set[str], Field(
+        default_factory=set,
+        examples=[{"foobar", "othercount"}],
+        description="Keys to remove from the administrative metadata for the job."
+    )]
+
+
+@ROUTER_ADMIN.put(
+    "/jobs/{job_id}/meta",
+    summary="Update a job's admin metadata",
+    description="Update the job's administrative metadata. Any extant metadata keys not included "
+        + "in the request are unaffected. The job's owner can view the metadata.",
+    status_code = status.HTTP_204_NO_CONTENT,
+)
+async def update_job_admin_meta(
+    r: Request,
+    update: UpdateAdminMeta,
+    job_id: _ANN_JOB_ID,
+    admin: kb_auth.KBaseUser=Depends(_AUTH),
+):
+    _ensure_admin(admin, "Only service administrators can alter admin metadata.")
+    job_state = app_state.get_app_state(r).job_state
+    await job_state.update_job_admin_meta(
+        job_id, admin, set_fields=update.set_fields, unset_keys=update.unset_keys
+    )
 
 
 @ROUTER_ADMIN.get(
