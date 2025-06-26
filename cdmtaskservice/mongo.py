@@ -229,6 +229,7 @@ class MongoDAO:
                 _FLD_MONGO_ID: 0,
                 models.FLD_COMMON_ID: 1,
                 models.FLD_JOB_USER: 1,
+                models.FLD_JOB_ADMIN_META: 1,
                 models.FLD_COMMON_STATE: 1,
                 models.FLD_COMMON_TRANS_TIMES: 1,
             },
@@ -377,6 +378,60 @@ class MongoDAO:
             push=push,
             trans_id = trans_id
         )
+
+    async def update_job_admin_meta(
+        self,
+        job_id: str,
+        set_fields: dict[str, str | int | float] | None = None,
+        unset_keys: set[str] | None = None,
+    ) -> None:
+        """
+        Updates the admin metadata for the specified job.
+    
+        Does not affect any extant keys other than those specified in the function input.
+    
+        job_id - the ID of the job.
+        set_fields - keys and their values to set in the admin metadata.
+        unset_keys - keys to remove from the admin metadata.
+    
+        If both `set_fields` and `unset_keys` are None or empty, this method is a no-op.
+        """
+        # If we ever need to index these fields for queries, wildcard indexes seem like they
+        # might work: https://www.mongodb.com/docs/manual/core/indexes/index-types/index-wildcard/
+        # Alternatively, switch to a list of object with k / v keys like the workspace service.
+        # Drawbacks to both; need to consider carefully
+        if set_fields and unset_keys:
+            # needs to be checked here, otherwise mongo will throw an error
+            conflict_keys = sorted(set(set_fields) & unset_keys)
+            if conflict_keys:
+                display_keys = conflict_keys[:10]
+                msg = f"Cannot set and unset the same keys in a single update: {display_keys}"
+                if len(conflict_keys) > 10:
+                    msg += f" and {len(conflict_keys) - 10} more"
+                raise IllegalAdminMetaError(msg)
+        # TODO CODE should check for max meta size and throw an error if > META_LIMIT
+        #           Since this is admin only for now probably safe w/o it
+        #           Kind of a pain - need to fetch the meta, update in memory, check size,
+        #           update in DB. Still chance for race conditions to exceed max 
+        update = {}
+        if set_fields:
+            update["$set"] = {
+                f"{models.FLD_JOB_ADMIN_META}.{k}": v for k, v in set_fields.items()
+            }
+        if unset_keys:
+            update["$unset"] = {
+                f"{models.FLD_JOB_ADMIN_META}.{k}": "" for k in unset_keys
+            }
+
+        if not update:
+            return  # nothing to do
+
+        result = await self._col_jobs.update_one(
+            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")},
+            update
+        )
+        if not result.matched_count:
+            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
 
     async def job_update_sent(self, job_id: str, trans_id: str):
         """
@@ -603,3 +658,6 @@ class ImageTagExistsError(Exception):
 
 class ImageDigestExistsError(Exception):
     """ The digest for the image already exists in the system. """
+
+class IllegalAdminMetaError(Exception):
+    """ The specified admin metadata update is illegal. """

@@ -23,7 +23,7 @@ from cdmtaskservice.exceptions import (
 )
 from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
-from cdmtaskservice.mongo import MongoDAO
+from cdmtaskservice.mongo import MongoDAO, IllegalAdminMetaError
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client, S3BucketInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
@@ -253,3 +253,40 @@ class JobState:
             before=before,
             limit=limit,
         )
+
+    async def update_job_admin_meta(
+        self,
+        job_id: str,
+        admin: kb_auth.KBaseUser,
+        set_fields: dict[str, str | int | float] | None = None,
+        unset_keys: set[str] | None = None,
+    ):
+        """
+        Updates the admin metadata for the specified job. Only admins should be allowed to
+        call this method.
+    
+        Does not affect any extant keys other than those specified in the function input.
+    
+        job_id - the ID of the job.
+        admin - the administrator altering the metadata
+        set_fields - keys and their values to set in the admin metadata.
+        unset_keys - keys to remove from the admin metadata.
+    
+        If both `set_fields` and `unset_keys` are None or empty, an error is thrown.
+        """
+        _not_falsy(admin, "admin")
+        if not set_fields and not unset_keys:
+            raise IllegalParameterError(
+                "At least one of set_fields or unset_keys must contain keys to alter"
+            )
+        try:
+            await self._mongo.update_job_admin_meta(
+                _require_string(job_id, "job_Id"), set_fields, unset_keys
+            )
+            logging.getLogger(__name__).info(
+                f"Admin {admin.user} updated job {job_id}'s admin metadata",
+                # don't log the changes could be large
+                extra={logfields.JOB_ID: job_id}
+            )
+        except IllegalAdminMetaError as e:
+            raise IllegalParameterError(str(e)) from e

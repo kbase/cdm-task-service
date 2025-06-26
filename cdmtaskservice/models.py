@@ -41,6 +41,7 @@ FLD_JOB_INPUT_INPUT_FILES = "input_files"
 FLD_JOB_INPUT_RUNTIME = "runtime"
 FLD_JOB_STATE_TRANSITION_ID = "trans_id"
 FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT = "notif_sent"
+FLD_JOB_ADMIN_META = "admin_meta"
 FLD_JOB_NERSC_DETAILS = "nersc_details"
 FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
 FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
@@ -804,6 +805,12 @@ class JobStatus(BaseModel):
         description="An opaque, unique string that serves as the job's ID.",
     )]
     user: Annotated[str, Field(examples=["myuserid"], description="The user that ran the job.")]
+    admin_meta: Annotated[dict[str, str | int | float], Field(
+        default_factory=dict,
+        examples=[{"name": "Getrude", "children": 31619}],
+        description="Metadata for the job set by service administrators. This metadata is mutable "
+            + "and arbitrary from the point of view of the service."
+    )]
     state: Annotated[JobState, Field(examples=[JobState.COMPLETE.value])]
     transition_times: Annotated[list[JobStateTransition], Field(
         examples=[[
@@ -870,17 +877,19 @@ class NERSCDetails(BaseModel):
             + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
     )]
     upload_task_id: Annotated[list[str], Field(
+        default_factory=list,
         description="IDs for tasks run via the NERSC SFAPI to upload files to an S3 "
             + "instance from NERSC. Note that task details only persist for ~10 minutes past "
             + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
             + "Empty if an upload task has not yet been submitted to NERSC."
-    )] = []
+    )]
     log_upload_task_id: Annotated[list[str], Field(
+        default_factory=list,
         description="IDs for tasks run via the NERSC SFAPI to upload log files to an S3 "
             + "instance from NERSC. Note that task details only persist for ~10 minutes past "
             + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
             + "Empty if a log upload task has not yet been submitted to NERSC."
-    )] = []
+    )]
 
 
 class JAWSDetails(BaseModel):
