@@ -23,6 +23,15 @@ from docker_image import reference
 _DISALLOWED_CHARS=re.compile(r"([^a-zA-Z0-9@:_.\-\/])")
 
 
+# TODO add a check to get the platform and error out on windows
+# * Can't actually find a windows image to test with that crane config works with
+#   * microsoft/windows
+#   * microsoft/windows:ltsc2019
+#   * mcr.microsoft.com/windows
+#   * mcr.microsoft.com/windows:ltsc2019
+#   * microsoft_windows
+#   * all failed to get config with various errors
+
 class ParsedImageName(NamedTuple):
     """ An image name parsed into parts with a normalized name. """
     

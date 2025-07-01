@@ -400,6 +400,8 @@ class MongoDAO:
         # might work: https://www.mongodb.com/docs/manual/core/indexes/index-types/index-wildcard/
         # Alternatively, switch to a list of object with k / v keys like the workspace service.
         # Drawbacks to both; need to consider carefully
+        # TODO CODE check that keys / values are under some maximum size. Ensure indexing can
+        #           work with the max size and either of the two strategies above
         if set_fields and unset_keys:
             # needs to be checked here, otherwise mongo will throw an error
             conflict_keys = sorted(set(set_fields) & unset_keys)

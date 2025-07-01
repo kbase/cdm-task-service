@@ -12,6 +12,7 @@
        * the CTS considers all contents in the specified output folder as app output
      * not write to anywhere except the output folder and the temporary directory
      * not hardlink between input and output directories
+     * Windows images are not supported
 2. Look over the image and refdata, if applicable
    * check for any potential malicious code / files
    * check that an image run is reproducible
