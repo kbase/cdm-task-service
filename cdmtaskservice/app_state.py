@@ -72,6 +72,11 @@ async def build_app(
     # May want to parallelize some of this for faster startups. would need to rework prints
     # But NERSC startup takes 95% of the time, so YAGNI
     logr = logging.getLogger(__name__)
+    # currently test mode means that job flow readiness checks are ignored and the job is
+    # created in the DB but is never submitted. Only useful for testing purposes
+    test_mode = os.environ.get("KBCTS_TEST_MODE") == "true"
+    if test_mode:
+        logr.info("KBCTS_TEST_MODE env var is 'true', will not submit jobs for processing")
     # check that the path is a valid path
     logbuk = validate_path(cfg.container_s3_log_dir).split("/", 1)[0]
     flowman = JobFlowManager()
@@ -140,7 +145,8 @@ async def build_app(
             coman,
             flowman,
             logbuk,
-            cfg.job_max_cpu_hours
+            cfg.job_max_cpu_hours,
+            test_mode=test_mode,
         )
         app.state._mongo = mongocli
         app.state._coroman = coman
