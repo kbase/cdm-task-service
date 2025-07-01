@@ -48,6 +48,7 @@ class JobState:
         flow_manager: JobFlowManager,
         log_bucket: str,
         job_max_cpu_hours: float,
+        test_mode: bool = False,
     ):
         """
         Create the job state manager.
@@ -61,6 +62,8 @@ class JobState:
         flow_manager- the job flow manager.
         log_bucket - the bucket in which logs are stored. Disallowed for writing for other cases.
         job_max_cpu_hours - the maximum CPU hours allows for a job on submit.
+        test_mode - if true, availablity of job flows will not be checked and jobs will not be
+            submitted.
         """
         self._mongo = _not_falsy(mongo, "mongo")
         self._s3 = _not_falsy(s3client, "s3client")
@@ -72,6 +75,7 @@ class JobState:
         self._flowman = _not_falsy(flow_manager, "flow_manager")
         self._logbuk = _require_string(log_bucket, "log_bucket")
         self._cpu_hrs = _check_num(job_max_cpu_hours, "job_max_cpu_hours")
+        self._test_mode = test_mode
         
     async def submit(self, job_input: models.JobInput, user: kb_auth.KBaseUser) -> str:
         """
@@ -82,6 +86,7 @@ class JobState:
         
         Returns the opaque job ID.
         """
+        # This function is right on the edge of needing to be split up for size
         _not_falsy(job_input, "job_input")
         _not_falsy(user, "user")
         compute_time = job_input.get_total_compute_time_sec() / 3600
@@ -98,8 +103,9 @@ class JobState:
             raise S3BucketInaccessibleError(f"Jobs may not write to bucket {self._logbuk}")
         await self._s3.is_bucket_writeable(bucket)
         new_input, meta = await self._check_and_update_files(job_input)
-        # check the flow is available before we make any changes
-        flow = self._flowman.get_flow(job_input.cluster)
+        if not self._test_mode:
+            # check the flow is available before we make any changes
+            flow = self._flowman.get_flow(job_input.cluster)
         ji = job_input.model_copy(update={"input_files": new_input})
         job_id = str(uuid.uuid4())  # TODO TEST for testing we'll need to set up a mock for this
         # TODO TEST will need a way to mock out timestamps
@@ -126,8 +132,9 @@ class JobState:
         await self._kafka.update_job_state(
             job_id, models.JobState.CREATED, update_time, trans_id, callback=cb()
         )
-        # Pass in the meta to avoid potential race conditions w/ etag changes
-        await self._coman.run_coroutine(flow.start_job(job, meta))
+        if not self._test_mode:
+            # Pass in the meta to avoid potential race conditions w/ etag changes
+            await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
 
     async def _check_and_update_files(self, job_input: models.JobInput):
