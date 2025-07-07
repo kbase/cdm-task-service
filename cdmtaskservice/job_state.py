@@ -149,7 +149,7 @@ class JobState:
         for m, f in zip(meta, job_input.input_files):
             if not m.crc64nvme:
                 raise IllegalParameterError(
-                    f"The S3 path '{f.file}' does not have a CRC64/NVME checksum"
+                    f"The S3 path '{m.path}' does not have a CRC64/NVME checksum"
                 )
             data_id = None
             if isinstance(f, models.S3FileWithDataID):
