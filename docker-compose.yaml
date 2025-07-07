@@ -17,6 +17,7 @@ services:
       - minio
       - kafka
     environment:
+      - KBCTS_PORT=5000
       - KBCTS_KBASE_AUTH2_URL=https://ci.kbase.us/services/auth
       - KBCTS_KBASE_AUTH2_ADMIN_ROLES=CDM_TASK_SERVICE_ADMIN
       - KBCTS_KBASE_STAFF_ROLE=KBASE_STAFF
