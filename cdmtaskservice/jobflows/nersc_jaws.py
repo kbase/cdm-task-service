@@ -206,7 +206,7 @@ class NERSCJAWSRunner(JobFlow):
         to JAWS, an empty dict is returned.
         """
         # allow getting details from earlier runs? Seems unnecessary
-        if job.job_input.cluster != self._cluster:
+        if _not_falsy(job, "job").job_input.cluster != self._cluster:
             raise ValueError(f"Job cluster must match {self._cluster}")
         if not job.jaws_details or not job.jaws_details.run_id:
             return {}  # job not submitted yet
