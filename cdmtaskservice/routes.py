@@ -14,7 +14,7 @@ from fastapi import (
     Path as FastPath
 )
 from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
-from typing import Annotated
+from typing import Annotated, Any
 
 from cdmtaskservice import app_state, logfields
 from cdmtaskservice import kb_auth
@@ -467,6 +467,28 @@ async def get_job_admin(
     _ensure_admin(user, "Only service administrators can get jobs as an admin.")
     job_state = app_state.get_app_state(r).job_state
     return await job_state.get_job(job_id, user.user, as_admin=True)
+
+
+@ROUTER_ADMIN.get(
+    "/jobs/{job_id}/runner_status",
+    response_model=dict[str, Any],
+    summary="Get a job's external status",
+    description="Get the status of a job in an external job runner such as JAWS. "
+        + "This endpoint should be used for informational purposes only and the data structure "
+        + "may change at any time - changes are not treated as backwards incompatibilities. "
+        + "If the job has not yet been submitted to an external runner, "
+        + "an empty dictionary is returned."
+)
+async def get_job_runner_status(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+) -> models.AdminJobDetails:
+    _ensure_admin(user, "Only service administrators can get job runner status an admin.")
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user.user, as_admin=True)
+    flow = appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    return await flow.get_job_external_runner_status(job)
 
 
 class UpdateAdminMeta(BaseModel):
