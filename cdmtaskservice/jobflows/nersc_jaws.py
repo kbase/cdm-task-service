@@ -198,6 +198,21 @@ class NERSCJAWSRunner(JobFlow):
             self._cluster, refdata_id, update, timestamp.utcdatetime()
         )
 
+    async def get_job_external_runner_status(self, job: models.AdminJobDetails) -> dict[str, Any]:
+        """
+        Get details from the external job runner (JAWS in this case) about the job.
+        
+        Returns the JAWS status dict as returned from JAWS. If the job has not yet been submitted
+        to JAWS, an empty dict is returned.
+        """
+        # allow getting details from earlier runs? Seems unnecessary
+        if _not_falsy(job, "job").job_input.cluster != self._cluster:
+            raise ValueError(f"Job cluster must match {self._cluster}")
+        if not job.jaws_details or not job.jaws_details.run_id:
+            return {}  # job not submitted yet
+        jaws_id = job.jaws_details.run_id[-1]  # if run_id exists, there's a job ID in it
+        return await self._jaws.status(jaws_id)
+
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
         Start running a job. It is expected that the Job has been persisted to the data
