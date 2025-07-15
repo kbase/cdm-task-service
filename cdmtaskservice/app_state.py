@@ -15,7 +15,7 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 from cdmtaskservice import logfields
-from cdmtaskservice import models
+from cdmtaskservice import sites
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
@@ -117,10 +117,10 @@ async def build_app(
         )
         logr.info("Done")
         if failreason:
-            flowman.mark_flow_inactive(models.Cluster.PERLMUTTER_JAWS, failreason)
+            flowman.mark_flow_inactive(sites.Cluster.PERLMUTTER_JAWS, failreason)
         else:
             nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
-                models.Cluster.PERLMUTTER_JAWS,
+                sites.Cluster.PERLMUTTER_JAWS,
                 nerscman,
                 jaws_client,
                 mongodao,
@@ -132,7 +132,7 @@ async def build_app(
                 cfg.service_root_url,
                 s3_insecure_ssl=cfg.s3_allow_insecure,
             )
-            flowman.register_flow(models.Cluster.PERLMUTTER_JAWS, nerscjawsflow)
+            flowman.register_flow(sites.Cluster.PERLMUTTER_JAWS, nerscjawsflow)
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3, coman, flowman)
         images = Images(mongodao, imginfo, refdata)

@@ -9,6 +9,7 @@ import uuid
 from cdmtaskservice import kb_auth
 from cdmtaskservice import logfields
 from cdmtaskservice import models
+from cdmtaskservice import sites
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
     require_string as _require_string,
@@ -89,6 +90,7 @@ class JobState:
         # This function is right on the edge of needing to be split up for size
         _not_falsy(job_input, "job_input")
         _not_falsy(user, "user")
+        self._check_site_limits(job_input)
         compute_time = job_input.get_total_compute_time_sec() / 3600
         if compute_time > self._cpu_hrs:
             raise IllegalParameterError(
@@ -136,6 +138,25 @@ class JobState:
             # Pass in the meta to avoid potential race conditions w/ etag changes
             await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
+
+    def _check_site_limits(self, job_input: models.JobInput):
+        site = sites.CLUSTER_TO_SITE[job_input.cluster]
+        # TODO LAWRENCIUM TEST this works correctly when submitting to NERSC vs. LRC
+        if job_input.cpus > site.cpus_per_node:
+            raise IllegalParameterError(
+                f"The maximum number of CPUs for site {job_input.cluster.value} is "
+                f"{site.cpus_per_node} vs {job_input.cpus} submitted"
+            )
+        if (rt_max := job_input.runtime.total_seconds() / 60) > site.max_runtime_min:
+            raise IllegalParameterError(
+                f"The maximum runtime for site {job_input.cluster.value} is "
+                f"{site.max_runtime_min} minutes vs {rt_max} submitted"
+            )
+        if (gb := int(job_input.memory) / 1_000_000_000) > site.memory_per_node_gb:
+            raise IllegalParameterError(
+                f"The maximum memory for site {job_input.cluster.value} is "
+                f"{site.memory_per_node_gb}GB vs {gb}GB submitted"
+            )
 
     async def _check_and_update_files(self, job_input: models.JobInput):
         paths = [

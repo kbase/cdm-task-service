@@ -12,6 +12,7 @@ from pymongo.results import DeleteResult
 from typing import Any, Awaitable, Callable, Coroutine
 
 from cdmtaskservice import models
+from cdmtaskservice import sites
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
     require_string as _require_string,
@@ -564,7 +565,7 @@ class MongoDAO:
 
     async def _update_refdata_state(
         self,
-        cluster: models.Cluster,
+        cluster: sites.Cluster,
         refdata_id: str,
         state: models.ReferenceDataState,
         time: datetime.datetime,
@@ -607,7 +608,7 @@ class MongoDAO:
 
     async def update_refdata_state(
         self,
-        cluster: models.Cluster,
+        cluster: sites.Cluster,
         refdata_id: str,
         update: RefdataUpdate,
         time: datetime.datetime,

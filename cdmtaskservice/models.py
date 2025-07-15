@@ -22,6 +22,7 @@ from cdmtaskservice.arg_checkers import (
 )
 from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathSyntaxError
+from cdmtaskservice import sites
 
 
 # TODO TEST
@@ -481,17 +482,6 @@ class S3FileWithDataID(S3File):
 # TODO FEATURE How to handle all vs all? Current model is splitting file list between containers
 
 
-class Cluster(str, Enum):
-    """
-    The location where a job should run.
-    
-    perlmutter-jaws: The Perlmutter cluster at NERSC run via JAWS.
-    """
-
-    PERLMUTTER_JAWS = "perlmutter-jaws"
-    # TODO LAWRENCIUM add when available
-
-
 class JobInputPreview(BaseModel):
     """
     Input to a Job, consisting of fields containing small amounts of data.
@@ -505,7 +495,7 @@ class JobInputPreview(BaseModel):
     # Similarly, the design allows for multiple S3 instances. We'll implement with a default
     # when actually needed.
     
-    cluster: Annotated[Cluster, Field(examples=[Cluster.PERLMUTTER_JAWS.value])]
+    cluster: Annotated[sites.Cluster, Field(examples=[sites.Cluster.PERLMUTTER_JAWS.value])]
     image: Annotated[str, Field(
         examples=["ghcr.io/kbase/collections:checkm2_0.1.6"
             + "@sha256:c9291c94c382b88975184203100d119cba865c1be91b1c5891749ee02193d380"],
@@ -531,17 +521,15 @@ class JobInputPreview(BaseModel):
         default=1,
         description="The number of CPUs to allocate per container.",
         ge=1,
-        # https://jaws-docs.readthedocs.io/en/latest/Resources/compute_resources.html#table-of-available-resources
-        le=256,
+        le=sites.MAX_CPUS,
     )] = 1
     memory: Annotated[ByteSize, Field(
         examples=["10MB"],
         default="10MB",
         description="The amount of memory to allocate per container either as the number of "
             + "bytes or a specification string such as 100MB, 2GB, etc.",
-        # https://jaws-docs.readthedocs.io/en/latest/Resources/compute_resources.html#table-of-available-resources
         ge=1 * 1000 * 1000,
-        le=492 * 1000 * 1000 * 1000
+        le=sites.MAX_MEM_GB * 1000 * 1000 * 1000
     )] = 10 * 1000 * 1000
     runtime: Annotated[datetime.timedelta, Field(
         examples=["PT12H30M5S", 12 * 3600 + 30 * 60 + 5],
@@ -549,9 +537,7 @@ class JobInputPreview(BaseModel):
         description="The runtime required for each container as the number of seconds or an "
             + "ISO8601 duration string.",
         ge=datetime.timedelta(seconds=1),
-        # https://jaws-docs.readthedocs.io/en/latest/Resources/compute_resources.html#table-of-available-resources
-        # TODO LAWRENCIUM can handle 3 days, need to check per site. same for CPU
-        le=datetime.timedelta(seconds=2 * 24 * 60 * 60 - (15 * 60)),  # max JAWS runtime
+        le=datetime.timedelta(minutes=sites.MAX_RUNTIME_MIN),
     )] = datetime.timedelta(seconds=60)
     input_roots: Annotated[list[str] | None, Field(
         examples=[["mybucket/foo/bar"]],
@@ -978,7 +964,7 @@ class ReferenceDataStatus(BaseModel):
     Status of a reference data staging process at a particular remote compute location.
     """
     # This is an outgoing structure only so we don't add validators
-    cluster: Annotated[Cluster, Field(examples=[Cluster.PERLMUTTER_JAWS.value])]
+    cluster: Annotated[sites.Cluster, Field(examples=[sites.Cluster.PERLMUTTER_JAWS.value])]
     state: Annotated[ReferenceDataState, Field(
         examples=[ReferenceDataState.COMPLETE.value],
         description="The state of the reference data staging process."
@@ -1031,7 +1017,7 @@ class _ReferenceDataRoot(S3File, RegistrationInfo):
             + "files are supported."
     )] = False
     
-    def get_status_for_cluster(self, cluster: Cluster) -> ReferenceDataStatus:
+    def get_status_for_cluster(self, cluster: sites.Cluster) -> ReferenceDataStatus:
         """
         Get the status of a cluster for this reference data.
         """ 

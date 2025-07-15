@@ -4,7 +4,7 @@ A module for determining paths for callback URLs for the service.
 
 import os
 
-from cdmtaskservice import models
+from cdmtaskservice import sites
 
 _CALLBACK = "callback"
 _DOWNLOAD_COMPLETE = "download"
@@ -56,7 +56,7 @@ def get_error_log_upload_complete_callback(root_url: str = None, job_id: str = N
 
 
 def get_refdata_download_complete_callback(
-        root_url: str = None, refdata_id: str = None, cluster: models.Cluster = None
+        root_url: str = None, refdata_id: str = None, cluster: sites.Cluster = None
     ) -> str:
     """
     Get a url or path for a service callback to communicate that a reference data download
@@ -70,7 +70,7 @@ def get_refdata_download_complete_callback(
 
 
 def _get_callback(
-        subpath: str, root_url: str = None, entity_id: str = None, cluster: models.Cluster = None
+        subpath: str, root_url: str = None, entity_id: str = None, cluster: sites.Cluster = None
     ) -> str:
     cb = [root_url] if root_url else []
     cb += [_CALLBACK, subpath]

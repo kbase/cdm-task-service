@@ -11,6 +11,7 @@ import uuid
 
 from cdmtaskservice import logfields
 from cdmtaskservice import models
+from cdmtaskservice import sites
 from cdmtaskservice import timestamp
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.callback_url_paths import (
@@ -60,7 +61,7 @@ class NERSCJAWSRunner(JobFlow):
     
     def __init__(
         self,
-        cluster: models.Cluster,
+        cluster: sites.Cluster,
         nersc_manager: NERSCManager,
         jaws_client: jaws_client.JAWSClient,
         mongodao: MongoDAO,
