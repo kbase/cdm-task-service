@@ -16,9 +16,11 @@ from fastapi import (
 from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
 from typing import Annotated, Any
 
-from cdmtaskservice import app_state, logfields
+from cdmtaskservice import app_state
 from cdmtaskservice import kb_auth
+from cdmtaskservice import logfields
 from cdmtaskservice import models
+from cdmtaskservice import sites
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
     get_refdata_download_complete_callback,
@@ -108,6 +110,35 @@ async def whoami(user: kb_auth.KBaseUser=Depends(_AUTH)) -> WhoAmI:
         "user": user.user,
         "is_service_admin": kb_auth.AdminPermission.FULL == user.admin_perm
     }
+
+
+class Site(sites.ComputeSite):
+    """ Information about a remote compute site and its status. """
+    
+    available: Annotated[bool, Field(description="Whether the compute site is available.")]
+
+
+class Sites(BaseModel):
+    """ The supported compute sites. """
+    
+    sites: Annotated[list[Site], Field(description="The list of compute sites.")]
+
+
+@ROUTER_GENERAL.get(
+    "/sites/",
+    response_model=Sites,
+    summary="Available compute sites",
+    description="Information about the site available for running jobs."
+)
+async def get_sites(r: Request) -> Sites:
+    ret = []
+    clusters = app_state.get_app_state(r).jobflow_manager.list_clusters()
+    for cl, site in sites.CLUSTER_TO_SITE.items():
+        ret.append(Site(
+            available=cl in clusters,
+            **site.model_dump()
+        ))
+    return Sites(sites=ret)
 
 
 class ListJobsResponse(BaseModel):
@@ -483,7 +514,7 @@ async def get_job_runner_status(
     r: Request,
     job_id: _ANN_JOB_ID,
     user: kb_auth.KBaseUser=Depends(_AUTH),
-) -> models.AdminJobDetails:
+) -> dict[str, Any]:
     _ensure_admin(user, "Only service administrators can get job runner status an admin.")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, user.user, as_admin=True)
@@ -683,7 +714,7 @@ async def download_complete(
 async def refdata_download_complete(
     r: Request,
     refdata_id: _ANN_REFDATA_ID,
-    cluster: Annotated[models.Cluster, FastPath(
+    cluster: Annotated[sites.Cluster, FastPath(
         description="The cluster for which the refdata download is complete."
     )]
 ):

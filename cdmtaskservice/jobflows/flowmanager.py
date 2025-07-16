@@ -3,7 +3,7 @@ Handles what job flows are available to users and their current state.
 """
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
-from cdmtaskservice import models
+from cdmtaskservice import sites
 
 # Currently this isn't too useful since there's only one job flow, so if it's not available
 # the service might as well not start up.
@@ -25,7 +25,7 @@ class JobFlowManager():
         self._flows = {}
         self._inactive = {}
         
-    def register_flow(self, cluster: models.Cluster, flow: JobFlow):
+    def register_flow(self, cluster: sites.Cluster, flow: JobFlow):
         """
         Add a running job flow to the manager.
         
@@ -36,7 +36,7 @@ class JobFlowManager():
         self._flows[_not_falsy(cluster, "cluster")] = _not_falsy(flow, "flow")
         self._inactive.pop(cluster, None)
         
-    def mark_flow_inactive(self, cluster: models.Cluster, reason: str):
+    def mark_flow_inactive(self, cluster: sites.Cluster, reason: str):
         """
         Mark a flow as inactive.
         
@@ -46,7 +46,7 @@ class JobFlowManager():
         self._flows.pop(cluster, None)
         self._inactive[_not_falsy(cluster, "cluster")] = _require_string(reason, "reason")
         
-    def get_flow(self, cluster: models.Cluster) -> JobFlow:
+    def get_flow(self, cluster: sites.Cluster) -> JobFlow:
         """
         Get a job flow for a cluster.
         
@@ -61,11 +61,11 @@ class JobFlowManager():
         else:
             raise ValueError(f"Job flow for cluster {cluster.value} is not registered")
     
-    def list_clusters(self) -> set[models.Cluster]:
+    def list_clusters(self) -> set[sites.Cluster]:
         """ List the clusters with active job flows in this manager. """
         return set(self._flows.keys())
     
-    def list_inactive_clusters(self) -> set[models.Cluster]:
+    def list_inactive_clusters(self) -> set[sites.Cluster]:
         """ List the clusters with inactive job flows in this manager. """
         return set(self._inactive.keys())
 

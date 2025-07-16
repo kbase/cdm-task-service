@@ -3,7 +3,8 @@
 from pydantic import ValidationError
 from pytest import raises
 
-from cdmtaskservice import models  # @UnusedImport
+from cdmtaskservice import models
+from cdmtaskservice import sites
 
 
 def test_files_per_container():
@@ -19,7 +20,7 @@ def test_files_per_container():
 
 def _files_per_container(containers: int, files: int, expfiles: list[list[int]]):
     ji = models.JobInput(
-        cluster=models.Cluster.PERLMUTTER_JAWS,
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
         image="fakeimage",
         params=models.Parameters(),
         num_containers=containers,
@@ -33,7 +34,7 @@ def _files_per_container(containers: int, files: int, expfiles: list[list[int]])
     assert fpc == exp
     
     ji = models.JobInput(
-        cluster=models.Cluster.PERLMUTTER_JAWS,
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
         image="fakeimage",
         params=models.Parameters(),
         num_containers=containers,
@@ -52,7 +53,7 @@ def test_job_input_fail_too_many_containers():
            + "equal to the number of input files")
     with raises(ValidationError, match=err):
         models.JobInput(
-            cluster=models.Cluster.PERLMUTTER_JAWS,
+            cluster=sites.Cluster.PERLMUTTER_JAWS,
             image="fakeimage",
             params=models.Parameters(),
             num_containers=3,

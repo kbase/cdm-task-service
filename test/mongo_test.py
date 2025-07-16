@@ -5,6 +5,7 @@ import pytest
 from typing import Coroutine, Callable
 
 from cdmtaskservice import models
+from cdmtaskservice import sites
 from cdmtaskservice.mongo import MongoDAO, NoSuchJobError
 from cdmtaskservice.update_state import submitting_job, submitted_nersc_refdata_download
 
@@ -21,7 +22,7 @@ _SAFE_TIME = datetime.datetime(2025, 3, 31, 12, 0, 0, 345000, tzinfo=datetime.ti
 _BASEJOB = models.AdminJobDetails(
     id="foo",
     job_input=models.JobInput(
-        cluster=models.Cluster.PERLMUTTER_JAWS,
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
         image="some_image",
         params=models.Parameters(),
         input_files=[models.S3FileWithDataID(file="bucket/file")],
@@ -147,7 +148,7 @@ async def test_refdata_redundant_update_time(mondb):
         file="bucket/key",
         unpack=False,
         statuses=[models.ReferenceDataStatus(
-            cluster=models.Cluster.PERLMUTTER_JAWS,
+            cluster=sites.Cluster.PERLMUTTER_JAWS,
             state=models.ReferenceDataState.CREATED,
             transition_times=[models.RefDataStateTransition(
                 state=models.ReferenceDataState.CREATED,
@@ -168,7 +169,7 @@ async def test_refdata_redundant_update_time(mondb):
     # check that updating refdata state sets an internal update time
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
     await mc.update_refdata_state(
-        models.Cluster.PERLMUTTER_JAWS,
+        sites.Cluster.PERLMUTTER_JAWS,
         "foo",
         submitted_nersc_refdata_download("ntid"),
         dt,
