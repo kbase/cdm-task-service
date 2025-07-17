@@ -22,6 +22,7 @@ from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
 from cdmtaskservice.jaws.client import JAWSClient
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
+from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -93,7 +94,6 @@ async def build_app(
     mongocli = None
     kafka_notifier = None
     try:
-        sfapi_client, jaws_client, nerscman, failreason = await _build_NERSC_flow_deps(logr, cfg)
         logr.info("Initializing S3 client... ")
         s3 = await S3Client.create(
             cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
@@ -116,23 +116,9 @@ async def build_app(
             cfg.kafka_boostrap_servers, cfg.kafka_topic_jobs
         )
         logr.info("Done")
-        if failreason:
-            flowman.mark_flow_inactive(sites.Cluster.PERLMUTTER_JAWS, failreason)
-        else:
-            nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
-                sites.Cluster.PERLMUTTER_JAWS,
-                nerscman,
-                jaws_client,
-                mongodao,
-                s3,
-                s3_external,
-                cfg.container_s3_log_dir,
-                kafka_notifier,
-                coman,
-                cfg.service_root_url,
-                s3_insecure_ssl=cfg.s3_allow_insecure,
-            )
-            flowman.register_flow(sites.Cluster.PERLMUTTER_JAWS, nerscjawsflow)
+        sfapi_client, jaws_client = await _register_nersc_job_flows(
+            logr, cfg, flowman, mongodao, s3, s3_external, kafka_notifier, coman
+        )
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3, coman, flowman)
         images = Images(mongodao, imginfo, refdata)
@@ -179,6 +165,49 @@ async def _check_unsent_kafka_messages(
         jobs, notifs = await kc.check(older_than)
         logr.info(f"Sending {notifs} kafka updates for {jobs} jobs")
 
+
+async def _register_nersc_job_flows(
+    logr: logging.Logger,
+    cfg: CDMTaskServiceConfig,
+    flowman: JobFlowManager,
+    mongodao: MongoDAO,
+    s3: S3Client,
+    s3_external: S3Client,
+    kafka_notifier: KafkaNotifier,
+    coman: CoroutineWrangler
+):
+    sfapi_client, jaws_client, nerscman, failreason = await _build_NERSC_flow_deps(logr, cfg)
+    if failreason:
+        flowman.mark_flow_inactive(NERSCJAWSRunner.get_cluster(), failreason)
+        flowman.mark_flow_inactive(LawrenciumJAWSRunner.get_cluster(), failreason)
+    else:
+        nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
+            nerscman,
+            jaws_client,
+            mongodao,
+            s3,
+            s3_external,
+            cfg.container_s3_log_dir,
+            kafka_notifier,
+            coman,
+            cfg.service_root_url,
+            s3_insecure_ssl=cfg.s3_allow_insecure,
+        )
+        flowman.register_flow(nerscjawsflow)
+        lrcjawsflow = LawrenciumJAWSRunner(  # same
+            nerscman,
+            jaws_client,
+            mongodao,
+            s3,
+            s3_external,
+            cfg.container_s3_log_dir,
+            kafka_notifier,
+            coman,
+            cfg.service_root_url,
+            s3_insecure_ssl=cfg.s3_allow_insecure,
+        )
+        flowman.register_flow(lrcjawsflow)
+    return sfapi_client, jaws_client
 
 async def _build_NERSC_flow_deps(
     logr: logging.Logger, cfg: CDMTaskServiceConfig

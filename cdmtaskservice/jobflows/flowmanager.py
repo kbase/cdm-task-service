@@ -25,16 +25,15 @@ class JobFlowManager():
         self._flows = {}
         self._inactive = {}
         
-    def register_flow(self, cluster: sites.Cluster, flow: JobFlow):
+    def register_flow(self, flow: JobFlow):
         """
         Add a running job flow to the manager.
         
-        cluster - the cluster the job flow is associated with - a 1:1 relationship.
         flow - the job flow.
         """
         # Longer term, the manager should also accept methods to start up / restart the job flow
-        self._flows[_not_falsy(cluster, "cluster")] = _not_falsy(flow, "flow")
-        self._inactive.pop(cluster, None)
+        self._flows[_not_falsy(flow, "flow").get_cluster()] = flow
+        self._inactive.pop(flow.get_cluster(), None)
         
     def mark_flow_inactive(self, cluster: sites.Cluster, reason: str):
         """

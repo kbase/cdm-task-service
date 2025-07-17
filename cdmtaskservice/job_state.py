@@ -141,7 +141,6 @@ class JobState:
 
     def _check_site_limits(self, job_input: models.JobInput):
         site = sites.CLUSTER_TO_SITE[job_input.cluster]
-        # TODO LAWRENCIUM TEST this works correctly when submitting to NERSC vs. LRC
         if job_input.cpus > site.cpus_per_node:
             raise IllegalParameterError(
                 f"The maximum number of CPUs for site {job_input.cluster.value} is "

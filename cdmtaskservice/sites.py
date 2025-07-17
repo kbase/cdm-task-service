@@ -12,10 +12,11 @@ class Cluster(str, Enum):
     The location where a job should run.
     
     perlmutter-jaws: The Perlmutter cluster at NERSC run via JAWS.
+    lawrencium-jaws: The Lawrencium cluster at LBNL run via JAWS.
     """
 
     PERLMUTTER_JAWS = "perlmutter-jaws"
-    # TODO LAWRENCIUM add when available
+    LAWRENCIUM_JAWS = "lawrencium-jaws"
 
 
 class ComputeSite(BaseModel):
@@ -25,6 +26,10 @@ class ComputeSite(BaseModel):
         examples=[Cluster.PERLMUTTER_JAWS.value],
         description="The site identifier",
     )]
+    nodes: Annotated[int, Field(
+        examples=[3042],
+        description="The number of nodes at the site, or null if the node count is not static"
+    )] = None
     cpus_per_node: Annotated[int, Field(
         examples=[256],
         description="The maximum number of virtual CPUs per node.",
@@ -35,7 +40,7 @@ class ComputeSite(BaseModel):
         description="The maximum amount of memory per node in GB."
     )]
     max_runtime_min: Annotated[int, Field(
-        examples=[47 * 60 + 15],
+        examples=[2 * 24 * 60 - 15],
         description="The maximum runtime of a job container in minutes."
     )]
     notes: Annotated[list[str], Field(
@@ -47,18 +52,34 @@ class ComputeSite(BaseModel):
 # https://jaws-docs.jgi.doe.gov/en/latest/Resources/compute_resources.html
 PERLMUTTER_JAWS = ComputeSite(
     cluster=Cluster.PERLMUTTER_JAWS,
+    nodes=3072,
     cpus_per_node=256,
     memory_per_node_gb=492,  # in GB, not GiB, per the JAWS team
-    max_runtime_min=47 * 60 + 15,
-    notes=["The Perlmutter supercomputer at NERSC, serviced by the JAWS job running system."]
+    max_runtime_min=2 * 24 * 60 - 15,
+    notes=[
+        "The Perlmutter supercomputer at NERSC, serviced by the JAWS job running system.",
+        "Queue times can be long - hours to days."
+    ]
 )
 
 
-# TODO LAWRENCIUM add LRC
+# https://jaws-docs.jgi.doe.gov/en/latest/Resources/compute_resources.html
+LAWRENCIUM_JAWS = ComputeSite(
+    cluster=Cluster.LAWRENCIUM_JAWS,
+    nodes=8,
+    cpus_per_node=32,
+    memory_per_node_gb=492,  # in GB, not GiB, per the JAWS team
+    max_runtime_min=3 * 24 * 60 - 15,
+    notes=[
+        "The Lawrencium cluster at LBNL, serviced by the JAWS job running system.",
+        "Queue times are typically shorter here for smaller jobs."
+    ]
+)
 
 
 CLUSTER_TO_SITE = {
-    Cluster.PERLMUTTER_JAWS: PERLMUTTER_JAWS
+    Cluster.PERLMUTTER_JAWS: PERLMUTTER_JAWS,
+    Cluster.LAWRENCIUM_JAWS: LAWRENCIUM_JAWS,
 }
 """ A mapping of compute clusters to their site information. """
 

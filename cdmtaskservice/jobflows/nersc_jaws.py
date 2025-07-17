@@ -53,15 +53,19 @@ from cdmtaskservice.update_state import (
 # TODO RELIABILITY will need a system for detecting NERSC downs, not putting jobs into an
 #                  error state while it's down, and resuming jobs when it's back up
 
+# TODO COdE when a job is passed in, make sure the cluster matches.
+
 
 class NERSCJAWSRunner(JobFlow):
     """
     Runs jobs at NERSC using JAWS.
     """
     
+    CLUSTER = sites.Cluster.PERLMUTTER_JAWS
+    """ The cluster on which this runner operates. """
+    
     def __init__(
         self,
-        cluster: sites.Cluster,
         nersc_manager: NERSCManager,
         jaws_client: jaws_client.JAWSClient,
         mongodao: MongoDAO,
@@ -76,7 +80,6 @@ class NERSCJAWSRunner(JobFlow):
         """
         Create the runner.
         
-        cluster - the cluster this job flow manages.
         nersc_manager - the NERSC manager.
         jaws_client - a JAWS Central client.
         mongodao - the Mongo DAO object.
@@ -91,7 +94,6 @@ class NERSCJAWSRunner(JobFlow):
         s3_insecure_url - whether to skip checking the SSL certificate for the S3 instance,
             leaving the service open to MITM attacks.
         """
-        self._cluster = _not_falsy(cluster, "cluster")
         self._nman = _not_falsy(nersc_manager, "nersc_manager")
         self._jaws = _not_falsy(jaws_client, "jaws_client")
         self._mongo = _not_falsy(mongodao, "mongodao")
@@ -102,7 +104,12 @@ class NERSCJAWSRunner(JobFlow):
         self._kafka = _not_falsy(kafka, "kafka")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")
-        
+    
+    @classmethod
+    def get_cluster(cls) -> sites.Cluster:
+        """ Get the cluster on which this job flow manager operates. """
+        return cls.CLUSTER
+    
     async def _handle_exception(
         self, e: Exception, entity_id: str, errtype: str, refdata: bool = False
     ):
@@ -196,7 +203,7 @@ class NERSCJAWSRunner(JobFlow):
     ):
         await self._mongo.update_refdata_state(
             # TODO TEST will need a way to mock out timestamps
-            self._cluster, refdata_id, update, timestamp.utcdatetime()
+            self.CLUSTER, refdata_id, update, timestamp.utcdatetime()
         )
 
     async def get_job_external_runner_status(self, job: models.AdminJobDetails) -> dict[str, Any]:
@@ -207,8 +214,8 @@ class NERSCJAWSRunner(JobFlow):
         to JAWS, an empty dict is returned.
         """
         # allow getting details from earlier runs? Seems unnecessary
-        if _not_falsy(job, "job").job_input.cluster != self._cluster:
-            raise ValueError(f"Job cluster must match {self._cluster}")
+        if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
+            raise ValueError(f"Job cluster must match {self.CLUSTER}")
         if not job.jaws_details or not job.jaws_details.run_id:
             return {}  # job not submitted yet
         jaws_id = job.jaws_details.run_id[-1]  # if run_id exists, there's a job ID in it
@@ -436,7 +443,7 @@ class NERSCJAWSRunner(JobFlow):
         objmeta - the S3 object metadata for the reference data file. The CRC64/NVME checksum
             is required.
         """
-        refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self._cluster)
+        refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
         if refstate.state != models.ReferenceDataState.CREATED:
             raise InvalidReferenceDataStateError("Reference data must be in the created state")
         # Could check that the s3 and refdata path / etag match... YAGNI
@@ -445,7 +452,7 @@ class NERSCJAWSRunner(JobFlow):
         try:
             presigned = await self._s3ext.presign_get_urls(paths)
             callback_url = get_refdata_download_complete_callback(
-                self._callback_root, refdata.id, self._cluster
+                self._callback_root, refdata.id, self.CLUSTER
             )
             # TODO DISKSPACE clean up no longer used refdata @ NERSC
             #                keep the refdata mongo record so it can be restaged if necessary
@@ -468,7 +475,7 @@ class NERSCJAWSRunner(JobFlow):
         submitted state for the cluster.
         """
         refdata = await self._mongo.get_refdata_by_id(_require_string(refdata_id, "refdata_id"))
-        refstate = refdata.get_status_for_cluster(self._cluster)
+        refstate = refdata.get_status_for_cluster(self.CLUSTER)
         if refstate.state != models.ReferenceDataState.DOWNLOAD_SUBMITTED:
             raise InvalidReferenceDataStateError(
                 "Reference data must be in the download submitted state for "
