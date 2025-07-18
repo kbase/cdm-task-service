@@ -22,6 +22,7 @@ from typing import Self, Awaitable, Any, NamedTuple
 
 from cdmtaskservice import logfields
 from cdmtaskservice import models
+from cdmtaskservice import sites
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
     require_string as _require_string,
@@ -40,9 +41,17 @@ from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
 # TODO ERRORHANDLING wrap sfapi errors in server specific errors
 
 # TODO CLEANUP clean up old code versions @NERSC somehow. Not particularly important
-#              actually this is impoosible to do safely - could be a different cluster of
+#              actually this is impossible to do safely - could be a different cluster of
 #              servers on a different version. Note in admin docs that old unused installs
 #              can be deleted. Server code is tiny anyway
+
+_CLUSTER_TO_JAWS_SITE = {
+    # It seems very unlikely, but we may need to add other JAWS sites for groups other than kbase
+    # If we do that the perlmutter-jaws name is unfortunate since there are multiple virtual
+    # sites there
+    sites.Cluster.PERLMUTTER_JAWS: "kbase",  # what would they call a site actually at kbase...?
+    sites.Cluster.LAWRENCIUM_JAWS: "jgi",  # historical name
+}
 
 _DT_TARGET = Machine.dtns
 # TODO NERSCUPDATE delete the following line when DTN downloads work normally.
@@ -74,8 +83,6 @@ module load jaws
 export JAWS_USER_CONFIG=~/{{conf_file}}
 jaws submit --tag {{job_id}} {{wdlpath}} {{inputjsonpath}} {{site}}
 """
-# This hardcodes the service to the kbase install at NERSC. May need to make configurable... YAGNI
-_JAWS_SITE_PERLMUTTER = "kbase"  # add lawrencium later, maybe
 _JAWS_INPUT_WDL = "input.wdl"
 _JAWS_INPUT_JSON = "input.json"
 
@@ -631,6 +638,9 @@ class NERSCManager:
         _check_num(file_download_concurrency, "file_download_concurrency")
         if not _not_falsy(job, "job").job_input.inputs_are_S3File():
             raise ValueError("Job files must be S3File objects")
+        # getting a key error here is a programming error, but do it before pushing stuff to
+        # NERSC just in case
+        site = _CLUSTER_TO_JAWS_SITE[job.job_input.cluster]
         cli = self._client_provider()
         await self._generate_and_load_job_files_to_nersc(cli, job, file_download_concurrency)
         perl = await cli.compute(Machine.perlmutter)
@@ -644,7 +654,7 @@ class NERSCManager:
                 job_id=job.id,
                 wdlpath=pre / _JAWS_INPUT_WDL,
                 inputjsonpath=pre / _JAWS_INPUT_JSON,
-                site=_JAWS_SITE_PERLMUTTER,
+                site=site,
                 conf_file=self._jawscfg,
             ))
         except SfApiError as e:
