@@ -314,6 +314,7 @@ class RefData(BaseModel):
 @ROUTER_REFDATA.get(
     "/",
     response_model=RefData,
+    response_model_exclude_none=True,
     summary="Get reference data information",
     description="Get information about reference data available for containers in the system "
         + "in no particular order. Returns at most 1000 records."
@@ -327,6 +328,7 @@ async def get_refdata(r: Request) -> RefData:
 @ROUTER_REFDATA.get(
     "/id/{refdata_id}",
     response_model=models.ReferenceData,
+    response_model_exclude_none=True,
     summary="Get reference data information by ID",
     description="Get information about reference data available for containers, including its "
         + "location and staging status, by the reference data's unique ID."
@@ -342,6 +344,7 @@ async def get_refdata_by_id(
 @ROUTER_REFDATA.get(
     "/path/{s3_path:path}",
     response_model=RefData,
+    response_model_exclude_none=True,
     summary="Get reference data information by the S3 file path",
     description="Get information about reference data available for containers by the "
         + "reference data file path. Returns at most 1000 records."
@@ -412,6 +415,7 @@ async def delete_image(
 @ROUTER_ADMIN.post(
     "/refdata/{refdata_s3_path:path}",
     response_model=models.ReferenceData,
+    response_model_exclude_none=True,
     summary="Create reference data",
     description="Define an S3 file as containing reference data necessary for one or more "
         + "containers and start the reference data staging process."
@@ -563,6 +567,7 @@ async def update_job_admin_meta(
 @ROUTER_ADMIN.get(
     "/refdata/{refdata_id}",
     response_model=models.AdminReferenceData,
+    response_model_exclude_none=True,
     summary="Get reference data information as an admin",
     description="Get information about reference data available for containers, including its "
         + "location and staging status, with additional details."
