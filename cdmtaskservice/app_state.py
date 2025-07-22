@@ -181,7 +181,7 @@ async def _register_nersc_job_flows(
         flowman.mark_flow_inactive(NERSCJAWSRunner.get_cluster(), failreason)
         flowman.mark_flow_inactive(LawrenciumJAWSRunner.get_cluster(), failreason)
     else:
-        nerscjawsflow = NERSCJAWSRunner(  # this has a lot of required args, yech
+        lrcjawsflow = LawrenciumJAWSRunner(  # this has a lot of required args, yech
             nerscman,
             jaws_client,
             mongodao,
@@ -193,8 +193,7 @@ async def _register_nersc_job_flows(
             cfg.service_root_url,
             s3_insecure_ssl=cfg.s3_allow_insecure,
         )
-        flowman.register_flow(nerscjawsflow)
-        lrcjawsflow = LawrenciumJAWSRunner(  # same
+        nerscjawsflow = NERSCJAWSRunner(  # same
             nerscman,
             jaws_client,
             mongodao,
@@ -205,8 +204,10 @@ async def _register_nersc_job_flows(
             coman,
             cfg.service_root_url,
             s3_insecure_ssl=cfg.s3_allow_insecure,
+            on_refdata_complete=lrcjawsflow.nersc_refdata_complete,
         )
         flowman.register_flow(lrcjawsflow)
+        flowman.register_flow(nerscjawsflow)
     return sfapi_client, jaws_client
 
 async def _build_NERSC_flow_deps(

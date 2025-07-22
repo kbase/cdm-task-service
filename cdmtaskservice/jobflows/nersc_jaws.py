@@ -76,6 +76,7 @@ class NERSCJAWSRunner(JobFlow):
         coro_manager: CoroutineWrangler,
         service_root_url: str,
         s3_insecure_ssl: bool = False,
+        on_refdata_complete: Callable[[models.ReferenceData], Awaitable[None]] = None,
     ):
         """
         Create the runner.
@@ -93,6 +94,8 @@ class NERSCJAWSRunner(JobFlow):
         service_root_url - the URL of the service root, used for constructing service callbacks.
         s3_insecure_url - whether to skip checking the SSL certificate for the S3 instance,
             leaving the service open to MITM attacks.
+        on_refdata_complete - an optional async function that will be called when refdata
+            has completed staging at NERSC. Takes a refdata object as an argument.
         """
         self._nman = _not_falsy(nersc_manager, "nersc_manager")
         self._jaws = _not_falsy(jaws_client, "jaws_client")
@@ -104,6 +107,7 @@ class NERSCJAWSRunner(JobFlow):
         self._kafka = _not_falsy(kafka, "kafka")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")
+        self._on_refdata_complete = on_refdata_complete
     
     @classmethod
     def get_cluster(cls) -> sites.Cluster:
@@ -488,3 +492,6 @@ class NERSCJAWSRunner(JobFlow):
         )
         # TODO DISKSPACE will need to clean up refdata manifests & d/l result json files
         await self._update_refdata_state(refdata.id, refdata_complete())
+        if self._on_refdata_complete:
+            # don't wait for this function to run before returning
+            await self._coman.run_coroutine(self._on_refdata_complete(refdata))
