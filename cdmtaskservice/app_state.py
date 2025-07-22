@@ -250,6 +250,7 @@ async def _build_NERSC_flow_deps(
         nerscman = await NERSCManager.create(
             sfapi_client.get_client,
             Path(cfg.nersc_remote_code_dir) / VERSION,
+            cfg.nersc_jaws_user,
             cfg.jaws_token,
             cfg.jaws_group,
             Path(cfg.jaws_refdata_root_dir),

@@ -185,6 +185,7 @@ class NERSCManager:
         cls,
         client_provider: Callable[[], AsyncClient],
         nersc_code_path: Path,
+        nersc_jaws_user: str,
         jaws_token: str,
         jaws_group: str,
         jaws_refdata_root_dir: Path,
@@ -198,6 +199,8 @@ class NERSCManager:
         nersc_code_path - the path in which to store remote code at NERSC. It is advised to
             include version information in the path to avoid code conflicts. The path is appended
             by the service group to separate dev and prod environments.
+        nersc_jaws_user - the NERSC username of the user associated with the jaws token.
+            This is typically a collaboration account.
         jaws_token - a token for the JGI JAWS system.
         jaws_group - the group to use for running JAWS jobs.
         jaws_refdata_root_dir - the root directory for refdata configured for the JAWS instance.
@@ -205,7 +208,9 @@ class NERSCManager:
             This is used to separate files at NERSC so files from different S3 instances
             (say production and development) don't collide.
         """
-        nm = NERSCManager(client_provider, nersc_code_path, service_group, jaws_refdata_root_dir)
+        nm = NERSCManager(
+            client_provider, nersc_code_path, nersc_jaws_user, service_group, jaws_refdata_root_dir
+        )
         await nm._setup_remote_code(
             _require_string(jaws_token, "jaws_token"),
             _require_string(jaws_group, "jaws_group"),
@@ -216,6 +221,7 @@ class NERSCManager:
             self,
             client_provider: Callable[[], str],
             nersc_code_path: Path,
+            nesrc_jaws_user: str,
             service_group: str,
             jaws_refdata_root_dir: str,
         ):
@@ -223,10 +229,11 @@ class NERSCManager:
         self._nersc_code_path = self._check_path(
             nersc_code_path, "nersc_code_path"
         ) / service_group
+        self._nersc_jaws_user = _require_string(nesrc_jaws_user, "nesrc_jaws_user")
+        self._service_group = _require_string(service_group, "service_group")
         self._work_loc = Path("cdm_task_service") / service_group
         self._jawscfg = f"jaws_cts_{service_group}.conf"
-        self._refdata_root = self._check_path(jaws_refdata_root_dir, "jaws_refdata_root_dir"
-                                              ) / self._work_loc
+        self._refdata_root = self._check_path(jaws_refdata_root_dir, "jaws_refdata_root_dir")
 
     def _check_path(self, path: Path, name: str):
         _not_falsy(path, name)
@@ -305,11 +312,18 @@ class NERSCManager:
     def _get_refdata_scratch(self, refdata_id) -> Path:
         return self._dtn_scratch / self._work_loc / _REFDATA_DIR / refdata_id
     
-    def _get_refdata_root(self, refdata_id) -> Path:
-        return self._refdata_root / refdata_id
+    def _get_refdata_loc(self, refdata_id) -> Path:
+        return self._refdata_root / self._get_relative_refdata_loc(refdata_id)
     
-    def _get_relative_refdata_root(self, refdata_id) -> Path:
+    def _get_relative_refdata_loc(self, refdata_id) -> Path:
         return self._work_loc / refdata_id
+    
+    def _get_refdata_file_change_path(self, refdata_id) -> Path:
+        # the file path that JAWS looks for to trigger refdata transfers
+        return (
+            self._refdata_root /
+            f"{self._nersc_jaws_user}_{self._service_group}_{refdata_id}_changes.txt"
+        )
     
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
@@ -512,7 +526,11 @@ class NERSCManager:
             raise ValueError("All the S3 objects must have a CRC64/NVME checksum")
         manifest = self._base_manifest("download", concurrency, insecure_ssl)
         if refdata:
-            sc = self._get_refdata_root(download_id)
+            sc = self._get_refdata_loc(download_id)
+            # TODO CLEANUP need to delete this and the JAWS written completion file
+            # see https://jaws-docs.jgi.doe.gov/en/latest/jaws/jaws_refdata.html#adding-data-to-refdata-directory
+            manifest["completion_file"] = str(self._get_refdata_file_change_path(download_id))
+            manifest["completion_file_contents"] = str(sc)
         else:
             sc = self._get_job_scratch(download_id) / _JOB_FILES
         manifest["files"] = [
@@ -687,7 +705,7 @@ class NERSCManager:
         fmap = {m: _JOB_FILES / m.file for m in job.job_input.input_files}
         refpath = None
         if job.image.refdata_id:
-            refpath = self._get_relative_refdata_root(job.image.refdata_id)
+            refpath = self._get_relative_refdata_loc(job.image.refdata_id)
         wdljson = wdl.generate_wdl(
             job, fmap, manifest_file_list=manifest_file_paths, relative_refdata_path=refpath
         )

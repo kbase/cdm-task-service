@@ -335,6 +335,10 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
             manifest['min-timeout-sec'],
             manifest["sec-per-GB"],
         )
+    if "completion_file" in manifest:
+        with open(manifest["completion_file"], "w") as f:
+            # just raise a keyerror if it's not there
+            f.write(manifest["completion_file_contents"] + "\n")
 
 
 def _timeout(min_timeout_sec: int, filesize: int, sec_per_GB: float) -> float:
