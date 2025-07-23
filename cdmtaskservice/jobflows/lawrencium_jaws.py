@@ -6,7 +6,9 @@ Note that data is still staged at NERSC and the job is started from NERSC.
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
+from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -72,10 +74,29 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         of NERSC refdata staging first.
         """
         pass  # intentionally do nothing
-        # TODO LRC REFDATA add submitting the refdata transfer to NERSC refdata staging
-        # TODO LRC REFDATA need to listen to NERSC and when it's refdata is complete, set up
-        # a callback @ NERSC for the refata complete file marker.that pings the service
-        # to tell it the refdata transfer to LRC is complete 
+
+    async def nersc_refdata_complete(self, refdata: models.ReferenceData):
+        """
+        Notify the flow runner that refdata has been staged at NERSC and transfer to
+        LRC has been requested.
+        
+        Any exceptions cause the refdata state to be set to error for LRC, as it is expected
+        only internal methods call this method, not API methods.
+        """
+        try:
+            refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
+            if refstate.state != models.ReferenceDataState.CREATED:
+                raise InvalidReferenceDataStateError("Reference data must be in the created state")
+            import logging  # TODO LRC REFDATA remove
+            logging.getLogger(__name__).info(
+                "waiting for JAWS to complete refdata handling stuff"
+            )
+            # BLOCKED waiting for JAWS features / debugging
+            # TODO LRC REFDATA set up a callback @ NERSC for the refata complete file marker.that
+            #        pings the service to tell it the refdata transfer to LRC is complete
+            #        Update the refdata state
+        except Exception as e:
+            await self._handle_exception(e, refdata.id, "setting up callbacks for", refdata=True)
 
     async def refdata_complete(self, refdata_id: str):
         """
@@ -83,4 +104,8 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         submitted state for the cluster.
         """
         raise ValueError("unimplemented")
-        # TODO LRC REFDATA implement
+        # TODO LRC REFDATA implement.
+        #       * check refdata state like the NERSC job flow
+        #       * check the refdata completion file exists at NERSCD (e.g. don't trust the 
+        #          http ping, verify)
+        #       * update state
