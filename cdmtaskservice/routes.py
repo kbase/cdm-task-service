@@ -276,6 +276,7 @@ class Images(BaseModel):
 @ROUTER_IMAGES.get(
     "/",
     response_model=Images,
+    response_model_exclude_none=True,
     summary="Get images",
     description="Get images registered in the service. At most 1000 are returned "
         + "in no particular order.",
@@ -288,6 +289,7 @@ async def get_images(r: Request):
 @ROUTER_IMAGES.get(
     "/{image_id:path}",
     response_model=models.Image,
+    response_model_exclude_none=True,
     summary="Get an image by name",
     description="Get an image previously registered to the system by the image name. "
         + "If a digest and tag are provided the tag is ignored.",
@@ -370,6 +372,7 @@ async def get_refdata_by_path(
 @ROUTER_ADMIN.post(
     "/images/{image_id:path}",
     response_model=models.Image,
+    response_model_exclude_none=True,
     summary="Approve an image",
     description="Approve a Docker image for use with this service. "
         + "The image must be publicly accessible and have an entrypoint. "
@@ -387,11 +390,26 @@ async def approve_image(
         min_length=1,
         max_length=50,
     )] = None,
+    default_refdata_mount_point: Annotated[str, Query(
+        openapi_examples={"mount_point": {"value": "/reference_data"}},
+        description="The default mount point for the image refdata in the container. Overridden "
+            + "by the refdata mount point in a job submission if provided there. If a default "
+            + "mount point is provided, then providing a mount point in the job submission "
+            + "is optional. Must be an absolute path.",
+        pattern=models.ABSOLUTE_PATH_REGEX,
+        min_length=1,
+        max_length=1024,
+    )] = None,
     user: kb_auth.KBaseUser=Depends(_AUTH)
 ) -> models.Image:
     _ensure_admin(user, "Only service administrators can approve images.")
     images = app_state.get_app_state(r).images
-    return await images.register(image_id, user.user, refdata_id=refdata_id)
+    return await images.register(
+        image_id,
+        user.user,
+        refdata_id=refdata_id,
+        default_refdata_mount_point=default_refdata_mount_point
+    )
 
 
 @ROUTER_ADMIN.delete(
