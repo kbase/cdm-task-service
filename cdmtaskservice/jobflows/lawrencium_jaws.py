@@ -91,6 +91,13 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
             logging.getLogger(__name__).info(
                 "waiting for JAWS to complete refdata handling stuff"
             )
+            # Note on eventual retries - JAWS writes a file to note that the transfer is
+            # done, whether it succeeded or failed. The file path is based on the file that the
+            # s3 remote code writes when refdata is staged. Therefore on a retry, these files
+            # will already exist and so setting up a SFAPI callback for them will trigger the
+            # callback immediately. Either the files need to be deleted or a file with a new
+            # filename needs to be written (maybe insert _attempt_# or something into the name).
+            
             # BLOCKED waiting for JAWS features / debugging
             # TODO LRC REFDATA set up a callback @ NERSC for the refata complete file marker.that
             #        pings the service to tell it the refdata transfer to LRC is complete
