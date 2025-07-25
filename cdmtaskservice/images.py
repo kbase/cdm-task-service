@@ -72,7 +72,7 @@ class Images:
             entrypoint=entrypoint,
             registered_by=username,
             registered_on=utcdatetime(),
-            refdata_id=refdata_id,
+            refdata_id=refdata_id or None,  # ensure not empty string, etc.
             default_refdata_mount_point=default_refdata_mount_point,
         )
         await self._mongo.save_image(img)
