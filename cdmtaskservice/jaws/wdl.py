@@ -62,7 +62,7 @@ def generate_wdl(
     # If the manifest file name / path changes that'll break the JAWS cache, need to think
     # about that
     # How often will jobs run with identical manifest files though? Maybe MD5 based caching?
-    if relative_refdata_path and not job.job_input.params.refdata_mount_point:
+    if relative_refdata_path and not job.get_refdata_mount_point():
         raise ValueError(
             "If a refdata path is supplied, a mount point for the job must be supplied"
         )
@@ -137,7 +137,7 @@ def _generate_wdl(job: Job, workflow_name: str, manifests: bool, relative_refdat
     fi"""
     if relative_refdata_path:
         refdata_mount = f'''
-    dynamic_refdata: "{relative_refdata_path}:{job.job_input.params.refdata_mount_point}"'''
+    dynamic_refdata: "{relative_refdata_path}:{job.get_refdata_mount_point()}"'''
 
     return f"""
 version {_WDL_VERSION}
