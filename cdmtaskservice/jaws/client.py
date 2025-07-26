@@ -2,6 +2,9 @@
 An minimal async client for the JAWS central server.
 """
 
+# API docs: https://jaws-api.jgi.doe.gov/api/v2/ui/#/
+
+
 import aiohttp
 import datetime
 from enum import Enum
@@ -23,7 +26,11 @@ class JAWSResult(Enum):
     """
     The job ran but failed.
     """
-    SYSTEM_ERROR = 3
+    CANCELED = 3
+    """
+    The job was canceled.
+    """
+    SYSTEM_ERROR = 10
     """
     A JAWS system error prevented the job from running. Likely no output files are available.
     """
@@ -65,7 +72,13 @@ class JAWSClient:
         )
 
     async def _get(self, url, params=None) -> dict[str, Any]:
-        async with self._sess.get(url, params=params) as res:
+        return await self._req("GET", url, params=params)
+    
+    async def _put(self, url, params=None) -> dict[str, Any]:
+        return await self._req("PUT", url, params=params)
+        
+    async def _req(self, method, url, params=None) -> dict[str, Any]:
+        async with self._sess.request(method=method, url=url, params=params) as res:
             # Any jaws errors would be 500 errors since should just be querying known jobs, so
             # don't worry too much about exceptions. Expand later if needed
             # May need to add retries
@@ -97,6 +110,16 @@ class JAWSClient:
         res["updated"] = _add_tz(res["updated"])
         return res
     
+    async def cancel(self, run_id: str) -> dict[str, Any]:
+        """ Cancel a job. """
+        try:
+            return await self._put(f"run/{_require_string(run_id, 'run_id')}/cancel")
+        except aiohttp.client_exceptions.ClientResponseError as e:
+            # TODO JAWS handle 400 when job is already cancelled
+            if e.status == 404:
+                raise NoSuchJAWSJobError(run_id) from e
+            raise
+    
     async def close(self):
         await self._sess.close()
 
@@ -117,6 +140,7 @@ def is_done(job: dict[str, Any]) -> bool:
 _JAWS_RES_TO_ENUM = {
     "succeeded": JAWSResult.SUCCESS,
     "failed": JAWSResult.FAILED,
+    "cancelled": JAWSResult.CANCELED,
     None: JAWSResult.SYSTEM_ERROR,
 }
 # TODO RELIABILITY cancelled is a possible result, but can be cancelled and still be null.
