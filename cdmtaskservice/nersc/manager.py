@@ -546,7 +546,7 @@ class NERSCManager:
                 "unpack": unpack,
             } for url, meta in zip(presigned_urls, objects)
         ]
-        return io.BytesIO(json.dumps({"file-transfers": manifest}).encode())
+        return io.BytesIO(json.dumps({"file-transfers": manifest}, indent=4).encode())
     
     def _create_upload_manifest(
         self,
@@ -567,7 +567,7 @@ class NERSCManager:
                 "file": str(file),
             } for url, file in zip(presigned_urls, remote_files)
         ]
-        return io.BytesIO(json.dumps({"file-transfers": manifest}).encode())
+        return io.BytesIO(json.dumps({"file-transfers": manifest}, indent=4).encode())
     
     def _base_manifest(self, op: str, concurrency: int, insecure_ssl: bool):
         return {
