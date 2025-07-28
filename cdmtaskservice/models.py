@@ -74,8 +74,8 @@ CRC64NVME_B64ENC_LENGTH=12
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
-# POSiX fully portable filenames and /
-_PATH_REGEX=r"^[\w.-/]+$"
+# POSIX fully portable filenames
+ABSOLUTE_PATH_REGEX = r"^/(?:[\w.-]+/)*[\w.-]+/?$"
 
 
 def _validate_bucket_name(bucket: str, index: int = None) -> str:
@@ -316,7 +316,7 @@ class Parameters(BaseModel):
             + "when resolved.",
         min_length=1,
         max_length=1024,
-        pattern=_PATH_REGEX,
+        pattern=ABSOLUTE_PATH_REGEX,
     )] = "/input_files"
     output_mount_point: Annotated[str, Field(
         examples=["/output_files"],
@@ -326,16 +326,18 @@ class Parameters(BaseModel):
             + "when resolved.",
         min_length=1,
         max_length=1024,
-        pattern=_PATH_REGEX,
+        pattern=ABSOLUTE_PATH_REGEX,
     )] = "/output_files"
     refdata_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
         description="Where reference data files should be pleased in the container. "
             + "Must start from the container root and include at least one directory "
-            + "when resolved.",
+            + "when resolved. Required if the job image requires reference data and a default "
+            + "reference data mount point isn't specified for the image. If a default is "
+            + "provided, this setting overrides it.",
         min_length=1,
         max_length=1024,
-        pattern=_PATH_REGEX,
+        pattern=ABSOLUTE_PATH_REGEX,
     )] = None
     args: Annotated[list[ArgumentString | Flag | ParameterWithFlag] | None, Field(
         examples=[[
@@ -366,23 +368,6 @@ class Parameters(BaseModel):
         description="A dictionary of environment variables to be inserted into the container. "
             + "String values are treated as literals."
     )] = None
-    
-    @field_validator(
-        "input_mount_point",
-        "output_mount_point",
-        "refdata_mount_point",
-        mode="after",
-    )
-    @classmethod
-    def _check_path(cls, v):
-        if v is None:
-            return None
-        vp = Path(v)
-        if vp.root != "/":
-            raise ValueError("path must be absolute")
-        if len(vp.resolve().parts) < 2:
-            raise ValueError("path must contain at least one directory under root")
-        return v
     
     @model_validator(mode="after")
     def _check_parameters(self) -> Self:
@@ -741,6 +726,13 @@ class Image(RegistrationInfo):
             + "this reference data to run, and it will be mounted into the image container at "
             + "the refdata mount point."
     )] = None
+    default_refdata_mount_point: Annotated[str | None, Field(
+        examples=["/reference_data"],
+        description="The default mount point for the image refdata in the container. Overridden "
+            + "by the refdata mount point in a job submission if provided there. If a default "
+            + "mount point is provided, then providing a mount point in the job submission "
+            + "is optional. Must be an absolute path.",
+    )] = None
     
     @property
     def name_with_digest(self):
@@ -840,6 +832,13 @@ class JobPreview(JobStatus):
         examples=["cts-logs/container_logs/e14a21ba-032d-42f2-b235-d82606675b17"],
         description="A location in S3 where the logfiles for the job containers can be viewed."
     )] = None
+    
+    def get_refdata_mount_point(self) -> str | None:
+        """
+        Get the in-container mount point for reference data or None if there is no reference
+        data for this job.
+        """
+        return self.job_input.params.refdata_mount_point or self.image.default_refdata_mount_point
 
 
 class Job(JobPreview):
