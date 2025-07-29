@@ -907,3 +907,13 @@ class NERSCManager:
         to_delete = list(jaws_output_dirs or [])  # if jaws_output_dirs is None or empty
         to_delete.append(self._get_job_scratch(_not_falsy(job, "job").id))
         await self._delete_dtn_paths(to_delete)
+
+    async def clean_refdata(self, refdata: models.ReferenceData):
+        """
+        Remove any files at NERSC associat4ed with staging the reference data. Does not remove
+        the reference data itself or the NERSC -> LRC sync notification file read by JAWS.
+        
+        Note that running this method on reference data where staging is not in a terminal
+        state may result in undefined behavior.
+        """
+        await self._delete_dtn_paths([self._get_refdata_scratch(refdata.id)])

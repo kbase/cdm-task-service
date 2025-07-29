@@ -116,3 +116,9 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         #       * check the refdata completion file exists at NERSCD (e.g. don't trust the 
         #          http ping, verify)
         #       * update state
+
+    async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
+        """
+        Do nothing. Refdata is staged at NERSC; there is nothing to clean up at LRC.
+        """
+        pass # Intentionally do nothing 
