@@ -21,7 +21,11 @@ from cdmtaskservice.callback_url_paths import (
     get_refdata_download_complete_callback,
 )
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import InvalidJobStateError, InvalidReferenceDataStateError
+from cdmtaskservice.exceptions import (
+    InvalidJobStateError,
+    InvalidReferenceDataStateError,
+    IllegalParameterError,
+)
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
@@ -444,6 +448,35 @@ class NERSCJAWSRunner(JobFlow):
             f"Example container error: {data[0][1]}",
             logpath=os.path.join(self._s3logdir, job.id),
         )
+
+    async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
+        """
+        Clean up job files at the remote compute site.
+        
+        job - the job to clean up.
+        force - perform the clean up even if the job isn't in a terminal state. This may cause
+            undefined behavior.
+        """
+        # might need to have some sort of flowmanager wrapper class that checks these
+        # sort of global issues and ensures that Job is not modified before passing it to the
+        # flow
+        if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
+            raise ValueError(f"Job cluster must match {self.CLUSTER}")
+        if not force and job.state not in models.JOB_TERMINAL_STATES:
+            raise IllegalParameterError("Job is not in a terminal state and cannot be cleaned")
+        jaws_paths = []
+        if job.jaws_details and job.jaws_details.run_id:
+            # this should be a very small number of runs, usually one, so don't bother
+            # with parallelization
+            for run in job.jaws_details.run_id:
+                jaws_output = await self._jaws.status(run)
+                if jaws_output.get("output_dir"):
+                    # so this is a little hacky but it's less annoying than having to configure
+                    # the jaws output dir
+                    # Split on the run ID so the entire run is deleted, not just the sub run ID
+                    d = jaws_output["output_dir"].split(run)[0] + str(run)
+                    jaws_paths.append(Path(d))
+        await self._nman.clean_job(job, jaws_paths)
 
     async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):
         """

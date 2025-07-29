@@ -4,7 +4,6 @@ Pydantic models for the CTS.
 
 import datetime
 from enum import Enum
-from pathlib import Path
 from pydantic import (
     BaseModel,
     Field,
@@ -759,6 +758,9 @@ class JobState(str, Enum):
     ERROR_PROCESSING_SUBMITTING = "error_processing_submitting"
     ERROR_PROCESSING_SUBMITTED = "error_processing_submitted"
     ERROR = "error"
+
+
+JOB_TERMINAL_STATES = {JobState.COMPLETE, JobState.ERROR}  # canceled at some point
 
 
 class JobStateTransition(BaseModel):

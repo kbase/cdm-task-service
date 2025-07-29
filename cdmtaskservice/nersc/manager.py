@@ -356,6 +356,19 @@ class NERSCManager:
             await compute.run(cmd)
             logr.info("chmod of uploaded file complete.", extra={logfields.FILE: target})
 
+    async def _delete_dtn_paths(self, paths: list[Path]):
+        logr = logging.getLogger(__name__)
+        cli = self._client_provider()
+        dtns = await cli.compute(Machine.dtns)
+        async with asyncio.TaskGroup() as tg:
+            for p in paths:
+                logr.info("Deleting path at NERSC", extra={logfields.FILE: p})
+                # May need to catch SFAPI client errors and wrap. YAGNI for now
+                # Don't want to use -f in case there actually is a write protected file in
+                # the path, which would indicate something is very wrong, and I want to know
+                # about it
+                tg.create_task(dtns.run(f"{_DT_WORKAROUND}; [ -e {p} ] && rm -r {p}"))
+
     def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
         # skip some API calls vs. the upload example in the NERSC docs
         # don't use a directory as the target or it makes an API call
@@ -873,3 +886,24 @@ class NERSCManager:
             error_json_file_location=errfilepath,
             container_logs_location=str(rootpath / _JOB_LOGS)
         )
+
+    async def clean_job(self, job: models.Job, jaws_output_dirs: list[Path]):
+        """
+        Remove any files at NERSC associated with the job other than files managed by
+        JAWS.
+        
+        Note that running this method on a job that is not in a terminal state may result in
+        undefined behavior.
+        
+        job - the job to clean up.
+        jaws_output_dirs - the output directories of the jaws jobs, obtained from the jaws status
+            command. Typically only a single directory.
+        """
+        # Passing in the JAWS output dirs seems a bit odd in this case but it's the way it's
+        # done for all the other methods that deal with it.
+        # The alternative would be passing in a JAWS client in the constructor and looking it
+        #  up, in which case we should do the same elsewhere in this file, but that's an
+        # extra JAWS call for nothing...
+        to_delete = list(jaws_output_dirs or [])  # if jaws_output_dirs is None or empty
+        to_delete.append(self._get_job_scratch(_not_falsy(job, "job").id))
+        await self._delete_dtn_paths(to_delete)
