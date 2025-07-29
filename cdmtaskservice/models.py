@@ -948,6 +948,9 @@ class ReferenceDataState(str, Enum):
     ERROR = "error"
 
 
+REFDATA_TERMINAL_STATES = {ReferenceDataState.COMPLETE, ReferenceDataState.ERROR}
+
+
 class RefDataStateTransition(BaseModel):
     """
     Denotes the new state and the entry time when a state change occurs.

@@ -535,3 +535,19 @@ class NERSCJAWSRunner(JobFlow):
         if self._on_refdata_complete:
             # don't wait for this function to run before returning
             await self._coman.run_coroutine(self._on_refdata_complete(refdata))
+
+    async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
+        """
+        Clean up refdata staging files at the remote compute site.
+        
+        refdata - the refdata to clean up.
+        force - perform the clean up even if the refdata staging isn't in a terminal state.
+            This may cause undefined behavior.
+        """
+        # might need to have some sort of flowmanager wrapper class that checks these
+        # sort of global issues and ensures that ReferenceData is not modified before passing
+        # it to the flow
+        refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
+        if not force and refstate.state not in models.REFDATA_TERMINAL_STATES:
+            raise IllegalParameterError("Refdata is not in a terminal state and cannot be cleaned")
+        await self._nman.clean_refdata(refdata)

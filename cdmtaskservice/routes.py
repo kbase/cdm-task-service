@@ -624,6 +624,34 @@ async def get_refdata_admin(
     return await refdata.get_refdata_by_id(refdata_id, as_admin=True)
 
 
+@ROUTER_ADMIN.delete(
+    "/refdata/{refdata_id}/{cluster}/clean",
+    status_code = status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Clean up refdata staging files",
+    description="Remove refdata staging related files managed by this service at the remote "
+        + "compute site. The refdata staging must be in a terminal state.\n\n"
+        + "The refdata itself and NERSC -> LRC transfer triggering files are not removed."
+)
+async def clean_refdata(
+    r: Request,
+    refdata_id: _ANN_REFDATA_ID,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster where refdata staging files should be cleaned up."
+    )],
+    force: Annotated[bool, Query(
+        description="**WARNING**: setting force to true may cause undefined behavior. True will " 
+        + "cause refdata files to be removed regardless of staging state."
+    )] = False,
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can clean jobs.")
+    appstate = app_state.get_app_state(r)
+    refdata = await appstate.refdata.get_refdata_by_id(refdata_id, as_admin=True)
+    flow = appstate.jobflow_manager.get_flow(cluster)
+    await flow.clean_refdata(refdata, force=force)
+
+
 class NERSCClientInfo(BaseModel):
     """ Provides information about the NERSC SFAPI client. """
     id: Annotated[str, Field(description="The opaque ID of the client.")]
