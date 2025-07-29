@@ -537,7 +537,7 @@ async def get_job_runner_status(
     job_id: _ANN_JOB_ID,
     user: kb_auth.KBaseUser=Depends(_AUTH),
 ) -> dict[str, Any]:
-    _ensure_admin(user, "Only service administrators can get job runner status an admin.")
+    _ensure_admin(user, "Only service administrators can get job runner status.")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, user.user, as_admin=True)
     flow = appstate.jobflow_manager.get_flow(job.job_input.cluster)
@@ -580,6 +580,30 @@ async def update_job_admin_meta(
     await job_state.update_job_admin_meta(
         job_id, admin, set_fields=update.set_fields, unset_keys=update.unset_keys
     )
+
+
+@ROUTER_ADMIN.delete(
+    "/jobs/{job_id}/clean",
+    status_code = status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Clean up after a job",
+    description="Remove any job related files managed by this service at the remote compute site. "
+        + "The job must be in a terminal state."
+)
+async def clean_job(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    force: Annotated[bool, Query(
+        description="**WARNING**: setting force to true may cause undefined behavior. True will " 
+        + "cause job files to be removed regardless of job state."
+    )] = False,
+    user: kb_auth.KBaseUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can clean jobs.")
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user.user, as_admin=True)
+    flow = appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    await flow.clean_job(job, force=force)
 
 
 @ROUTER_ADMIN.get(
