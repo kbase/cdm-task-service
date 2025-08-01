@@ -125,6 +125,20 @@ python $CTS_CODE_LOCATION/{"/".join(remote.__name__.split("."))}.py
 """
 
 
+# Note there's a race condition that theoretically could happen here if the path is removed
+# after the existence check but before the rm. Since this is just for clean up not an issue. 
+# Also note I wasted way too much time trying to make this fail cleanly if there was a write
+# protected file in the path tree, which should never happen.
+# It'll still fail if it really can't delete the path.
+_REMOVE_DTN_PATH_TEMPLATE = f"""
+{_DT_WORKAROUND}
+if [ ! -e "{{path}}" ]; then
+    exit 0
+fi
+rm -rf -- "{{path}}"
+"""
+
+
 _CTS_ROOT = __name__.split(".")[0]
 _CTS_DEPENDENCIES = {remote}
 _PIP_DEPENDENCIES = set()
@@ -364,10 +378,7 @@ class NERSCManager:
             for p in paths:
                 logr.info("Deleting path at NERSC", extra={logfields.FILE: p})
                 # May need to catch SFAPI client errors and wrap. YAGNI for now
-                # Don't want to use -f in case there actually is a write protected file in
-                # the path, which would indicate something is very wrong, and I want to know
-                # about it
-                tg.create_task(dtns.run(f"{_DT_WORKAROUND}; [ -e {p} ] && rm -r {p}"))
+                tg.create_task(dtns.run(_REMOVE_DTN_PATH_TEMPLATE.format(path=p)))
 
     def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
         # skip some API calls vs. the upload example in the NERSC docs
