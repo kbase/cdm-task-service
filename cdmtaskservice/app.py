@@ -35,16 +35,11 @@ from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.exceptions import InvalidAuthHeaderError
 
 
-# TODO FEATURE nersc file caching:
-#                  * put files directly in jaws staging area
-#                  * cache via md5 or e tag of file to prevent duplicate downloads
-#                  * download temp file then move to standard location to prevent data corruption
 # TODO FEATURE cleanup files:
 #                  * jaws results
 #                  * refdata d/l manifest & result files in scratch
 #                  * various job files in scratch
 #                  * refdata jaws transfer notification files when implemented for lawrencium
-#                  * refdata tar / gz files post unpack
 #                  * refdata not associated with images, need to keep the refdata mongo doc
 #                       around since it's associdated with jobs, and could be used to restage
 # TODO FEATURE GPU support
@@ -188,7 +183,7 @@ def create_app():
         f"Server starting", extra={"version": VERSION, "git_commit": GIT_COMMIT}
     )
     with open(os.environ[_KB_DEPLOYMENT_CONFIG], "rb") as cfgfile:
-        cfg = CDMTaskServiceConfig(cfgfile)
+        cfg = CDMTaskServiceConfig(cfgfile, VERSION)
     cfg.print_config(sys.stdout)  # maybe should redo the service config in json...?
     sys.stdout.flush()
 

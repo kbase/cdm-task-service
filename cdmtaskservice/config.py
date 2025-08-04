@@ -6,6 +6,9 @@ A configuration parser for the CDM task service. The configuration is expected t
 import tomllib
 from typing import BinaryIO, TextIO
 
+from cdmtaskservice.nersc.paths import NERSCPaths
+
+
 _SEC_AUTH = "Authentication"
 _SEC_NERSC_JAWS = "NERSC_JAWS"
 _SEC_NERSC = "NERSC"
@@ -36,7 +39,10 @@ class CDMTaskServiceConfig:
     has_nersc_account_role: str - the Auth2 custom role indicating a user has a NERSC account.
     nersc_jaws_user: str - the user name of the user associated with the NERSC and JAWS
         credentials.
-    jaws_refdata_root_dir: str - the JAWS refdata root directory to use for refdata storage
+    jaws_refdata_root_dir: str - the JAWS refdata root directory to use for refdata storage.
+    jaws_staging_dir_dtn: str - the JAWS staging directory for the `kbase` site on a NERSC DTN.
+    jaws_staging_dir_prl: str - the JAWS staging directory for the `kbase` site on the NERSC
+        Perlmutter system.
     sfapi_cred_path: str - the path to a NERSC Superfacility API credential file. The file is
         expected to have the client ID as the first line and the client private key in PEM format
         as the remaining lines.
@@ -71,11 +77,13 @@ class CDMTaskServiceConfig:
     service_group: str - the group to which this service belongs.
     """
 
-    def __init__(self, config_file: BinaryIO):
+    def __init__(self, config_file: BinaryIO, version: str):
         """
         Create the configuration parser.
+        
         config_file - an open file-like object, opened in binary mode, containing the TOML
             config file data.
+        version - the software version.
         """
         if not config_file:
             raise ValueError("config_file is required")
@@ -94,6 +102,18 @@ class CDMTaskServiceConfig:
         )
         self.jaws_refdata_root_dir = _get_string_required(
             config, _SEC_NERSC_JAWS, "refdata_root_dir"
+        )
+        # These typically have $PSCRATCH for the kbjaws kbase site user embedded in it,
+        # which I'd prefer not to specify literally in a config. Not sure if there's a better
+        # way to deal with it since the service doesn't know anything about the jaws site user.
+        # Worry about it later 
+        # Also not a fan of having to specify both but so far the other solutions I've considered
+        # are even uglier
+        self.jaws_staging_dir_dtn = _get_string_required(
+            config, _SEC_NERSC_JAWS, "jaws_staging_dir_dtn"
+        )
+        self.jaws_staging_dir_prl = _get_string_required(
+            config, _SEC_NERSC_JAWS, "jaws_staging_dir_perlmutter"
         )
         self.nersc_jaws_user = _get_string_required(config, _SEC_NERSC_JAWS, "user")
         self.sfapi_cred_path = _get_string_required(config, _SEC_NERSC, "sfapi_cred_path")
@@ -134,6 +154,18 @@ class CDMTaskServiceConfig:
         self.service_root_url = _get_string_required(config, _SEC_SERVICE, "root_url")
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
         self.service_group = _get_string_optional(config, _SEC_SERVICE, "group_id")
+        self._nersc_paths = NERSCPaths(  # fail early if paths fail validation
+            f"{self.nersc_remote_code_dir}/{version}",
+            self.jaws_refdata_root_dir,
+            self.jaws_staging_dir_dtn,
+            self.jaws_staging_dir_prl
+        )
+
+    def get_nersc_paths(self):
+        """
+        Get the set of NERSC paths for use with the service.
+        """
+        return self._nersc_paths
 
     def print_config(self, output: TextIO):
         """
@@ -148,6 +180,8 @@ class CDMTaskServiceConfig:
             f"Authentication has NERSC account role: {self.has_nersc_account_role}",
             f"NERSC / JAWS user: {self.nersc_jaws_user}",
             f"NERSC / JAWS refdata root dir: {self.jaws_refdata_root_dir}",
+            f"NERSC / JAWS DTN staging dir: {self.jaws_staging_dir_dtn}",
+            f"NERSC / JAWS Perlmutter staging dir: {self.jaws_staging_dir_prl}",
             f"NERSC client credential path: {self.sfapi_cred_path}",
             f"NERSC remote code dir: {self.nersc_remote_code_dir}",
             f"JAWS Central URL: {self.jaws_url}",
