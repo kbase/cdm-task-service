@@ -30,6 +30,23 @@ user = "{{ KBCTS_NERSC_JAWS_USER or "" }}"
 # The JAWS installation is expected to be configured to use this directory to look up refdata.
 refdata_root_dir = "{{ KBCTS_NERSC_JAWS_REFDATA_DIR or "" }}"
 
+# The JAWS site staging directory at NERSC on a Data Transfer Node.
+# Note that currently the CTS is hard coded to use the `kbase` site at NERSC Perlmutter.
+# This is typically something like
+# `/global/pscratch/sd/<JAWS site user first letter>/<JAWS site user>/<site>-prod/`
+jaws_staging_dir_dtn = "{{
+	 KBCTS_NERSC_JAWS_DTN_STAGING_DIR or "/global/pscratch/sd/k/kbjaws/kbase-prod/"
+ }}"
+
+# The JAWS site staging directory at NERSC on the Perlmutter system.
+# This is the equivalent directory to the DTN staging directory.
+# Note that currently the CTS is hard coded to use the `kbase` site at NERSC Perlmutter.
+# This is typically something like
+# `/pscratch/sd/<JAWS site user first letter>/<JAWS site user>/<site>-prod/`
+jaws_staging_dir_perlmutter = "{{
+	KBCTS_NERSC_JAWS_PERMUTTER_STAGING_DIR or "/pscratch/sd/k/kbjaws/kbase-prod/"
+}}"
+
 [NERSC]
 
 # The path to a NERSC Superfacility API (SFAPI) credential file. The file is expected to have

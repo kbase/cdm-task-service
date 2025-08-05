@@ -15,7 +15,6 @@ from typing import NamedTuple
 
 from fastapi import FastAPI, Request
 from cdmtaskservice import logfields
-from cdmtaskservice import sites
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
@@ -36,7 +35,6 @@ from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import validate_path
 from cdmtaskservice.timestamp import utcdatetime
-from cdmtaskservice.version import VERSION
 
 # The main point of this module is to handle all the application state in one place
 # to keep it consistent and allow for refactoring without breaking other code
@@ -250,11 +248,10 @@ async def _build_NERSC_flow_deps(
         # TODO MULTICLUSTER service won't start if perlmutter is down, need to make it more dynamic
         nerscman = await NERSCManager.create(
             sfapi_client.get_client,
-            Path(cfg.nersc_remote_code_dir) / VERSION,
+            cfg.get_nersc_paths(),
             cfg.nersc_jaws_user,
             cfg.jaws_token,
             cfg.jaws_group,
-            Path(cfg.jaws_refdata_root_dir),
             service_group=cfg.service_group,
         )
         logr.info("Done")

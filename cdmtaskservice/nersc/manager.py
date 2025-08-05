@@ -32,7 +32,9 @@ from cdmtaskservice.jaws import wdl
 from cdmtaskservice.jaws.remote import get_filenames_for_container, ERRORS_JSON_FILE
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
+from cdmtaskservice.nersc.paths import NERSCPaths
 from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
+from cdmtaskservice.s3.remote import get_cache_path
 
 # This is mostly tested manually to avoid modifying files at NERSC.
 
@@ -63,7 +65,6 @@ _COMMAND_PATH = "utilities/command"
 _MIN_TIMEOUT_SEC = 300
 _SEC_PER_GB = 2 * 60  # may want to make this configurable
 
-_JOB_FILES = Path("files")
 _JOB_MANIFESTS = Path("manifests")
 _MANIFEST_FILE_PREFIX = "manifest-"
 _CRC64NVME_CHECKSUMS_JSON_FILE_NAME = "upload_checksums.json"
@@ -198,11 +199,10 @@ class NERSCManager:
     async def create(
         cls,
         client_provider: Callable[[], AsyncClient],
-        nersc_code_path: Path,
+        nersc_paths: NERSCPaths,
         nersc_jaws_user: str,
         jaws_token: str,
         jaws_group: str,
-        jaws_refdata_root_dir: Path,
         service_group: str = "dev",
     ) -> Self:
         """
@@ -210,22 +210,18 @@ class NERSCManager:
         
         client_provider - a function that provides a valid SFAPI client. It is assumed that
             the user associated with the client does not change.
-        nersc_code_path - the path in which to store remote code at NERSC. It is advised to
-            include version information in the path to avoid code conflicts. The path is appended
-            by the service group to separate dev and prod environments.
+        nersc_paths - the set of paths for NERSC manager use.
         nersc_jaws_user - the NERSC username of the user associated with the jaws token.
             This is typically a collaboration account.
         jaws_token - a token for the JGI JAWS system.
         jaws_group - the group to use for running JAWS jobs.
-        jaws_refdata_root_dir - the root directory for refdata configured for the JAWS instance.
         service_group - The service group to which this instance of the manager belongs.
             This is used to separate files at NERSC so files from different S3 instances
             (say production and development) don't collide.
         """
-        nm = NERSCManager(
-            client_provider, nersc_code_path, nersc_jaws_user, service_group, jaws_refdata_root_dir
-        )
+        nm = NERSCManager(client_provider, nersc_paths, nersc_jaws_user, service_group)
         await nm._setup_remote_code(
+            nersc_paths,
             _require_string(jaws_token, "jaws_token"),
             _require_string(jaws_group, "jaws_group"),
         )
@@ -234,29 +230,19 @@ class NERSCManager:
     def __init__(
             self,
             client_provider: Callable[[], str],
-            nersc_code_path: Path,
+            nersc_paths: NERSCPaths,
             nesrc_jaws_user: str,
             service_group: str,
-            jaws_refdata_root_dir: str,
         ):
         self._client_provider = _not_falsy(client_provider, "client_provider")
-        self._nersc_code_path = self._check_path(
-            nersc_code_path, "nersc_code_path"
-        ) / service_group
+        self._nersc_code_path = _not_falsy(nersc_paths, "nersc_paths").code_path / service_group
         self._nersc_jaws_user = _require_string(nesrc_jaws_user, "nesrc_jaws_user")
         self._service_group = _require_string(service_group, "service_group")
         self._work_loc = Path("cdm_task_service") / service_group
         self._jawscfg = f"jaws_cts_{service_group}.conf"
-        self._refdata_root = self._check_path(jaws_refdata_root_dir, "jaws_refdata_root_dir")
+        self._refdata_root = nersc_paths.jaws_refdata_root_dir
 
-    def _check_path(self, path: Path, name: str):
-        _not_falsy(path, name)
-        # commands are ok with relative paths but file uploads are not
-        if path.expanduser().absolute() != path:
-            raise ValueError(f"{name} must be absolute to the NERSC root dir")
-        return path
-
-    async def _setup_remote_code(self, jaws_token: str, jaws_group: str):
+    async def _setup_remote_code(self, nersc_paths: NERSCPaths, jaws_token: str, jaws_group: str):
         # TODO RELIABILITY atomically write files. For these small ones probably doesn't matter?
         logr = logging.getLogger(__name__)
         cli = self._client_provider()
@@ -304,8 +290,32 @@ class NERSCManager:
                 tg.create_task(dt.run(command))
         self._dtn_scratch = dtn_scratch.result()
         self._perlmutter_scratch = Path(pm_scratch.result().strip())
+        self._nersc_dtn_file_cache_path = self._make_cache_path(nersc_paths.jaws_staging_dir_dtns)
+        self._nersc_perlmutter_file_cache_path = self._make_cache_path(
+            nersc_paths.jaws_staging_dir_perlmutter)
+        logr.info("NERSC DTN scratch path", extra={logfields.FILE: self._dtn_scratch})
         logr.info(
             "NERSC perlmutter scratch path", extra={logfields.FILE: self._perlmutter_scratch}
+        )
+        logr.info(
+            "NERSC DTN JAWS staging cache path",
+            extra={logfields.FILE: self._nersc_dtn_file_cache_path}
+        )
+        logr.info(
+            "NERSC perlmutter JAWS staging cache path",
+            extra={logfields.FILE: self._nersc_perlmutter_file_cache_path}
+        )
+    
+    def _make_cache_path(self, jaws_staging_dir: Path):
+        return (
+            jaws_staging_dir
+            / "inputs"
+            # hard code site for now, it's the only one we can use
+            / "kbase"
+            # de-absolutize the scratch path
+            / self._perlmutter_scratch.relative_to(self._perlmutter_scratch.anchor)
+            / self._work_loc
+            / "cache"
         )
     
     async def _set_up_dtn_scratch(self, client: AsyncClient) -> Path:
@@ -314,9 +324,6 @@ class NERSCManager:
         scratch = scratch.strip()
         if not scratch:
             raise ValueError("Unable to determine $SCRATCH variable for NERSC dtns")
-        logging.getLogger(__name__).info(
-            "NERSC DTN scratch path", extra={logfields.FILE: scratch}
-        )
         return Path(scratch)
     
     def _get_job_scratch(self, job_id, perlmutter=False) -> Path:
@@ -553,23 +560,21 @@ class NERSCManager:
             sc = self._get_refdata_loc(download_id)
             # TODO CLEANUP need to delete this and the JAWS written completion file
             # see https://jaws-docs.jgi.doe.gov/en/latest/jaws/jaws_refdata.html#adding-data-to-refdata-directory
-            manifest["completion_file"] = str(self._get_refdata_file_change_path(download_id))
-            manifest["completion_file_contents"] = str(sc)
+            manifest["completion-file"] = str(self._get_refdata_file_change_path(download_id))
+            manifest["completion-file-contents"] = str(sc)
         else:
-            sc = self._get_job_scratch(download_id) / _JOB_FILES
-        manifest["files"] = [
-            {
+            manifest["cache-dir"] = str(self._nersc_dtn_file_cache_path)
+        manifest["files"] = []
+        for url, meta in zip(presigned_urls, objects):
+            fileman = {
                 "url": url,
-                # TODO CACHING have the remote code make a file cache - just give it the root,
-                #              job ID and the minio path and have it handle the rest.
-                #              This allows JAWS / Cromwell to cache the files if they have the
-                #              same path, which they won't if there's a job ID in the mix
-                "outputpath": str(sc / Path(meta.path).name if refdata else sc / meta.path),
-                "crc64nvme": meta.crc64nvme,
+                "crc64nvme-b64": meta.crc64nvme,
                 "size": meta.size,
-                "unpack": unpack,
-            } for url, meta in zip(presigned_urls, objects)
-        ]
+            }
+            if refdata:
+                fileman["outputpath"] = str(sc / Path(meta.path).name)
+                fileman["unpack"] = unpack
+            manifest["files"].append(fileman)
         return io.BytesIO(json.dumps({"file-transfers": manifest}, indent=4).encode())
     
     def _create_upload_manifest(
@@ -688,10 +693,6 @@ class NERSCManager:
         perl = await cli.compute(Machine.perlmutter)
         pre = self._get_job_scratch(job.id, perlmutter=True)
         try:
-            # TODO PERF this copies all the files to the jaws staging area, and so could take
-            #           a long time. Hardlink them in first to avoid the copy. Also look into
-            #           caching between jobs, so multiple jobs on the same file don't DL it over
-            #           and over
             res = await perl.run(_JAWS_COMMAND_TEMPLATE.format(
                 job_id=job.id,
                 wdlpath=pre / _JAWS_INPUT_WDL,
@@ -726,7 +727,10 @@ class NERSCManager:
     ):
         manifest_files = generate_manifest_files(job)
         manifest_file_paths = self._get_manifest_file_paths(len(manifest_files))
-        fmap = {m: _JOB_FILES / m.file for m in job.job_input.input_files}
+        fmap = {
+            m: get_cache_path(self._nersc_perlmutter_file_cache_path, m.crc64nvme)
+            for m in job.job_input.input_files
+        }
         refpath = None
         if job.image.refdata_id:
             refpath = self._get_relative_refdata_loc(job.image.refdata_id)

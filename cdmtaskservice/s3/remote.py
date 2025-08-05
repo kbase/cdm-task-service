@@ -17,6 +17,9 @@ from pathlib import Path
 import shutil
 import tarfile
 from typing import Any, Awaitable
+import uuid
+
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 
 # Probably not necessary, but could look into aiofiles for some of these methods
 # Potential future (minor) performance improvement, but means more installs on remote clusters
@@ -112,7 +115,7 @@ async def download_presigned_url(
     timeout_sec: int = 600,
 ):
     """
-    Download a presigned url from S3 and verify the E-tag.
+    Download a presigned url from S3.
     
     session - the http session.
     url - the presigned url.
@@ -139,8 +142,9 @@ async def download_presigned_url(
                 err = await resp.read()
                 raise TransferError(f"GET URL: {url.split('?')[0]} {resp.status}\nError:\n{err}")
     except asyncio.TimeoutError as e:
-        raise RemoteTimeoutError(f"Timeout downloading to file {outputpath} with timeout {timeout_sec}s"
-                           ) from e
+        raise RemoteTimeoutError(
+            f"Timeout downloading to file {outputpath} with timeout {timeout_sec}s"
+        ) from e
     got_crc = crc64nvme_b64(outputpath)
     if crc64nvme_expected and crc64nvme_expected != got_crc:
         outputpath.unlink(missing_ok=True)
@@ -191,13 +195,16 @@ async def upload_presigned_url(
                     raise TransferError(
                         f"POST URL: {url} Key: {fields['key']} {resp.status}\nError:\n{err}")
         except asyncio.TimeoutError as e:
-            raise RemoteTimeoutError(f"Timeout uploading from file {infile} with timeout {timeout_sec}s"
-                               ) from e
+            raise RemoteTimeoutError(
+                f"Timeout uploading from file {infile} with timeout {timeout_sec}s"
+            ) from e
+
+
+# Might want to separate the manifest processing stuff into a different module
 
 
 async def _process_uploads(
     sess: aiohttp.ClientSession,
-    root: Path,
     files: list[dict[str, Any]],
     concurrency: int,
     insecure_ssl: bool,
@@ -208,14 +215,13 @@ async def _process_uploads(
         sess,
         fil["url"],
         fil["fields"],
-        root / fil["file"],
+        Path(fil["file"]),
         insecure_ssl=insecure_ssl,
-        timeout_sec=_timeout(min_timeout_sec, (root / fil["file"]).stat().st_size, sec_per_GB),
+        timeout_sec=_timeout(min_timeout_sec, Path(fil["file"]).stat().st_size, sec_per_GB),
     ) for fil in files]
     await _run_tasks(tasks, concurrency)
 
 
-# TODO REFDATA clean up tar and gz files
 def _ensure_safe_tar_path(parent_dir: Path, member_name: str, tar_file: str):
     """Ensure that the target path is within the base directory."""
     # TODO TEST need to figure out how to make a bad tar file to test this
@@ -243,24 +249,78 @@ def _extract_tar(file_path: Path):
         tar.extractall(parent_dir)
 
 
+def get_cache_path(cache_dir: Path, crc64nvme_b64: str) -> Path:
+    """
+    Get the path for a cached file based on its Base64 encoded CRC64NVME checksum.
+    
+    cache_dir - the root directory of the file cache.
+    crc64nvme_b64 - the Base64 encoded CRC64NVME checksum
+    
+    Returns a path that looks like:
+    <cache_dir>/<first 2 chars of the hex encoded checksum>/<hex encoded checksum>
+    """
+    # Security note - CRC64s are not cryptographically secure, and so it's possible for a
+    # malicious user to pollute the cache with a file intended to block caching of a target
+    # file with the same CRC64. The CDM / BERDL team has chosen to go ahead with the current
+    # implementation anyway.
+    # Could check that this is 8 bytes... YAGNI
+    # Necessary since B64 has chars in it that aren't fun in paths
+    crchex = base64.b64decode(_require_string(crc64nvme_b64, "crc64nvme_b64")).hex()
+    # reduce number of files in top level dir
+    return _not_falsy(cache_dir, "cache_dir") / crchex[:2] / crchex
+
+
+# Re cache expiration, it's expected that the cache lives in the JAWS staging dir,
+# so JAWS is expected to handle that
+
+def _download_is_cached(cache_path: Path) -> bool:
+    if cache_path.exists():
+        os.utime(cache_path)  # touch to update modtime
+        return True
+    return False
+
+
+def _add_to_cache(outputpath: Path, cache_path: Path):
+    try:
+        os.rename(outputpath, cache_path)  # will overwrite if exists on linux
+        os.utime(cache_path)  # ensure the modtime is up to date
+    finally:
+        outputpath.unlink(missing_ok=True)
+
+
 async def _process_download(
     session: aiohttp.ClientSession,
     url: str,
-    outputpath: Path,
-    crc64nvme: str,
+    cache_dir: str | None,  # Present if std file download
+    outputpath: str | None,  # Present if refdata
+    crc64nvme_b64: str,
     insecure_ssl: bool,
     timeout_sec: int,
     unpack: bool,
 ):
+    if cache_dir:  # Std file download
+        cache_dir = Path(cache_dir)
+        cache_path = get_cache_path(cache_dir, crc64nvme_b64)
+        if _download_is_cached(cache_path):
+            return
+        else:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            outputpath = cache_path.with_name(
+                cache_path.name + f"_{os.getpid()}.{uuid.uuid4()}.tmp"
+            )
+    else:  # refdata download
+        outputpath = Path(outputpath)
     await download_presigned_url(
         session,
         url,
         outputpath,
-        crc64nvme_expected=crc64nvme,
+        crc64nvme_expected=crc64nvme_b64,
         insecure_ssl=insecure_ssl,
         timeout_sec=timeout_sec,
     )
-    if unpack:
+    if cache_dir:
+        _add_to_cache(outputpath, cache_path)
+    if unpack:  # never used with a cache
         try:
             op = str(outputpath).lower()
             if op.endswith(_EXT_TGZ) or op.endswith(_EXT_TARGZ):
@@ -278,7 +338,7 @@ async def _process_download(
 
 async def _process_downloads(
     sess: aiohttp.ClientSession,
-    root: Path,
+    cache_dir: str | None,
     files: list[dict[str, Any]],
     concurrency: int,
     insecure_ssl: bool,
@@ -288,19 +348,14 @@ async def _process_downloads(
     tasks = [_process_download(
         sess,
         fil["url"],
-        root / fil["outputpath"],
-        crc64nvme=fil["crc64nvme"],
-        insecure_ssl=insecure_ssl,
-        timeout_sec=_timeout(min_timeout_sec, fil["size"], sec_per_GB),
-        unpack=fil["unpack"],
+        cache_dir,
+        fil.get("outputpath"),
+        fil["crc64nvme-b64"],
+        insecure_ssl,
+        _timeout(min_timeout_sec, fil["size"], sec_per_GB),
+        fil.get("unpack", False),
     ) for fil in files]
     await _run_tasks(tasks, concurrency)
-
-
-_OP_TO_FUNC = {
-    "upload": _process_uploads,
-    "download": _process_downloads,
-}
 
 
 async def process_data_transfer_manifest(manifest: dict[str, Any]):
@@ -318,30 +373,33 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
     #   * Presumably only helpful if disk reads are the bottleneck
     # TODO TEST add tests for this and its dependency functions.
     _not_falsy(manifest, "manifest")
-    func = _OP_TO_FUNC.get(manifest["op"])
-    if not func:
-        raise ValueError(f"unknown operation: {manifest['op']}")
-    root = Path("/")
-    if manifest.get("env-root"):
-        root = os.environ.get(manifest["env-root"])
-        if not root or not root.strip():
-            raise ValueError(f"Value of the environment variable {manifest['env-root']} "
-                             + "from the manifest env-root field is missing or the empty string")
-        root = Path(root)
+    operation = manifest["op"]
     async with aiohttp.ClientSession() as sess:
-        await func(
-            sess,
-            root,
-            manifest["files"],
-            manifest["concurrency"],
-            manifest.get("insecure-ssl", False),
-            manifest['min-timeout-sec'],
-            manifest["sec-per-GB"],
-        )
-    if "completion_file" in manifest:
-        with open(manifest["completion_file"], "w") as f:
+        if operation == "download":
+            await _process_downloads(
+                sess,
+                manifest.get("cache-dir"),
+                manifest["files"],
+                manifest["concurrency"],
+                manifest.get("insecure-ssl", False),
+                manifest['min-timeout-sec'],
+                manifest["sec-per-GB"],
+            )
+        elif operation == "upload":
+            await _process_uploads(
+                sess,
+                manifest["files"],
+                manifest["concurrency"],
+                manifest.get("insecure-ssl", False),
+                manifest['min-timeout-sec'],
+                manifest["sec-per-GB"],
+            )
+        else:
+            raise ValueError(f"unknown operation: {operation}")
+    if "completion-file" in manifest:
+        with open(manifest["completion-file"], "w") as f:
             # just raise a keyerror if it's not there
-            f.write(manifest["completion_file_contents"] + "\n")
+            f.write(manifest["completion-file-contents"] + "\n")
 
 
 def _timeout(min_timeout_sec: int, filesize: int, sec_per_GB: float) -> float:
@@ -365,24 +423,6 @@ async def _run_tasks(
         # otherwise you can get coroutine never awaited warnings if a failure occurs
         for t in tasks:
             t.close()
-
-
-# These arg checkers are duplicated in other places, but we want to minimize the number of files
-# we have to transfer to the remote cluster and they're simple enough that duplication isn't
-# a huge problem
-# TODO CODE the above is now outdated, we're pushing the arg checkers code to nersc.
-#           remove the arg checkers below
-
-
-def _require_string(string: str, name: str):
-    if not string or not string.strip():
-        raise ValueError(f"{name} is required")
-    return string.strip()
-
-
-def _not_falsy(obj: Any, name: str):
-    if not obj:
-        raise ValueError(f"{name} is required")
 
 
 class TransferError(Exception):

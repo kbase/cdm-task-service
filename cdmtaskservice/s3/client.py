@@ -26,7 +26,7 @@ _WRITE_TEST_FILENAME = (
 )
 
 
-class S3ObjectMeta:  # TODO CODE this could be a NamedTuple - what about __slots__?
+class S3ObjectMeta:
     """ Metadata about an object in S3 storage. """
     
     __slots__ = ["path", "e_tag", "size", "crc64nvme"]

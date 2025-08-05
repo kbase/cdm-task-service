@@ -250,12 +250,6 @@ class NERSCJAWSRunner(JobFlow):
             presigned = await self._s3ext.presign_get_urls(paths)
             callback_url = get_download_complete_callback(self._callback_root, job.id)
             # TODO PERF config / set concurrency
-            # TODO PERF CACHING if the same files are used for a different job they're d/ld again
-            #                   Instead d/l to a shared file location by etag or something
-            #                   Need to ensure atomic writes otherwise 2 processes trying to
-            #                   d/l the same file could corrupt it
-            #                   Either make cache in JAWS staging area, in which case files
-            #                   will be deleted automatically by JAWS, or need own file deletion
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
             task_id = await self._nman.download_s3_files(
                 job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
