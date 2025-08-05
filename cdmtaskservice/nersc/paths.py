@@ -10,7 +10,7 @@ from cdmtaskservice.arg_checkers import require_string as _require_string
 
 
 def _validate_and_convert_path(value: str, field_name: str) -> Path:
-    path = Path(_require_string(value, "field_name"))
+    path = Path(_require_string(value, field_name))
     if not path.is_absolute():
         raise ValueError(f"{field_name} must be an absolute path: got '{value}'")
     return path.resolve()
