@@ -171,14 +171,14 @@ class S3Client:
                 ) from e
             if code == "AccessDenied" or code == "403":  # why both? Both 403s
                 # may need to add other cases here
+                op = "Write" if write else "Read"
                 if bucket:
-                    op = "Write" if write else "Read"
                     raise S3BucketInaccessibleError(
                         f"{op} access denied to bucket '{bucket}' on the s3 system"
                     )
                 elif path:
                     raise S3PathInaccessibleError(
-                        f"Access denied to path '{path}' on the s3 system"
+                        f"{op} access denied to path '{path}' on the s3 system"
                     ) from e
                 else:
                     raise S3ClientConnectError(
@@ -229,6 +229,30 @@ class S3Client:
         write.write = True
         write.bucket = bucket
         await self._run_commands([write], 1)
+
+    async def is_paths_writeable(self, paths: S3Paths, concurrency: int = 10):
+        """
+        Confirm the buckets for a set of paths exist and the paths are writeable on the S3
+        system or throw an error otherwise.
+        Writes a test file to each path.
+        
+        paths - the paths to check
+        concurrency - the number of simultaneous connections to S3
+        """
+        # TODO TEST this will need some special minio setup in the tests to test paths correctly
+        _not_falsy(paths, "paths")
+        _check_num(concurrency, "concurrency")
+        funcs = []
+        for buk, key, path in paths.split_paths(include_full_path=True):
+            async def write(client, buk=buk, key=key):
+                key = key + _WRITE_TEST_FILENAME
+                # apparently this is how you check write access to a path. Yuck
+                await client.put_object(Bucket=buk, Key=key, Body="test")
+                await client.delete_object(Bucket=buk, Key=key)
+            write.path = path
+            write.write = True
+            funcs.append(write)
+        await self._run_commands(funcs, concurrency)
 
     async def get_object_meta(self, paths: S3Paths, concurrency: int = 10) -> list[S3ObjectMeta]:
         """

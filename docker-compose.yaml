@@ -51,10 +51,11 @@ services:
       # - KBCTS_MONGO_USER=root
       # - KBCTS_MONGO_PWD=secret
       - KBCTS_MONGO_RETRYWRITES=false
+      - KBCTS_ALLOWED_S3_PATHS=cts/io
+      - KBCTS_CONTAINER_S3_LOG_DIR=cts/logs
       - KBCTS_JOB_MAX_CPU_HOURS=200
       - KBCTS_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KBCTS_KAFKA_TOPIC_JOBS=cts-jobs
-      - KBCTS_CONTAINER_S3_LOG_DIR=cts-logs/container_logs
       - KBCTS_SERVICE_ROOT_URL=https://ci.kbase.us/services/cts
       - KBCTS_SERVICE_GROUP=local_development
     volumes:

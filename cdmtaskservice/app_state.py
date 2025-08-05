@@ -33,7 +33,7 @@ from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.notifications.kafka_checker import KafkaChecker
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client
-from cdmtaskservice.s3.paths import validate_path
+from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
 
 # The main point of this module is to handle all the application state in one place
@@ -49,12 +49,34 @@ class AppState(NamedTuple):
     images: Images
     jobflow_manager: JobFlowManager
     kafka_checker: KafkaChecker
+    allowed_paths: list[str]
 
 
 class RequestState(NamedTuple):
     """ Holds request specific state. """
     user: KBaseUser | None
     token: str | None
+
+
+async def _check_paths(s3: S3Client, logr: logging.Logger, cfg: CDMTaskServiceConfig):
+    # this is ugly, but since it only happens at startup with admin supplied data just leave it
+    # for now
+    logr.info("Checking allowed and log path writeability")
+    paths = [cfg.container_s3_log_dir]
+    buckets = []
+    if cfg.allowed_s3_paths:
+        for p in cfg.allowed_s3_paths:
+            if "/" in p[:-1]:  # always end with /
+                paths.append(p)
+            else:
+                buckets.append(p[:-1])
+    s3paths = S3Paths(paths, no_index_in_errors=True)
+    async with asyncio.TaskGroup() as tg:
+        # We'll assume there aren't too many buckets/paths here
+        tg.create_task(s3.is_paths_writeable(s3paths))
+        for b in buckets:
+            tg.create_task(s3.is_bucket_writeable(b))
+    logr.info("Done")
 
 
 async def build_app(
@@ -77,7 +99,6 @@ async def build_app(
     if test_mode:
         logr.info("KBCTS_TEST_MODE env var is 'true', will not submit jobs for processing")
     # check that the path is a valid path
-    logbuk = validate_path(cfg.container_s3_log_dir).split("/", 1)[0]
     flowman = JobFlowManager()
     coman = CoroutineWrangler()
     logr.info("Connecting to KBase auth service... ")
@@ -96,7 +117,7 @@ async def build_app(
         s3 = await S3Client.create(
             cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
         )
-        await s3.is_bucket_writeable(logbuk)
+        logr.info("Done")
         s3_external = await S3Client.create(
             cfg.s3_external_url,
             cfg.s3_access_key,
@@ -104,7 +125,7 @@ async def build_app(
             insecure_ssl=cfg.s3_allow_insecure,
             skip_connection_check=not cfg.s3_verify_external_url
         )
-        logr.info("Done")
+        await _check_paths(s3, logr, cfg)
         logr.info("Initializing MongoDB client...")
         mongocli = await get_mongo_client(cfg)
         logr.info("Done")
@@ -128,7 +149,8 @@ async def build_app(
             refdata,
             coman,
             flowman,
-            logbuk,
+            cfg.allowed_s3_paths,
+            cfg.container_s3_log_dir,
             cfg.job_max_cpu_hours,
             test_mode=test_mode,
         )
@@ -138,7 +160,7 @@ async def build_app(
         app.state._kafka = kafka_notifier
         kc = KafkaChecker(mongodao, kafka_notifier)
         app.state._cdmstate = AppState(
-            auth, sfapi_client, job_state, refdata, images, flowman, kc
+            auth, sfapi_client, job_state, refdata, images, flowman, kc, cfg.allowed_s3_paths
         )
         await _check_unsent_kafka_messages(logr, cfg, kc)
     except:
