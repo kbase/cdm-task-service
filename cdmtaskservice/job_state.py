@@ -26,7 +26,7 @@ from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.mongo import MongoDAO, IllegalAdminMetaError
 from cdmtaskservice.refdata import Refdata
-from cdmtaskservice.s3.client import S3Client, S3BucketInaccessibleError
+from cdmtaskservice.s3.client import S3Client, S3PathInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -47,7 +47,8 @@ class JobState:
         refdata: Refdata,
         coro_manager: CoroutineWrangler,
         flow_manager: JobFlowManager,
-        log_bucket: str,
+        allowed_paths: list[str],
+        log_path: str,
         job_max_cpu_hours: float,
         test_mode: bool = False,
     ):
@@ -61,7 +62,11 @@ class JobState:
         refdata - a manager for reference data.
         coro_manager - a coroutine manager.
         flow_manager- the job flow manager.
-        log_bucket - the bucket in which logs are stored. Disallowed for writing for other cases.
+        allowed_paths - the paths where users are allowed to read files for input and write
+            files for output. Paths may be just a bucket. Paths must end in '/'.
+            If omitted, the user can read and write anywhere the service can read and write
+            excluding the log path.
+        log_path - the path where logs are stored. Disallowed for writing for other cases.
         job_max_cpu_hours - the maximum CPU hours allows for a job on submit.
         test_mode - if true, availablity of job flows will not be checked and jobs will not be
             submitted.
@@ -74,7 +79,13 @@ class JobState:
         self._ref = _not_falsy(refdata, "refdata")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._flowman = _not_falsy(flow_manager, "flow_manager")
-        self._logbuk = _require_string(log_bucket, "log_bucket")
+        # TODO CODE make a path set that enforces:
+        #   * the allowed and log paths end in /.
+        #   * The paths are valid
+        #   * The paths are not prefixes of one another.
+        #   Currently this stuff is checked in the config.py and app_state.py modules.
+        self._allowedpaths = allowed_paths or []
+        self._logpath = _require_string(log_path, "log_path")
         self._cpu_hrs = _check_num(job_max_cpu_hours, "job_max_cpu_hours")
         self._test_mode = test_mode
         
@@ -100,10 +111,7 @@ class JobState:
         # Could parallelize these ops but probably not worth it
         image = await self._images.get_image(job_input.image)
         await self._check_refdata(job_input, image)
-        bucket = job_input.output_dir.split("/", 1)[0]
-        if bucket == self._logbuk:
-            raise S3BucketInaccessibleError(f"Jobs may not write to bucket {self._logbuk}")
-        await self._s3.is_bucket_writeable(bucket)
+        await self._check_output_path(job_input)
         new_input, meta = await self._check_and_update_files(job_input)
         if not self._test_mode:
             # check the flow is available before we make any changes
@@ -139,6 +147,19 @@ class JobState:
             await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
 
+    async def _check_output_path(self, job_input: models.JobInput):
+        out = job_input.output_dir  # model enforces a path, not bucket
+        if out.startswith(self._logpath):
+            raise S3PathInaccessibleError(f"Jobs may not write to the log path {self._logpath}")
+        # may want to allow admins to bypass this
+        if self._allowedpaths:
+            # if this passes the path should be writable, as the admins configured the paths
+            if not any([out.startswith(p) for p in self._allowedpaths]):
+                raise S3PathInaccessibleError(
+                    f"The output path {out} is not a subpath of the user's allowed paths")
+        else:
+            await self._s3.is_paths_writeable(S3Paths([out], no_index_in_errors=True))
+
     def _check_site_limits(self, job_input: models.JobInput):
         site = sites.CLUSTER_TO_SITE[job_input.cluster]
         if job_input.cpus > site.cpus_per_node:
@@ -162,6 +183,11 @@ class JobState:
             f.file if isinstance(f, models.S3FileWithDataID) else f
                  for f in job_input.input_files
         ]
+        if self._allowedpaths:
+            for p in paths:
+                if not any([p.startswith(ap) for ap in self._allowedpaths]):
+                    raise S3PathInaccessibleError(
+                        f"The input path {p} is not a subpath of the user's allowed paths")
         # TODO PERF may want to make concurrency configurable here
         # TODO PERF this checks the file path syntax again, consider some way to avoid
         meta = await self._s3.get_object_meta(S3Paths(paths))

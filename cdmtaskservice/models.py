@@ -569,7 +569,7 @@ class JobInputPreview(BaseModel):
     @field_validator("output_dir", mode="before")
     @classmethod
     def _check_outdir(cls, v):
-        return _validate_s3_path(v)
+        return _validate_s3_path(v).rstrip("/") + "/"
     
     def get_total_compute_time_sec(self) -> float:
         """

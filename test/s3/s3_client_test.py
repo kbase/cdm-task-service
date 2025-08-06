@@ -269,7 +269,9 @@ async def test_get_object_meta_fail_unauthed(minio, minio_unauthed_user):
     s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
     await _get_object_meta_fail(
         s3c, S3Paths(["fail-bucket/foo/bar"]),
-        S3PathInaccessibleError("Access denied to path 'fail-bucket/foo/bar' on the s3 system")
+        S3PathInaccessibleError(
+            "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+        )
     )
 
 

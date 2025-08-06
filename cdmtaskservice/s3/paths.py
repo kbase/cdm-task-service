@@ -24,19 +24,21 @@ class S3Paths:
     paths - a tuple of the input paths, stripped of surrounding whitespace.
     """
 
-    def __init__(self, paths: Sequence[str]):
+    def __init__(self, paths: Sequence[str], no_index_in_errors: bool = False):
         """
         Create the paths.
         
         paths - a sequence of S3 paths, all starting with the bucket.
+        no_index_in_errors - if True, don't include the index of the path in any thrown errors.
         
         throws S3Path error if a path is not formatted correctly.
         """
+        # TODO TEST add tests for no_index_in_errors
         if not paths:
             raise ValueError("At least one path must be supplied.")
         newpaths = []
         for i, p in enumerate(paths):
-            newpaths.append(validate_path(p, index=i))
+            newpaths.append(validate_path(p, index=i if not no_index_in_errors else None))
         self.paths = tuple(newpaths)
 
     def __len__(self):

@@ -3,6 +3,7 @@ CDM task service endpoints.
 """
 
 import datetime
+from enum import Enum
 import logging
 from fastapi import (
     APIRouter,
@@ -90,14 +91,37 @@ async def root() -> Root:
         "notes": NOTES,
     }
 
+class PathPermission(str, Enum):
+    """ The permission for an S3 path. """
+    # Add read later if necessary
+    WRITE = "write"
+
+
+class AllowedPath(BaseModel):
+    """ A path where a user can read and / or write data to the S3 filesystem. """
+    path: Annotated[str, Field(
+        examples=[["cts/io"]],
+        description="An S3 path where the user is allowed to read and / or write files."
+    )]
+    perm: Annotated[PathPermission, Field(
+        examples=[[PathPermission.WRITE]],
+        description="The permission for the path."
+    )]
+
 
 class WhoAmI(BaseModel):
-    """ The username associated with the provided user token and the user's admin state. """
+    """ Information about the user. """
     user: Annotated[str, Field(examples=["kbasehelp"], description="The user's username.")]
     is_service_admin: Annotated[bool, Field(
         examples=[False], description="Whether the user is a service administrator."
     )]
-    
+    allowed_paths: Annotated[list[AllowedPath], Field(
+        examples=[AllowedPath(path="cts/io", perm=PathPermission.WRITE)],
+        description="The S3 paths where the user is allowed to read and / or write files. "
+            + "If empty, the user can read and write to anywhere the service can read and write, "
+            + "other than where job logs are stored."
+    )]
+
 
 @ROUTER_GENERAL.get(
     "/whoami/",
@@ -105,11 +129,14 @@ class WhoAmI(BaseModel):
     summary="Who am I? What does it all mean?",
     description="Information about the current user."
 )
-async def whoami(user: kb_auth.KBaseUser=Depends(_AUTH)) -> WhoAmI:
-    return {
-        "user": user.user,
-        "is_service_admin": kb_auth.AdminPermission.FULL == user.admin_perm
-    }
+async def whoami(r: Request, user: kb_auth.KBaseUser=Depends(_AUTH)) -> WhoAmI:
+    # Later this can be updated to a dynamic lookup if necessary
+    aps = app_state.get_app_state(r).allowed_paths
+    return WhoAmI(
+        user=user.user,
+        is_service_admin=kb_auth.AdminPermission.FULL == user.admin_perm,
+        allowed_paths=[AllowedPath(path=p, perm=PathPermission.WRITE) for p in aps],
+    )
 
 
 class Site(sites.ComputeSite):

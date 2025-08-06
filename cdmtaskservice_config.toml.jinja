@@ -113,6 +113,22 @@ mongo_retrywrites = "{{ KBCTS_MONGO_RETRYWRITES or "" }}"
 
 [Jobs]
 
+# S3 paths where users are allowed to read / write job files, starting with the bucket.
+# Bucket only paths are allowed.
+# If omitted, users can read and write to any locations where the S3 can read and write
+# except for the log directory (configured below).
+# Paths may not be prefixes or suffixes of each other or the log directory.
+# To specify multiple paths, separate them with a comma. This means that commas
+# are not allowed in the path names.
+# Paths will be appended with a / if absent.
+allowed_s3_paths = "{{ KBCTS_ALLOWED_S3_PATHS or "" }}"
+
+# An S3 path, starting with the bucket, to where container log files should be uploaded from jobs.
+# Must contain a key. Must be writable by the service and readable by users who need to see
+# their job logs.
+# Path will be appended with a / if absent.
+container_s3_log_dir = "{{ KBCTS_CONTAINER_S3_LOG_DIR or "" }}"
+
 # The maximum CPU hours allowed per job, calculated as
 # the number of CPUs * the number of containers * the time per container.
 max_cpu_hours = {{ KBCTS_JOB_MAX_CPU_HOURS or 100 }}
@@ -149,16 +165,9 @@ topic_jobs = "{{ KBCTS_KAFKA_TOPIC_JOBS or "cts-jobs" }}"
 # A number less than 1 indicates that unsent messages will not be checked on startup.
 check_unsent_messages_on_startup_delay_min = {{ KBCTS_KAFKA_STARTUP_UNSENT_MSG_DELAY_MIN or -1 }}
 
-[Logging]
-
-# An S3 path, starting with the bucket, to where container log files should be uploaded from jobs.
-# Must contain a key. Must be writable by the service and readable by users who need to see
-# their job logs.
-container_s3_log_dir = "{{ KBCTS_CONTAINER_S3_LOG_DIR or "" }}"
-
 [Images]
 
-# The path to a crane executable. See the read me for details.
+# The path to a crane executable. See the README for details.
 crane_path = "{{ KBCTS_CRANE_PATH or "" }}"
 
 [Service]
