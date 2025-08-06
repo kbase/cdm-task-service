@@ -115,7 +115,7 @@ mongo_retrywrites = "{{ KBCTS_MONGO_RETRYWRITES or "" }}"
 
 # S3 paths where users are allowed to read / write job files, starting with the bucket.
 # Bucket only paths are allowed.
-# If omitted, users can read and write to any locations where the S3 can read and write
+# If omitted, users can read and write to any locations where the service can read and write
 # except for the log directory (configured below).
 # Paths may not be prefixes or suffixes of each other or the log directory.
 # To specify multiple paths, separate them with a comma. This means that commas

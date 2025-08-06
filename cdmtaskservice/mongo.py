@@ -573,16 +573,16 @@ class MongoDAO:
         set_: dict[str, Any] | None = None,
         current_state: models.ReferenceDataState | None = None,
     ):
-        sub = f"{models.FLD_REFDATA_STATUSES}."
-        subs = f"{sub}$."
+        elemquery = {models.FLD_REFDATA_CLUSTER: _not_falsy(cluster, "cluster").value}
+        if current_state:
+            elemquery[models.FLD_COMMON_STATE] = current_state.value
         query = {
             models.FLD_COMMON_ID: _require_string(refdata_id, "refdata_id"),
-            f"{sub}{models.FLD_REFDATA_CLUSTER}": _not_falsy(cluster, "cluster").value
+            models.FLD_REFDATA_STATUSES: {"$elemMatch": elemquery},
         }
+        subs = f"{models.FLD_REFDATA_STATUSES}.$[elem]."
         set_ = {f"{subs}{k}": v for k, v in set_.items()} if set_ else {}
         push = {f"{subs}{k}": v for k, v in push.items()} if push else {}
-        if current_state:
-            query[f"{sub}{models.FLD_COMMON_STATE}"] = current_state.value
         res = await self._col_refdata.update_one(
             query,
             {
@@ -599,6 +599,9 @@ class MongoDAO:
                     f"{subs}{_FLD_UPDATE_TIME}": time,
                 }
             },
+            array_filters=[{
+                f"elem.{models.FLD_REFDATA_CLUSTER}": cluster.value}
+            ],
         )
         if not res.matched_count:
             cs = f"in state {current_state.value} " if current_state else ""

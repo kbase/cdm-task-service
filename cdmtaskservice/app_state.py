@@ -117,7 +117,6 @@ async def build_app(
         s3 = await S3Client.create(
             cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
         )
-        logr.info("Done")
         s3_external = await S3Client.create(
             cfg.s3_external_url,
             cfg.s3_access_key,
@@ -125,6 +124,7 @@ async def build_app(
             insecure_ssl=cfg.s3_allow_insecure,
             skip_connection_check=not cfg.s3_verify_external_url
         )
+        logr.info("Done")
         await _check_paths(s3, logr, cfg)
         logr.info("Initializing MongoDB client...")
         mongocli = await get_mongo_client(cfg)
