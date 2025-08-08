@@ -126,7 +126,7 @@ class JobState:
             id=job_id,
             job_input=ji,
             user=user.user,
-            image=image,
+            image=models.JobImage.model_validate(image.model_dump()),
             input_file_count=len(new_input),
             state=models.JobState.CREATED,
             transition_times=[models.AdminJobStateTransition(

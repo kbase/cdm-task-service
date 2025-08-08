@@ -6,12 +6,14 @@ import datetime
 from enum import Enum
 from pydantic import (
     BaseModel,
-    Field,
     ByteSize,
     ConfigDict,
-    StringConstraints,
+    conlist,
+    Field,
     field_validator,
+    HttpUrl,
     model_validator,
+    StringConstraints,
 )
 from typing import Annotated, Self
 
@@ -696,9 +698,9 @@ class RegistrationInfo(BaseModel):
     )]
 
 
-class Image(RegistrationInfo):
+class JobImage(RegistrationInfo):
     """
-    Information about a Docker image.
+    Information about a Docker image as stored in a Job data structure.
     """
     # This is an outgoing data structure only so we don't add validators
     name: Annotated[str, Field(
@@ -742,6 +744,30 @@ class Image(RegistrationInfo):
         with Docker, Shifter, and Apptainer.
         """ 
         return f"{self.name}@{self.digest}"
+
+
+class ImageUsage(BaseModel):
+    """
+    Usage information for a docker image.
+    """
+    urls: Annotated[conlist(HttpUrl, max_length=20) | None, Field(
+        examples=[["https://github.com/chklovski/CheckM2"]],
+        description="Documentation urls for the image."
+    )] = None
+    usage_notes: Annotated[str | None, Field(
+        examples=["Note that the entrypoint includes the 'predict' subcommand, so it is "
+            + "unnecessary to include it in the arguments supplied to the job"
+        ],
+        description="An arbitrary string containing usage notes for users. Markdown is "
+            + "suggested but not required.",
+        max_length=10000,
+    )] = None
+
+
+class Image(ImageUsage, JobImage):
+    """
+    Information about a docker image.
+    """
 
 
 class JobState(str, Enum):
@@ -809,7 +835,7 @@ class JobPreview(JobStatus):
     """
     # This is an outgoing data structure only so we don't add validators
     job_input: JobInputPreview
-    image: Image
+    image: JobImage
     input_file_count: Annotated[int, Field(
         examples=[42],
         description="The number of input files."

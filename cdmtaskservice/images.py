@@ -37,6 +37,7 @@ class Images:
         self,
         imagename: str,
         username: str,
+        image_usage: models.ImageUsage = None,
         refdata_id: str = None,
         default_refdata_mount_point: str = None
     ) -> models.Image:
@@ -45,6 +46,7 @@ class Images:
         
         imagename - the name of the docker image, e.g. gchr.io/kbase/checkm2:6.7.1
         username - the name of the user registering the image.
+        image_usage - usage information about the image.
         refdata_id - the ID of reference data to associate with the image.
         default_refdata_mount_point - the default mount point for refdata in an image container.
             Must be am absolute path with at least one path element.
@@ -65,6 +67,7 @@ class Images:
         entrypoint = await self._iminfo.get_entrypoint_from_name(normedname.name_with_digest)
         if not entrypoint:
             raise NoEntrypointError(f"Image {imagename} does not have an entrypoint")
+        image_usage = image_usage or models.ImageUsage()
         img = models.Image(
             name=normedname.name,
             digest = normedname.digest,
@@ -74,6 +77,8 @@ class Images:
             registered_on=utcdatetime(),
             refdata_id=refdata_id or None,  # ensure not empty string, etc.
             default_refdata_mount_point=default_refdata_mount_point,
+            usage_notes=image_usage.usage_notes,
+            urls=image_usage.urls,
         )
         await self._mongo.save_image(img)
         return img

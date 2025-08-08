@@ -408,6 +408,7 @@ async def get_refdata_by_path(
 async def approve_image(
     r: Request,
     image_id: _ANN_IMAGE_ID,
+    image_usage: models.ImageUsage = None,
     refdata_id: Annotated[str, Query(
         openapi_examples={"refdata id": {"value": "3a28c155-ea8b-4e1b-baef-242d991a8200"}},
         description="The ID of reference data to associate with the image. The reference data "
@@ -434,6 +435,7 @@ async def approve_image(
     return await images.register(
         image_id,
         user.user,
+        image_usage=image_usage,
         refdata_id=refdata_id,
         default_refdata_mount_point=default_refdata_mount_point
     )

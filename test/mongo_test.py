@@ -29,7 +29,7 @@ _BASEJOB = models.AdminJobDetails(
         output_dir="bucket/output",
     ),
     user="user",
-    image=models.Image(
+    image=models.JobImage(
         name="some_image",
         digest="digest",
         entrypoint=["arg1"],

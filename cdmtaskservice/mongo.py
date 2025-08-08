@@ -114,7 +114,7 @@ class MongoDAO:
         """
         _not_falsy(image, "image")
         try:
-            await self._col_images.insert_one(image.model_dump())
+            await self._col_images.insert_one(image.model_dump(mode="json"))
         except DuplicateKeyError as e:
             if _INDEX_TAG in e.args[0]:
                 raise ImageTagExistsError(f"The tag {image.tag} for image {image.name} "
