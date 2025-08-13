@@ -11,7 +11,7 @@ from fastapi.security.http import HTTPBase
 from typing import Optional
 
 from cdmtaskservice import app_state
-from cdmtaskservice import kb_auth
+from cdmtaskservice.user import CTSUser
 
 # Modified from https://github.com/tiangolo/fastapi/blob/e13df8ee79d11ad8e338026d99b1dcdcb2261c9f/fastapi/security/http.py#L100
 # Basically the only reason for this class is to get the UI to work with auth.
@@ -38,12 +38,12 @@ class KBaseHTTPBearer(HTTPBase):
         self.scheme_name = scheme_name or self.__class__.__name__
         self.optional = optional
 
-    async def __call__(self, request: Request) -> kb_auth.KBaseUser:
+    async def __call__(self, request: Request) -> CTSUser:
         user = app_state.get_request_user(request)
         if not user and not self.optional:
             raise MissingTokenError("Authorization header required")
         return user
 
 
-class MissingTokenError(kb_auth.AuthenticationError):
+class MissingTokenError(Exception):
     """ An error thrown when a token is expected but not provided. """

@@ -6,7 +6,6 @@ import datetime
 import logging
 import uuid
 
-from cdmtaskservice import kb_auth
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice import sites
@@ -30,6 +29,7 @@ from cdmtaskservice.s3.client import S3Client, S3PathInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
+from cdmtaskservice.user import CTSUser
 
 
 class JobState:
@@ -89,7 +89,7 @@ class JobState:
         self._cpu_hrs = _check_num(job_max_cpu_hours, "job_max_cpu_hours")
         self._test_mode = test_mode
         
-    async def submit(self, job_input: models.JobInput, user: kb_auth.KBaseUser) -> str:
+    async def submit(self, job_input: models.JobInput, user: CTSUser) -> str:
         """
         Submit a job.
         
@@ -108,14 +108,17 @@ class JobState:
                 f"Job compute time of {compute_time} CPU hours is greater than the limit of "
                 + f"{self._cpu_hrs}"
         )
+        if not self._test_mode:
+            # check the flow is available before we make any changes
+            flow = self._flowman.get_flow(job_input.cluster)
+            # TODO SECURITY this needs to be moved to job flow providers when they exist, so
+            #               it can be checked if the job flow doesn't exist
+            flow.precheck(user, job_input)
         # Could parallelize these ops but probably not worth it
         image = await self._images.get_image(job_input.image)
         await self._check_refdata(job_input, image)
         await self._check_output_path(job_input)
         new_input, meta = await self._check_and_update_files(job_input)
-        if not self._test_mode:
-            # check the flow is available before we make any changes
-            flow = self._flowman.get_flow(job_input.cluster)
         ji = job_input.model_copy(update={"input_files": new_input})
         job_id = str(uuid.uuid4())  # TODO TEST for testing we'll need to set up a mock for this
         # TODO TEST will need a way to mock out timestamps
@@ -230,7 +233,7 @@ class JobState:
     async def get_job(
         self,
         job_id: str,
-        user: str,  # can't be a KBaseUser since may be the system calling the method
+        user: CTSUser,
         as_admin: bool = False
     ) -> models.Job | models.AdminJobDetails:
         """
@@ -242,21 +245,21 @@ class JobState:
         as_admin - True if the user should always have access to the job and should access
             additional job details.
         """
-        _require_string(user, "user")
+        _not_falsy(user, "user")
         job = await self._mongo.get_job(_require_string(job_id, "job_id"), as_admin=as_admin)
-        if not as_admin and job.user != user:
+        if not as_admin and job.user != user.user:
             # reveals the job ID exists in the system but I don't see a problem with that
-            raise UnauthorizedError(f"User {user} may not access job {job_id}")
-        msg = f"User {user} accessed job {job_id}"
+            raise UnauthorizedError(f"User {user.user} may not access job {job_id}")
+        msg = f"User {user.user} accessed job {job_id}"
         if as_admin:
-            msg = f"Admin user {user} accessed {job.user}'s job {job_id}"
+            msg = f"Admin user {user.user} accessed {job.user}'s job {job_id}"
         logging.getLogger(__name__).info(msg, extra={logfields.JOB_ID: job_id})
         return job
 
     async def get_job_status(
         self,
         job_id: str,
-        user: kb_auth.KBaseUser,
+        user: CTSUser,
     ) -> models.JobStatus:
         """
         Get minimal information about a job's status based on the job's ID.
@@ -310,7 +313,7 @@ class JobState:
     async def update_job_admin_meta(
         self,
         job_id: str,
-        admin: kb_auth.KBaseUser,
+        admin: CTSUser,
         set_fields: dict[str, str | int | float] | None = None,
         unset_keys: set[str] | None = None,
     ):

@@ -4,7 +4,6 @@ Manages refdata at remote sites.
 
 import uuid
 
-from cdmtaskservice import kb_auth
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
@@ -15,6 +14,7 @@ from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths, validate_path
 from cdmtaskservice.s3.remote import UNPACK_FILE_EXTENSIONS
 from cdmtaskservice.timestamp import utcdatetime
+from cdmtaskservice.user import CTSUser
 
 
 class Refdata:
@@ -45,7 +45,7 @@ class Refdata:
     async def create_refdata(
         self,
         s3_path: str,
-        user: kb_auth.KBaseUser,
+        user: CTSUser,
         crc64nvme: str = None,
         unpack: bool = False
     ) -> models.ReferenceData:

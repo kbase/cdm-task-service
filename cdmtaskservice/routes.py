@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
 from typing import Annotated, Any
 
 from cdmtaskservice import app_state
-from cdmtaskservice import kb_auth
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice import sites
@@ -29,12 +28,13 @@ from cdmtaskservice.callback_url_paths import (
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
 )
-from cdmtaskservice.exceptions import UnauthorizedError
+from cdmtaskservice.exceptions import UnauthorizedError, InvalidUserError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
+from cdmtaskservice.user import CTSUser, CTSRole, SERVICE_USER
 
 SERVICE_NAME = "CDM Task Service"
 NOTES = "This service is a prototype"
@@ -49,12 +49,9 @@ ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 
 _AUTH = KBaseHTTPBearer()
 
-# * isn't allowed in KBase user names
-_SERVICE_USER = "***SERVICE***"
 
-
-def _ensure_admin(user: kb_auth.KBaseUser, err_msg: str):
-    if user.admin_perm != kb_auth.AdminPermission.FULL:
+def _ensure_admin(user: CTSUser, err_msg: str):
+    if not user.is_full_admin():
         raise UnauthorizedError(err_msg)
 
 
@@ -112,8 +109,8 @@ class AllowedPath(BaseModel):
 class WhoAmI(BaseModel):
     """ Information about the user. """
     user: Annotated[str, Field(examples=["kbasehelp"], description="The user's username.")]
-    is_service_admin: Annotated[bool, Field(
-        examples=[False], description="Whether the user is a service administrator."
+    roles: Annotated[list[CTSRole], Field(
+        example=[[CTSRole.FULL_ADMIN]], description="The users's roles for the service."
     )]
     allowed_paths: Annotated[list[AllowedPath], Field(
         examples=[AllowedPath(path="cts/io", perm=PathPermission.WRITE)],
@@ -129,12 +126,12 @@ class WhoAmI(BaseModel):
     summary="Who am I? What does it all mean?",
     description="Information about the current user."
 )
-async def whoami(r: Request, user: kb_auth.KBaseUser=Depends(_AUTH)) -> WhoAmI:
+async def whoami(r: Request, user: CTSUser=Depends(_AUTH)) -> WhoAmI:
     # Later this can be updated to a dynamic lookup if necessary
     aps = app_state.get_app_state(r).allowed_paths
     return WhoAmI(
         user=user.user,
-        is_service_admin=kb_auth.AdminPermission.FULL == user.admin_perm,
+        roles=user.roles,
         allowed_paths=[AllowedPath(path=p, perm=PathPermission.WRITE) for p in aps],
     )
 
@@ -207,7 +204,7 @@ async def list_jobs(
     after: _ANN_JOB_AFTER = None,
     before: _ANN_JOB_BEFORE = None,
     limit: _ANN_JOB_LIMIT = 1000,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ) -> ListJobsResponse:
     job_state = app_state.get_app_state(r).job_state
     return ListJobsResponse(jobs=await job_state.list_jobs(
@@ -233,7 +230,7 @@ class SubmitJobResponse(BaseModel):
 async def submit_job(
     r: Request,
     job_input: models.JobInput,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ) -> SubmitJobResponse:
     job_state = app_state.get_app_state(r).job_state
     return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
@@ -258,7 +255,7 @@ _ANN_JOB_ID = Annotated[str, FastPath(
 async def get_job_status(
     r: Request,
     job_id: _ANN_JOB_ID,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ) -> models.JobStatus:
     job_state = app_state.get_app_state(r).job_state
     return await job_state.get_job_status(job_id, user)
@@ -274,10 +271,10 @@ async def get_job_status(
 async def get_job(
     r: Request,
     job_id: _ANN_JOB_ID,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ) -> models.Job:
     job_state = app_state.get_app_state(r).job_state
-    return await job_state.get_job(job_id, user.user)
+    return await job_state.get_job(job_id, user)
 
 
 _ANN_IMAGE_ID = Annotated[str, FastPath(
@@ -428,7 +425,7 @@ async def approve_image(
         min_length=1,
         max_length=1024,
     )] = None,
-    user: kb_auth.KBaseUser=Depends(_AUTH)
+    user: CTSUser=Depends(_AUTH)
 ) -> models.Image:
     _ensure_admin(user, "Only service administrators can approve images.")
     images = app_state.get_app_state(r).images
@@ -452,7 +449,7 @@ async def approve_image(
 async def delete_image(
     r: Request,
     image_id: _ANN_IMAGE_ID,
-    user: kb_auth.KBaseUser=Depends(_AUTH)
+    user: CTSUser=Depends(_AUTH)
 ):
     _ensure_admin(user, "Only service administrators can delete images.")
     images = app_state.get_app_state(r).images
@@ -465,13 +462,15 @@ async def delete_image(
     response_model_exclude_none=True,
     summary="Create reference data",
     description="Define an S3 file as containing reference data necessary for one or more "
-        + "containers and start the reference data staging process."
+        + "images and start the reference data staging process."
 )
 async def create_refdata(
     r: Request,
     # will be validated later 
     refdata_s3_path: Annotated[str, FastPath(
-        openapi_examples={"refdata path": {"value": "refdata-bucket/checkm2/checkm2_refdata-2.4.tgz"}},
+        openapi_examples={"refdata path": {
+            "value": "refdata-bucket/checkm2/checkm2_refdata-2.4.tgz"}
+        },
         description="The S3 path to the reference data to register, starting with the bucket. "
             + "If the refdata consists of multiple files, they must be archived. "
             + "Please note that spaces are valid S3 object characters, so be careful about "
@@ -492,7 +491,7 @@ async def create_refdata(
         description="Whether to unpack the file after download. *.tar.gz, *.tgz, and *.gz "
             + "files are supported."
     )] = False,
-    user: kb_auth.KBaseUser=Depends(_AUTH)
+    user: CTSUser=Depends(_AUTH)
 ) -> models.ReferenceData:
     _ensure_admin(user, "Only service administrators can create reference data.")
     refdata = app_state.get_app_state(r).refdata
@@ -519,12 +518,12 @@ async def list_jobs_admin(
     after: _ANN_JOB_AFTER = None,
     before: _ANN_JOB_BEFORE = None,
     limit: _ANN_JOB_LIMIT = 1000,
-    methoduser: kb_auth.KBaseUser=Depends(_AUTH),
+    methoduser: CTSUser=Depends(_AUTH),
 ) -> ListJobsResponse:
     _ensure_admin(methoduser, "Only service administrators can list other users' jobs.")
-    kbauth = app_state.get_app_state(r).auth
-    if user and not await kbauth.is_valid_user(user, app_state.get_request_token(r)):
-        raise kb_auth.InvalidUserError(f"No such user: {user}")
+    auth = app_state.get_app_state(r).auth
+    if user and not await auth.is_valid_kbase_user(user, app_state.get_request_token(r)):
+        raise InvalidUserError(f"No such user: {user}")
     job_state = app_state.get_app_state(r).job_state
     return ListJobsResponse(jobs=await job_state.list_jobs(
         user=user,
@@ -544,11 +543,11 @@ async def list_jobs_admin(
 async def get_job_admin(
     r: Request,
     job_id: _ANN_JOB_ID,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ) -> models.AdminJobDetails:
     _ensure_admin(user, "Only service administrators can get jobs as an admin.")
     job_state = app_state.get_app_state(r).job_state
-    return await job_state.get_job(job_id, user.user, as_admin=True)
+    return await job_state.get_job(job_id, user, as_admin=True)
 
 
 @ROUTER_ADMIN.get(
@@ -564,11 +563,11 @@ async def get_job_admin(
 async def get_job_runner_status(
     r: Request,
     job_id: _ANN_JOB_ID,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ) -> dict[str, Any]:
     _ensure_admin(user, "Only service administrators can get job runner status.")
     appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user.user, as_admin=True)
+    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
     flow = appstate.jobflow_manager.get_flow(job.job_input.cluster)
     return await flow.get_job_external_runner_status(job)
 
@@ -602,7 +601,7 @@ async def update_job_admin_meta(
     r: Request,
     update: UpdateAdminMeta,
     job_id: _ANN_JOB_ID,
-    admin: kb_auth.KBaseUser=Depends(_AUTH),
+    admin: CTSUser=Depends(_AUTH),
 ):
     _ensure_admin(admin, "Only service administrators can alter admin metadata.")
     job_state = app_state.get_app_state(r).job_state
@@ -626,11 +625,11 @@ async def clean_job(
         description="**WARNING**: setting force to true may cause undefined behavior. True will " 
         + "cause job files to be removed regardless of job state."
     )] = False,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ):
     _ensure_admin(user, "Only service administrators can clean jobs.")
     appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user.user, as_admin=True)
+    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
     flow = appstate.jobflow_manager.get_flow(job.job_input.cluster)
     await flow.clean_job(job, force=force)
 
@@ -646,7 +645,7 @@ async def clean_job(
 async def get_refdata_admin(
     r: Request,
     refdata_id: _ANN_REFDATA_ID,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ) -> models.AdminReferenceData:
     _ensure_admin(user, "Only service administrators can get refdata as an admin.")
     refdata = app_state.get_app_state(r).refdata
@@ -672,7 +671,7 @@ async def clean_refdata(
         description="**WARNING**: setting force to true may cause undefined behavior. True will " 
         + "cause refdata files to be removed regardless of staging state."
     )] = False,
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ):
     _ensure_admin(user, "Only service administrators can clean jobs.")
     appstate = app_state.get_app_state(r)
@@ -711,7 +710,7 @@ async def get_nersc_client_info(
             + "will be returned.",
         ge=datetime.timedelta(seconds=1)
     )] = None,
-    user: kb_auth.KBaseUser=Depends(_AUTH)
+    user: CTSUser=Depends(_AUTH)
 ) -> NERSCClientInfo:
     _ensure_admin(user, "Only service administrators may view NERSC client information.")
     nersc_cli = app_state.get_app_state(r).sfapi_client
@@ -779,7 +778,7 @@ async def handle_unsent_notifications(
             + "Transitions newer than this will be ignored.",
         ge=datetime.timedelta(minutes=1)
     )] = "PT10M",
-    user: kb_auth.KBaseUser=Depends(_AUTH),
+    user: CTSUser=Depends(_AUTH),
 ):
     _ensure_admin(user, "Only service administrators may send notifications.")
     kc = app_state.get_app_state(r).kafka_checker
@@ -886,7 +885,7 @@ async def _callback_handling(
         extra={logfields.JOB_ID: job_id},
     )
     appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, _SERVICE_USER, as_admin=True)
+    job = await appstate.job_state.get_job(job_id, SERVICE_USER, as_admin=True)
     return appstate.jobflow_manager.get_flow(job.job_input.cluster), job
 
 

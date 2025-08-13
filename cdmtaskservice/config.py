@@ -144,7 +144,7 @@ class CDMTaskServiceConfig:
         # may want to allow service admins to override
         self.allowed_s3_paths = sorted({
             f"{p.rstrip('/')}/" for p in _get_list_string(config, _SEC_JOBS, "allowed_s3_paths")
-        }) or None
+        })
         self.container_s3_log_dir = _get_string_required(
             config, _SEC_JOBS, "container_s3_log_dir"
         ).rstrip("/") + "/"

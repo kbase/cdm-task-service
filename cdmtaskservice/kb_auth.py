@@ -7,7 +7,6 @@ A client for the KBase Auth2 server.
 
 import aiohttp
 from cacheout.lru import LRUCache
-from enum import IntEnum
 import logging
 import time
 from typing import NamedTuple, Self
@@ -15,18 +14,9 @@ from typing import NamedTuple, Self
 from cdmtaskservice.arg_checkers import require_string as _require_string
 
 
-class AdminPermission(IntEnum):
-    """
-    The different levels of admin permissions.
-    """
-    NONE = 1
-    # leave some space for potential future levels
-    FULL = 10
-
-
 class KBaseUser(NamedTuple):
     user: str
-    admin_perm: AdminPermission
+    roles: set[str]
 
 
 async def _get(url, headers):
@@ -66,8 +56,6 @@ class KBaseAuth:
     async def create(
         cls,
         auth_url: str,
-        required_roles: list[str] = None,
-        full_admin_roles: list[str] = None,
         cache_max_size: int = 10000,
         cache_expiration: int = 300,
     ) -> Self:
@@ -86,8 +74,6 @@ class KBaseAuth:
         j = await _get(auth_url, {"Accept": "application/json"})
         return KBaseAuth(
             auth_url,
-            required_roles,
-            full_admin_roles,
             cache_max_size,
             cache_expiration,
             j.get("servicename"),
@@ -96,16 +82,12 @@ class KBaseAuth:
     def __init__(
         self,
         auth_url: str,
-        required_roles: list[str],
-        full_admin_roles: list[str],
         cache_max_size: int,
         cache_expiration: int,
         service_name: str,
     ):
         self._url = auth_url
         self._me_url = self._url + "api/V2/me"
-        self._req_roles = set(required_roles) if required_roles else None
-        self._full_roles = set(full_admin_roles) if full_admin_roles else set()
         self._cache_timer = time.time  # TODO TEST figure out how to replace the timer to test
         self._cache = LRUCache(
             timer=self._cache_timer, maxsize=cache_max_size, ttl=cache_expiration
@@ -129,24 +111,13 @@ class KBaseAuth:
         """
         # TODO CODE should check the token for \n etc.
         _require_string(token, "token")
-
-        admin_cache = self._cache.get(token, default=False)
-        if admin_cache:
-            return KBaseUser(admin_cache[0], admin_cache[1]) 
+        cached = self._cache.get(token, default=False)
+        if cached:
+            return cached
         j = await _get(self._me_url, {"Authorization": token})
-        croles = set(j["customroles"])
-        if self._req_roles and not self._req_roles <= croles:
-            raise MissingRoleError(
-                "The user is missing a required authentication role to use the service."
-            )
-        v = (j["user"], self._get_admin_role(croles))
-        self._cache.set(token, v)
-        return KBaseUser(v[0], v[1])
-
-    def _get_admin_role(self, roles: set[str]):
-        if roles & self._full_roles:
-            return AdminPermission.FULL
-        return AdminPermission.NONE
+        user = KBaseUser(user=j["user"], roles=set(j["customroles"]))
+        self._cache.set(token, user)
+        return user
 
 
     async def is_valid_user(self, user: str, token: str) -> bool:
@@ -177,7 +148,3 @@ class InvalidTokenError(AuthenticationError):
 
 class InvalidUserError(AuthenticationError):
     """ An error thrown when a username is invalid. """
-
-
-class MissingRoleError(AuthenticationError):
-    """ An error thrown when a user does not have the required roles to use the service """
