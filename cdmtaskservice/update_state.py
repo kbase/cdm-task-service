@@ -242,6 +242,16 @@ def error(
 ####################
 
 
+def submitted_refdata_download() -> RefdataUpdate:
+    """
+    Update a refdata staging process's state from created to download submitted.
+    """
+    return RefdataUpdate(
+        )._set_current_state(models.ReferenceDataState.CREATED
+        )._set_new_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED
+    )
+
+
 def submitted_nersc_refdata_download(task_id: str) -> RefdataUpdate:
     """
     Update a refdata staging process's state from created to download submitted and add a NERSC

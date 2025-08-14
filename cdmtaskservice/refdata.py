@@ -83,8 +83,6 @@ class Refdata:
         statuses = []
         clusters = self._flowman.list_clusters()
         for c in  clusters:
-            # TODO LAWRENCIUM REFDATA will need to do something special here since refdata is
-            #                         xferred from NERSC
             statuses.append(models.ReferenceDataStatus(
                 cluster=c,
                 state=models.ReferenceDataState.CREATED,

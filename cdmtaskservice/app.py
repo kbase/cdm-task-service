@@ -42,7 +42,6 @@ from cdmtaskservice.exceptions import InvalidAuthHeaderError
 #                  * refdata not associated with images, need to keep the refdata mongo doc
 #                       around since it's associdated with jobs, and could be used to restage
 # TODO FEATURE GPU support
-# TODO FEATURE lawrencium support - dealing with refdata will be fun
 # TODO FEATURE job restarts / recovery (automatic?)
 # TODO FEATURE refdata restarts / recovery (automatic?)
 

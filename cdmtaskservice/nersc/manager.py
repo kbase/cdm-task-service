@@ -346,6 +346,17 @@ class NERSCManager:
             f"{self._nersc_jaws_user}_{self._service_group}_{refdata_id}_changes.txt"
         )
     
+    def _get_refdata_file_complete_path(self, refdata_id, site: sites.Cluster) -> Path:
+        # the file path that JAWS writes when refdata transfer to a site is complete
+        site = _CLUSTER_TO_JAWS_SITE[site]
+        return (
+            self._refdata_root / "log" /
+            (
+                f"{self._nersc_jaws_user}_{self._service_group}_{refdata_id}_changes.txt"
+                + f"_{site}.complete"
+            )
+        )
+    
     async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
         # TODO ERRORHANDlING deal with errors 
         return (await client.post(f"{_COMMAND_PATH}/{machine}", data={"executable": exe})).json()
@@ -901,6 +912,66 @@ class NERSCManager:
             error_json_file_location=errfilepath,
             container_logs_location=str(rootpath / _JOB_LOGS)
         )
+
+    async def setup_refdata_transfer_callback(
+        self, refdata: models.ReferenceData, site: sites.Cluster, callback_url: str
+    ):
+        """
+        Set up a callback to notify a service when transfer of refdata from NERSC to a remote
+        site is complete. Expects that the reference data transfer has already been triggered
+        for the remote site.
+        
+        refdata - the refdata being transferred.
+        site - the remote site that's the target of the transfer
+        callback_url - the url to GET when the transfer is complete.
+        """
+        # TODO HACKFIX SOON this is a total hack to deal with the callback endpoints being in
+        #      beta. They should be coming out of beta Any Time Now (TM). When that happens,
+        #      remove this hack and use the provided client (possibly using the bare POST method
+        #      as below if there isn't a specific callback method).
+        _not_falsy(refdata, "refdata")
+        _not_falsy(site, "site")  # TODO CODE better error than keyerror. Programming err though
+        cb_url = _require_string(callback_url, "callback_url")
+        token = await self._client_provider().token  # will expire in a few minutes
+        sfcli = AsyncClient(api_base_url="https://api.nersc.gov/api/beta", access_token=token)
+        payload = {
+            "path_condition": {
+                "path": str(self._get_refdata_file_complete_path(refdata.id, site)), 
+                "machine": Machine.dtns.value}, 
+            "url": cb_url,
+            # seconds. Assume that refdata transfers take less than a day. Make configurable?
+            "timeout": 24 * 60 * 60,
+        }
+        logging.getLogger(__name__).info(
+            "Setting up SFAPI callback", extra={logfields.PAYLOAD: payload}
+        )
+        await sfcli.post("callback", json=payload)
+        
+    async def get_refdata_transfer_result(
+        self, refdata: models.ReferenceData, site: sites.Cluster
+    ) -> TransferState:
+        """
+        Get the state of a refdata transfer from NERSC to a remote site.
+        
+        refdata - the refdata being transferred.
+        site - the remote site that's the target of the transfer
+        """
+        _not_falsy(refdata, "refdata")
+        _not_falsy(site, "site")  # TODO CODE better error than keyerror. Programming err though
+        # similar to _get_transfer_result, but not similar enough to warrant DRYing things up
+        path = self._get_refdata_file_complete_path(refdata.id, site)
+        res = await self._download_json_file_from_NERSC(
+            Machine.dtns, path, no_exception_on_missing_file=True
+        )
+        if not res:
+            return TransferResult(state=TransferState.INCOMPLETE)
+        if res["result"] == "succeeded":
+            return TransferResult()
+        else:
+            return TransferResult(
+                state=TransferState.FAIL,
+                message="JAWS indicates that the reference data transfer failed",
+            )
 
     async def clean_job(self, job: models.Job, jaws_output_dirs: list[Path]):
         """
