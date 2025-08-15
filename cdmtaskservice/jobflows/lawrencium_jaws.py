@@ -6,7 +6,8 @@ Note that data is still staged at NERSC and the job is started from NERSC.
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
+from cdmtaskservice.callback_url_paths import get_refdata_download_complete_callback
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.jaws import client as jaws_client
@@ -15,6 +16,7 @@ from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
+from cdmtaskservice.update_state import submitted_refdata_download, refdata_complete
 
 
 class LawrenciumJAWSRunner(NERSCJAWSRunner):
@@ -86,22 +88,20 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         try:
             refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
             if refstate.state != models.ReferenceDataState.CREATED:
-                raise InvalidReferenceDataStateError("Reference data must be in the created state")
-            import logging  # TODO LRC REFDATA remove
-            logging.getLogger(__name__).info(
-                "waiting for JAWS to complete refdata handling stuff"
+                raise InvalidReferenceDataStateError(
+                    f"Reference data must be in the created state for cluster {self.CLUSTER}"
+                )
+            callback_url = get_refdata_download_complete_callback(
+                self._callback_root, refdata.id, self.CLUSTER
             )
+            await self._nman.setup_refdata_transfer_callback(refdata, self.CLUSTER, callback_url)
+            await self._update_refdata_state(refdata.id, submitted_refdata_download())
             # Note on eventual retries - JAWS writes a file to note that the transfer is
             # done, whether it succeeded or failed. The file path is based on the file that the
             # s3 remote code writes when refdata is staged. Therefore on a retry, these files
             # will already exist and so setting up a SFAPI callback for them will trigger the
             # callback immediately. Either the files need to be deleted or a file with a new
             # filename needs to be written (maybe insert _attempt_# or something into the name).
-            
-            # BLOCKED waiting for JAWS features / debugging
-            # TODO LRC REFDATA set up a callback @ NERSC for the refata complete file marker.that
-            #        pings the service to tell it the refdata transfer to LRC is complete
-            #        Update the refdata state
         except Exception as e:
             await self._handle_exception(e, refdata.id, "setting up callbacks for", refdata=True)
 
@@ -110,12 +110,19 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         Complete a refdata download task. The refdata is expected to be in the download
         submitted state for the cluster.
         """
-        raise ValueError("unimplemented")
-        # TODO LRC REFDATA implement.
-        #       * check refdata state like the NERSC job flow
-        #       * check the refdata completion file exists at NERSCD (e.g. don't trust the 
-        #          http ping, verify)
-        #       * update state
+        refdata = await self._mongo.get_refdata_by_id(_require_string(refdata_id, "refdata_id"))
+        refstate = refdata.get_status_for_cluster(self.CLUSTER)
+        if refstate.state != models.ReferenceDataState.DOWNLOAD_SUBMITTED:
+            raise InvalidReferenceDataStateError(
+                "Reference data must be in the download submitted state for "
+                + f"cluster {refstate.cluster.value}"
+            )
+        async def tfunc():
+            return await self._nman.get_refdata_transfer_result(refdata, self.CLUSTER), None
+        await self._get_transfer_result(  # check for errors
+            tfunc, refdata.id, "Transfer", "transferring", refdata=True
+        )
+        await self._update_refdata_state(refdata.id, refdata_complete())
 
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """

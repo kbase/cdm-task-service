@@ -1065,7 +1065,6 @@ class ReferenceData(_ReferenceDataRoot):
     Information about reference data that is, or will be, available for containers.
     """
     # This is an outgoing structure only so we don't add validators
-    # TODO LAWRENCIUM how do deal with this? sync process from NERSC, not a separate D/L
     # TODO FUTURESITES will need to be able to stage to sites that don't exist currently
     #                  ... if that ever happens
     statuses: Annotated[list[ReferenceDataStatus], Field(
@@ -1078,7 +1077,6 @@ class AdminReferenceData(_ReferenceDataRoot):
     Information about reference data that is, or will be, available for containers.
     """
     # This is an outgoing structure only so we don't add validators
-    # TODO LAWRENCIUM how do deal with this? sync process from NERSC, not a separate D/L
     # TODO FUTURESITES will need to be able to stage to sites that don't exist currently
     #                  ... if that ever happens
     statuses: Annotated[list[AdminReferenceDataStatus], Field(

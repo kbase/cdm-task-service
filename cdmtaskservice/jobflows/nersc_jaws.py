@@ -155,7 +155,8 @@ class NERSCJAWSRunner(JobFlow):
             await self._handle_exception(e, entity_id, err_type, refdata=refdata)
             raise
         if res.state == TransferState.INCOMPLETE:
-            raise InvalidJobStateError(f"{op} task is not complete")
+            errcls = InvalidReferenceDataStateError if refdata else InvalidJobStateError
+            raise errcls(f"{op} task is not complete")
         elif res.state == TransferState.FAIL:
             logging.getLogger(__name__).error(
                 f"{op} failed for {'refdata' if refdata else 'job'}.",
