@@ -12,12 +12,13 @@ from cdmtaskservice.exceptions import (
     InvalidAuthHeaderError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
+    InvalidUserError,
     UnauthorizedError,
 )
 from cdmtaskservice.http_bearer import MissingTokenError
 from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
-from cdmtaskservice.kb_auth import InvalidTokenError, MissingRoleError, InvalidUserError
+from cdmtaskservice import kb_auth
 from cdmtaskservice.mongo import (
     ImageTagExistsError,
     ImageDigestExistsError,
@@ -53,9 +54,9 @@ class ErrorMapping(NamedTuple):
 _ERR_MAP = {
     MissingTokenError: ErrorMapping(ErrorType.NO_TOKEN, _H401),
     InvalidAuthHeaderError: ErrorMapping(ErrorType.INVALID_AUTH_HEADER, _H401),
-    InvalidTokenError: ErrorMapping(ErrorType.INVALID_TOKEN, _H401),
+    kb_auth.InvalidTokenError: ErrorMapping(ErrorType.INVALID_TOKEN, _H401),
+    kb_auth.InvalidUserError: ErrorMapping(ErrorType.INVALID_USERNAME, _H400),
     InvalidUserError: ErrorMapping(ErrorType.INVALID_USERNAME, _H400),
-    MissingRoleError: ErrorMapping(ErrorType.UNAUTHORIZED, _H403),
     UnauthorizedError: ErrorMapping(ErrorType.UNAUTHORIZED, _H403),
     ClientLifeTimeError: ErrorMapping(ErrorType.CLIENT_LIFETIME, _H400),
     S3BucketInaccessibleError: ErrorMapping(ErrorType.S3_BUCKET_INACCESSIBLE, _H403),

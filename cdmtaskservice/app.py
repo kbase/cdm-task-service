@@ -23,7 +23,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from cdmtaskservice import app_state
 from cdmtaskservice import errors
-from cdmtaskservice import kb_auth
 from cdmtaskservice import logfields
 from cdmtaskservice import models_errors
 from cdmtaskservice import routes
@@ -162,7 +161,7 @@ class _AppMiddleWare(BaseHTTPMiddleware):
             if scheme.lower() != _SCHEME.lower():
                 # don't put the received scheme in the error message, might be a token
                 raise InvalidAuthHeaderError(f"Authorization header requires {_SCHEME} scheme")
-            user = await app_state.get_app_state(request).auth.get_user(credentials)
+            user = await app_state.get_app_state(request).auth.get_kbase_user(credentials)
         app_state.set_request_user(request, user, credentials)
         extra_var[logfields.USER] = user.user if user else None
         logging_extra_var.set(extra_var)
@@ -248,7 +247,7 @@ def _handle_general_exception(r: Request, exc: Exception):
         return _format_error(errmap.http_code, str(exc), errmap.err_type)
     else:
         user = app_state.get_request_user(r)
-        if not user or user.admin_perm != kb_auth.AdminPermission.FULL:
+        if not user or not user.is_full_admin():
             # 5XX means something broke in the service, so nothing regular users can do about it
             err = "An unexpected error occurred"
         elif len(exc.args) == 1 and type(exc.args[0]) == str:

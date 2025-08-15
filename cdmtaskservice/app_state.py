@@ -25,7 +25,7 @@ from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
-from cdmtaskservice.kb_auth import KBaseAuth, KBaseUser
+from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.nersc.status import NERSCStatus
@@ -35,6 +35,7 @@ from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
+from cdmtaskservice.user import CTSAuth, CTSUser
 
 # The main point of this module is to handle all the application state in one place
 # to keep it consistent and allow for refactoring without breaking other code
@@ -42,7 +43,7 @@ from cdmtaskservice.timestamp import utcdatetime
 
 class AppState(NamedTuple):
     """ Holds application state. """
-    auth: KBaseAuth
+    auth: CTSAuth
     sfapi_client: NERSCSFAPIClientProvider  # may be None if NERSC is unavailable at startup
     job_state: JobState
     refdata: Refdata
@@ -54,7 +55,7 @@ class AppState(NamedTuple):
 
 class RequestState(NamedTuple):
     """ Holds request specific state. """
-    user: KBaseUser | None
+    user: CTSUser | None
     token: str | None
 
 
@@ -102,10 +103,11 @@ async def build_app(
     flowman = JobFlowManager()
     coman = CoroutineWrangler()
     logr.info("Connecting to KBase auth service... ")
-    auth = await KBaseAuth.create(
-        cfg.auth_url,
-        required_roles=[cfg.kbase_staff_role, cfg.has_nersc_account_role],
-        full_admin_roles=cfg.auth_full_admin_roles
+    auth = CTSAuth(
+        await KBaseAuth.create(cfg.auth_url),
+        set(cfg.auth_full_admin_roles),
+        cfg.kbase_staff_role,
+        cfg.has_nersc_account_role,
     )
     logr.info("Done")
     jaws_client = None
@@ -330,7 +332,7 @@ def _get_app_state_from_app(app: FastAPI) -> AppState:
     return app.state._cdmstate
 
 
-def set_request_user(r: Request, user: KBaseUser | None, token: str | None):
+def set_request_user(r: Request, user: CTSUser | None, token: str | None):
     """ Set the user for the current request. """
     # if we add more stuff in the request state we'll need to not blow away the old state
     r.state._cdmstate = RequestState(user=user, token=token)
@@ -342,7 +344,7 @@ def _get_request_state(r: Request, field: str) -> RequestState:
     return getattr(r.state._cdmstate, field)
 
 
-def get_request_user(r: Request) -> KBaseUser:
+def get_request_user(r: Request) -> CTSUser:
     """ Get the user for a request. """
     return _get_request_state(r, "user")
 

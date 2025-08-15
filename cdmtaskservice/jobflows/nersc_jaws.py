@@ -25,6 +25,7 @@ from cdmtaskservice.exceptions import (
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     IllegalParameterError,
+    UnauthorizedError,
 )
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
@@ -50,6 +51,7 @@ from cdmtaskservice.update_state import (
     refdata_error,
     RefdataUpdate,
 )
+from cdmtaskservice.user import CTSUser
 
 # Not sure how other flows would work and how much code they might share. For now just make
 # this work and pull it apart / refactor later.
@@ -213,6 +215,22 @@ class NERSCJAWSRunner(JobFlow):
             # TODO TEST will need a way to mock out timestamps
             self.CLUSTER, refdata_id, update, timestamp.utcdatetime()
         )
+
+    def precheck(self, user: CTSUser, job_input: models.JobInput):
+        """
+        Check that the inputs to a job are acceptable prior to running a job. Will throw an
+        error if the inputs don't meet requirements.
+        
+        user - the user running the job.
+        job_input - the job input.
+        """
+        _not_falsy(user, "user")
+        _not_falsy(job_input, "job_input")  # unused for now
+        if not user.is_kbase_staff or not user.has_nersc_account:
+            raise UnauthorizedError(
+                f"To use the {self.CLUSTER.value} site, you must be a KBase staff member "
+                + "and have a NERSC account"
+            )
 
     async def get_job_external_runner_status(self, job: models.AdminJobDetails) -> dict[str, Any]:
         """

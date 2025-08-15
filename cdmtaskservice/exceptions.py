@@ -25,3 +25,6 @@ class UnauthorizedError(Exception):
 
 class InvalidAuthHeaderError(Exception):
     """ An error thrown when an authorization header is invalid. """
+
+class InvalidUserError(Exception):
+    """ An error thrown when a provided user identifier is invalid. """
