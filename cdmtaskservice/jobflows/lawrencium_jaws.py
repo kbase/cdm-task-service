@@ -12,10 +12,11 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
+from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
-from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
+from cdmtaskservice.s3.client import S3ObjectMeta
 from cdmtaskservice.update_state import submitted_refdata_download, refdata_complete
 
 
@@ -32,13 +33,10 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         nersc_manager: NERSCManager,
         jaws_client: jaws_client.JAWSClient,
         mongodao: MongoDAO,
-        s3_client: S3Client,
-        s3_external_client: S3Client,
-        container_s3_log_dir: str,
+        s3config: S3Config,
         kafka: KafkaNotifier, 
         coro_manager: CoroutineWrangler,
         service_root_url: str,
-        s3_insecure_ssl: bool = False,
     ):
         """
         Create the runner.
@@ -46,28 +44,19 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         nersc_manager - the NERSC manager.
         jaws_client - a JAWS Central client.
         mongodao - the Mongo DAO object.
-        s3_client - an S3 client pointed to the data stores.
-        s3_external_client - an S3 client pointing to an external URL for the S3 data stores
-            that may not be accessible from the current process, but is accessible to remote
-            processes at NERSC.
-        container_s3_log_dir - where to store container logs in S3.
+        s3config - the S3 configuration.
         kafka - a kafka notifier.
         coro_manager - a coroutine manager.
         service_root_url - the URL of the service root, used for constructing service callbacks.
-        s3_insecure_url - whether to skip checking the SSL certificate for the S3 instance,
-            leaving the service open to MITM attacks.
         """
         super().__init__(
             nersc_manager,
             jaws_client,
             mongodao,
-            s3_client,
-            s3_external_client,
-            container_s3_log_dir,
+            s3config,
             kafka,
             coro_manager,
             service_root_url,
-            s3_insecure_ssl=s3_insecure_ssl
         )
     
     async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):

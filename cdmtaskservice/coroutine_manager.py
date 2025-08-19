@@ -21,6 +21,8 @@ class CoroutineWrangler:
         self._coros = set()
         self._destroy = False
 
+    # TODO CODE this doesn't need to be async. Would need to manually test a bunch of changes
+    #           so leave as is for now
     async def run_coroutine(self, coro: Coroutine[None, Any, None]):
         """ Run a coroutine to completion. """
         if self._destroy:

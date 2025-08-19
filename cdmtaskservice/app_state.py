@@ -20,6 +20,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
 from cdmtaskservice.jaws.client import JAWSClient
+from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
@@ -128,6 +129,12 @@ async def build_app(
         )
         logr.info("Done")
         await _check_paths(s3, logr, cfg)
+        s3config = S3Config(
+            client=s3,
+            external_client=s3_external,
+            error_log_path=cfg.container_s3_log_dir,
+            insecure=cfg.s3_allow_insecure
+        )
         logr.info("Initializing MongoDB client...")
         mongocli = await get_mongo_client(cfg)
         logr.info("Done")
@@ -138,7 +145,7 @@ async def build_app(
         )
         logr.info("Done")
         sfapi_client, jaws_client = await _register_nersc_job_flows(
-            logr, cfg, flowman, mongodao, s3, s3_external, kafka_notifier, coman
+            logr, cfg, flowman, mongodao, s3config, kafka_notifier, coman
         )
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3, coman, flowman)
@@ -193,8 +200,7 @@ async def _register_nersc_job_flows(
     cfg: CDMTaskServiceConfig,
     flowman: JobFlowManager,
     mongodao: MongoDAO,
-    s3: S3Client,
-    s3_external: S3Client,
+    s3config: S3Config,
     kafka_notifier: KafkaNotifier,
     coman: CoroutineWrangler
 ):
@@ -207,25 +213,19 @@ async def _register_nersc_job_flows(
             nerscman,
             jaws_client,
             mongodao,
-            s3,
-            s3_external,
-            cfg.container_s3_log_dir,
+            s3config,
             kafka_notifier,
             coman,
             cfg.service_root_url,
-            s3_insecure_ssl=cfg.s3_allow_insecure,
         )
         nerscjawsflow = NERSCJAWSRunner(  # same
             nerscman,
             jaws_client,
             mongodao,
-            s3,
-            s3_external,
-            cfg.container_s3_log_dir,
+            s3config,
             kafka_notifier,
             coman,
             cfg.service_root_url,
-            s3_insecure_ssl=cfg.s3_allow_insecure,
             on_refdata_complete=lrcjawsflow.nersc_refdata_complete,
         )
         flowman.register_flow(lrcjawsflow)
@@ -273,14 +273,12 @@ async def _build_NERSC_flow_deps(
         nerscman = await NERSCManager.create(
             sfapi_client.get_client,
             cfg.get_nersc_paths(),
-            cfg.nersc_jaws_user,
-            cfg.jaws_token,
-            cfg.jaws_group,
+            cfg.get_jaws_config(),
             service_group=cfg.service_group,
         )
         logr.info("Done")
         logr.info("Initializing JAWS Central client... ")
-        jaws_client = await JAWSClient.create(cfg.jaws_url, cfg.jaws_token, cfg.nersc_jaws_user)
+        jaws_client = await JAWSClient.create(cfg.get_jaws_config())
         logr.info("Done")
         return sfapi_client, jaws_client, nerscman, None
     except Exception:

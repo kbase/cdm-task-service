@@ -6,6 +6,7 @@ A configuration parser for the CDM task service. The configuration is expected t
 import tomllib
 from typing import BinaryIO, TextIO
 
+from cdmtaskservice.jaws.config import JAWSConfig
 from cdmtaskservice.nersc.paths import NERSCPaths
 
 
@@ -187,6 +188,17 @@ class CDMTaskServiceConfig:
         Get the set of NERSC paths for use with the service.
         """
         return self._nersc_paths
+    
+    def get_jaws_config(self):
+        """
+        Get configuration information for JAWS.
+        """
+        return JAWSConfig(
+            user=self.nersc_jaws_user,
+            token=self.jaws_token,
+            group=self.jaws_group,
+            url=self.jaws_url,
+        )
 
     def print_config(self, output: TextIO):
         """
