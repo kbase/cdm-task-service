@@ -96,8 +96,14 @@ class ErrorType(Enum):
     REFDATA_EXISTS =             (50100, "Refdata already exists")
     """ The reference data already exists in the system. """
 
-    JOB_FLOW_INACTIVE =          (60000, "Job flow inactive")
+    RESOURCE_UNAVAILABLE =       (60000, "Resource unavailable")
+    """ The requested resource is not available. """
+
+    JOB_FLOW_INACTIVE =          (60010, "Job flow inactive")
     """ The requested job flow is not currently active. """
+    
+    JOB_FLOW_UNAVAILABLE =       (60020, "Job flow unavailable")
+    """ The requested job flow is unable to be used. """
 
     UNSUPPORTED_OP =             (100000, "Unsupported operation")
     """ The requested operation is not supported. """

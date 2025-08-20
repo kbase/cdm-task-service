@@ -7,36 +7,35 @@ calling the build_app() method
 
 import asyncio
 import datetime
+from fastapi import FastAPI, Request
 import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Callable
 
-from fastapi import FastAPI, Request
-from cdmtaskservice import logfields
+
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
-from cdmtaskservice.jaws.client import JAWSClient
-from cdmtaskservice.jobflows.s3config import S3Config
+from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
+from cdmtaskservice.jobflows.jaws_flows_provider import JAWSFlowProvider
 from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
+from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
-from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
-from cdmtaskservice.nersc.status import NERSCStatus
-from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.notifications.kafka_checker import KafkaChecker
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSAuth, CTSUser
+from cdmtaskservice.exceptions import UnavailableResourceError
 
 # The main point of this module is to handle all the application state in one place
 # to keep it consistent and allow for refactoring without breaking other code
@@ -45,7 +44,7 @@ from cdmtaskservice.user import CTSAuth, CTSUser
 class AppState(NamedTuple):
     """ Holds application state. """
     auth: CTSAuth
-    sfapi_client: NERSCSFAPIClientProvider  # may be None if NERSC is unavailable at startup
+    sfapi_client_provider: Callable[[], NERSCSFAPIClientProvider]
     job_state: JobState
     refdata: Refdata
     images: Images
@@ -111,8 +110,7 @@ async def build_app(
         cfg.has_nersc_account_role,
     )
     logr.info("Done")
-    jaws_client = None
-    sfapi_client = None
+    jaws_job_flows = None
     mongocli = None
     kafka_notifier = None
     try:
@@ -144,7 +142,7 @@ async def build_app(
             cfg.kafka_boostrap_servers, cfg.kafka_topic_jobs
         )
         logr.info("Done")
-        sfapi_client, jaws_client = await _register_nersc_job_flows(
+        jaws_job_flows = await _register_nersc_job_flows(
             logr, cfg, flowman, mongodao, s3config, kafka_notifier, coman
         )
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
@@ -165,24 +163,32 @@ async def build_app(
         )
         app.state._mongo = mongocli
         app.state._coroman = coman
-        app.state._jaws_cli = jaws_client
+        app.state._jaws_provider = jaws_job_flows
         app.state._kafka = kafka_notifier
         kc = KafkaChecker(mongodao, kafka_notifier)
+        sfcliprov = _get_sfapi_client_provider(jaws_job_flows)
         app.state._cdmstate = AppState(
-            auth, sfapi_client, job_state, refdata, images, flowman, kc, cfg.allowed_s3_paths
+            auth, sfcliprov, job_state, refdata, images, flowman, kc, cfg.allowed_s3_paths
         )
         await _check_unsent_kafka_messages(logr, cfg, kc)
     except:
         if mongocli:
             mongocli.close()
-        if jaws_client:
-            await jaws_client.close()
-        if sfapi_client:
-            await sfapi_client.destroy()
+        if jaws_job_flows:
+            await jaws_job_flows.close()
         if kafka_notifier:
             # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
             await asyncio.wait_for(kafka_notifier.close(), 10)
         raise
+
+
+def _get_sfapi_client_provider(jaws_flows: JAWSFlowProvider
+    ) -> Callable[[], NERSCSFAPIClientProvider]:
+    if jaws_flows:
+        return jaws_flows.get_sfapi_client
+    def _get_client_fail():
+        raise UnavailableResourceError("The service was started without NERSC job flows")
+    return _get_client_fail
 
 
 async def _check_unsent_kafka_messages(
@@ -203,100 +209,27 @@ async def _register_nersc_job_flows(
     s3config: S3Config,
     kafka_notifier: KafkaNotifier,
     coman: CoroutineWrangler
-):
-    sfapi_client, jaws_client, nerscman, failreason = await _build_NERSC_flow_deps(logr, cfg)
-    if failreason:
-        flowman.mark_flow_inactive(NERSCJAWSRunner.get_cluster(), failreason)
-        flowman.mark_flow_inactive(LawrenciumJAWSRunner.get_cluster(), failreason)
-    else:
-        lrcjawsflow = LawrenciumJAWSRunner(  # this has a lot of required args, yech
-            nerscman,
-            jaws_client,
-            mongodao,
-            s3config,
-            kafka_notifier,
-            coman,
-            cfg.service_root_url,
-        )
-        nerscjawsflow = NERSCJAWSRunner(  # same
-            nerscman,
-            jaws_client,
-            mongodao,
-            s3config,
-            kafka_notifier,
-            coman,
-            cfg.service_root_url,
-            on_refdata_complete=lrcjawsflow.nersc_refdata_complete,
-        )
-        flowman.register_flow(lrcjawsflow)
-        flowman.register_flow(nerscjawsflow)
-    return sfapi_client, jaws_client
-
-async def _build_NERSC_flow_deps(
-    logr: logging.Logger, cfg: CDMTaskServiceConfig
-) -> tuple[NERSCSFAPIClientProvider, NERSCManager, JAWSClient, str]:
-    # This method is also getting too long, need to split it up if it gets any longer
+) -> JAWSFlowProvider:
     # This is only useful for testing with other processes that just want to pull job records
     # but not start or run jobs. As such it's undocumented.
     if os.environ.get("KBCTS_SKIP_NERSC") == "true":
         logr.info("KBCTS_SKIP_NERSC env var is 'true', skipping NERSC and JAWS startup")
-        return None, None, None, "Server started with KBCTS_SKIP_NERSC=true"
-    # This is not helpful other than for testing while NERSC is down, so it's undocumented and 
-    # will need changes later. Managing a server running with jobflows turning on and off needs
-    # more thought.
-    start_wo_nersc = os.environ.get("KBCTS_START_WITHOUT_NERSC") == "true"
-    sfapi_client = None
-    jaws_client = None
-    try:
-        nscli = NERSCStatus()
-        logr.info("Getting NERSC status...")
-        ns = await nscli.status()
-        await nscli.close()
-        logr.info("Done")
-        if not ns.ok:
-            desc = ns.perlmutter_description if ns.perlmutter_description else ns.dtns_description
-            if start_wo_nersc:
-                logr.info(
-                    f"NERSC is down, starting without job flow",
-                    extra={logfields.NERSC_STATUS: repr(ns)},
-                )
-                return None, None, None, desc
-            else:
-                raise ValueError(f"NERSC is down: {desc}")
-        logr.info("Initializing NERSC SFAPI client...")
-        sfapi_client = await NERSCSFAPIClientProvider.create(
-            Path(cfg.sfapi_cred_path), cfg.nersc_jaws_user
-        )
-        logr.info("Done")
-        logr.info("Setting up NERSC manager and installing code at NERSC...")
-        # TODO MULTICLUSTER service won't start if perlmutter is down, need to make it more dynamic
-        nerscman = await NERSCManager.create(
-            sfapi_client.get_client,
-            cfg.get_nersc_paths(),
-            cfg.get_jaws_config(),
-            service_group=cfg.service_group,
-        )
-        logr.info("Done")
-        logr.info("Initializing JAWS Central client... ")
-        jaws_client = await JAWSClient.create(cfg.get_jaws_config())
-        logr.info("Done")
-        return sfapi_client, jaws_client, nerscman, None
-    except Exception:
-        # May want to be smarter about this and return the sfapi client if it's available
-        # so the expiration time for the creds can be checked.
-        # Since this would only happen if the service is running for tests don't worry about it
-        # for now.
-        if jaws_client:
-            await jaws_client.close()
-        if sfapi_client:
-            await sfapi_client.destroy()
-        if start_wo_nersc:
-            logr.exception(
-                "Failed to create NERSC job flow dependencies. Starting without job flow."
-            )
-            return None, None, None, "NERSC or JAWS is unavailable"
-        else:
-            raise
+        return None
+
+    jaws_job_flows = await JAWSFlowProvider.create(
+        Path(cfg.sfapi_cred_path),
+        cfg.get_nersc_paths(),
+        cfg.get_jaws_config(),
+        mongodao,
+        s3config,
+        kafka_notifier,
+        coman,
+        cfg.service_group,
+        cfg.service_root_url
+    )
+    flowman.register_flow(NERSCJAWSRunner.CLUSTER, jaws_job_flows.get_nersc_job_flow)
+    flowman.register_flow(LawrenciumJAWSRunner.CLUSTER, jaws_job_flows.get_lrc_job_flow)
+    return jaws_job_flows
 
 
 def get_app_state(r: Request) -> AppState:
@@ -310,13 +243,10 @@ async def destroy_app_state(app: FastAPI):
     """
     Destroy the application state, shutting down services and releasing resources.
     """
-    appstate = _get_app_state_from_app(app)  # first to check state was set up
     app.state._mongo.close()
     app.state._coroman.destroy()
-    if appstate.sfapi_client:
-        await appstate.sfapi_client.destroy()
-    if app.state._jaws_cli:
-        await app.state._jaws_cli.close()
+    if app.state._jaws_provider:
+        await app.state._jaws_provider.close()
     if app.state._kafka:
         # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
         await asyncio.wait_for(app.state._kafka.close(), 10)

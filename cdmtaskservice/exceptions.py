@@ -26,5 +26,17 @@ class UnauthorizedError(Exception):
 class InvalidAuthHeaderError(Exception):
     """ An error thrown when an authorization header is invalid. """
 
+
 class InvalidUserError(Exception):
     """ An error thrown when a provided user identifier is invalid. """
+
+
+class UnavailableResourceError(Exception):
+    """ An error thrown when a resouce is unavailable. """
+
+
+class UnavailableJobFlowError(Exception):
+    """
+    An error thrown when a job flow cannot be used due to unavailable resources or
+    startup errors.
+    """

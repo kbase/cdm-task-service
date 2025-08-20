@@ -713,9 +713,7 @@ async def get_nersc_client_info(
     user: CTSUser=Depends(_AUTH)
 ) -> NERSCClientInfo:
     _ensure_admin(user, "Only service administrators may view NERSC client information.")
-    nersc_cli = app_state.get_app_state(r).sfapi_client
-    if not nersc_cli:
-        raise ValueError("NERSC is currently unavailable")
+    nersc_cli = app_state.get_app_state(r).sfapi_client_provider()
     expires = nersc_cli.expiration()
     expires_in = expires - utcdatetime()
     if require_lifetime and expires_in < require_lifetime:

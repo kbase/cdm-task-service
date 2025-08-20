@@ -89,7 +89,7 @@ class NERSCJAWSRunner(JobFlow):
         jaws_client - a JAWS Central client.
         mongodao - the Mongo DAO object.
         s3config - the S3 configuration.
-        kafka - a kafka notifier.
+        kafka - a Kafka notifier.
         coro_manager - a coroutine manager.
         service_root_url - the URL of the service root, used for constructing service callbacks.
         on_refdata_complete - an optional async function that will be called when refdata
