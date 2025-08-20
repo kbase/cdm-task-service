@@ -11,7 +11,8 @@ from enum import Enum
 import logging
 from typing import Any
 
-from cdmtaskservice.arg_checkers import require_string as _require_string
+from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
+from cdmtaskservice.jaws.config import JAWSConfig
 
 
 class JAWSResult(Enum):
@@ -40,24 +41,20 @@ class JAWSClient:
     """ The JAWS client. """
     
     @classmethod
-    async def create(self, url: str, token: str, expected_user: str):
+    async def create(self, config: JAWSConfig):
         """
-        Initialize the client.
-        
-        url - the JAWS Central URL.
-        token - the JAWS token.
-        expected_user - the user for the token.
+        Initialize the client from a configuration.
         """
-        cli = JAWSClient(url, token)
+        cli = JAWSClient(_not_falsy(config, "config").url, config.token)
         try:
             user = await cli._user()  # test connection & token
         except Exception:
             await cli.close()
             raise
-        if user != expected_user:
+        if user != config.user:
             await cli.close()
             raise ValueError(
-                f"JAWS client expected user {expected_user} for token, but got {user}"
+                f"JAWS client expected user {config.user} for token, but got {user}"
             )
         logging.getLogger(__name__).info(f"Initialized JAWS client with user {user}")
         return cli

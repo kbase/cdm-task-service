@@ -81,6 +81,7 @@ class Refdata:
                 + f"'{s3_path}' does not match the actual checksum '{meta.crc64nvme}'"
             )
         statuses = []
+        # TDOO REFDATA if a cluster isn't available, need a way to start staging later
         clusters = self._flowman.list_clusters()
         for c in  clusters:
             statuses.append(models.ReferenceDataStatus(

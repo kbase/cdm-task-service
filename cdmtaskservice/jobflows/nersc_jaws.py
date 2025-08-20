@@ -30,10 +30,11 @@ from cdmtaskservice.exceptions import (
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
-from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
+from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
-from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, PresignedPost
+from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
+from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.update_state import (
     submitted_nersc_download,
@@ -75,13 +76,10 @@ class NERSCJAWSRunner(JobFlow):
         nersc_manager: NERSCManager,
         jaws_client: jaws_client.JAWSClient,
         mongodao: MongoDAO,
-        s3_client: S3Client,
-        s3_external_client: S3Client,
-        container_s3_log_dir: str,
+        s3config: S3Config,
         kafka: KafkaNotifier, 
         coro_manager: CoroutineWrangler,
         service_root_url: str,
-        s3_insecure_ssl: bool = False,
         on_refdata_complete: Callable[[models.ReferenceData], Awaitable[None]] = None,
     ):
         """
@@ -90,26 +88,20 @@ class NERSCJAWSRunner(JobFlow):
         nersc_manager - the NERSC manager.
         jaws_client - a JAWS Central client.
         mongodao - the Mongo DAO object.
-        s3_client - an S3 client pointed to the data stores.
-        s3_external_client - an S3 client pointing to an external URL for the S3 data stores
-            that may not be accessible from the current process, but is accessible to remote
-            processes at NERSC.
-        container_s3_log_dir - where to store container logs in S3.
+        s3config - the S3 configuration.
         kafka - a kafka notifier.
         coro_manager - a coroutine manager.
         service_root_url - the URL of the service root, used for constructing service callbacks.
-        s3_insecure_url - whether to skip checking the SSL certificate for the S3 instance,
-            leaving the service open to MITM attacks.
         on_refdata_complete - an optional async function that will be called when refdata
             has completed staging at NERSC. Takes a refdata object as an argument.
         """
         self._nman = _not_falsy(nersc_manager, "nersc_manager")
         self._jaws = _not_falsy(jaws_client, "jaws_client")
         self._mongo = _not_falsy(mongodao, "mongodao")
-        self._s3 = _not_falsy(s3_client, "s3_client")
-        self._s3ext = _not_falsy(s3_external_client, "s3_external_client")
-        self._s3insecure = s3_insecure_ssl
-        self._s3logdir = _require_string(container_s3_log_dir, "container_s3_log_dir")
+        self._s3 = _not_falsy(s3config, "s3config").client
+        self._s3ext = s3config.external_client
+        self._s3insecure = s3config.insecure
+        self._s3logdir = s3config.error_log_path
         self._kafka = _not_falsy(kafka, "kafka")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")

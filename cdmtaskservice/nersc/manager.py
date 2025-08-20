@@ -29,6 +29,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
 )
 from cdmtaskservice.jaws import wdl
+from cdmtaskservice.jaws.config import JAWSConfig
 from cdmtaskservice.jaws.remote import get_filenames_for_container, ERRORS_JSON_FILE
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
@@ -200,9 +201,7 @@ class NERSCManager:
         cls,
         client_provider: Callable[[], AsyncClient],
         nersc_paths: NERSCPaths,
-        nersc_jaws_user: str,
-        jaws_token: str,
-        jaws_group: str,
+        jaws_config: JAWSConfig,
         service_group: str = "dev",
     ) -> Self:
         """
@@ -211,20 +210,16 @@ class NERSCManager:
         client_provider - a function that provides a valid SFAPI client. It is assumed that
             the user associated with the client does not change.
         nersc_paths - the set of paths for NERSC manager use.
-        nersc_jaws_user - the NERSC username of the user associated with the jaws token.
-            This is typically a collaboration account.
-        jaws_token - a token for the JGI JAWS system.
-        jaws_group - the group to use for running JAWS jobs.
+        jaws_config - configuration for communicating with the JAWS job runner at NERSC. The JAWS
+            username is expected to be a NERSC user and the same user as for the client provider.
+            It is typically a collaboration account.
         service_group - The service group to which this instance of the manager belongs.
             This is used to separate files at NERSC so files from different S3 instances
             (say production and development) don't collide.
         """
-        nm = NERSCManager(client_provider, nersc_paths, nersc_jaws_user, service_group)
-        await nm._setup_remote_code(
-            nersc_paths,
-            _require_string(jaws_token, "jaws_token"),
-            _require_string(jaws_group, "jaws_group"),
-        )
+        _not_falsy(jaws_config, "jaws_config")
+        nm = NERSCManager(client_provider, nersc_paths, jaws_config.user, service_group)
+        await nm._setup_remote_code(nersc_paths, jaws_config.token, jaws_config.group)
         return nm
         
     def __init__(
