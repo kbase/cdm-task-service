@@ -156,7 +156,7 @@ class Sites(BaseModel):
 )
 async def get_sites(r: Request) -> Sites:
     ret = []
-    clusters = app_state.get_app_state(r).jobflow_manager.list_clusters()
+    clusters = await app_state.get_app_state(r).jobflow_manager.list_clusters()
     for cl, site in sites.CLUSTER_TO_SITE.items():
         ret.append(Site(
             available=cl in clusters,
@@ -568,7 +568,7 @@ async def get_job_runner_status(
     _ensure_admin(user, "Only service administrators can get job runner status.")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow = appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
     return await flow.get_job_external_runner_status(job)
 
 
@@ -630,7 +630,7 @@ async def clean_job(
     _ensure_admin(user, "Only service administrators can clean jobs.")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow = appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
     await flow.clean_job(job, force=force)
 
 
@@ -676,7 +676,7 @@ async def clean_refdata(
     _ensure_admin(user, "Only service administrators can clean jobs.")
     appstate = app_state.get_app_state(r)
     refdata = await appstate.refdata.get_refdata_by_id(refdata_id, as_admin=True)
-    flow = appstate.jobflow_manager.get_flow(cluster)
+    flow = await appstate.jobflow_manager.get_flow(cluster)
     await flow.clean_refdata(refdata, force=force)
 
 
@@ -823,7 +823,7 @@ async def refdata_download_complete(
         f"Download reported as complete for refdata {refdata_id} on cluster {cluster.value}",
         extra={logfields.REFDATA_ID: refdata_id, logfields.CLUSTER: cluster.value},
     )
-    runner = app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
+    runner = await app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
     await runner.refdata_complete(refdata_id)
 
 
@@ -884,7 +884,7 @@ async def _callback_handling(
     )
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, SERVICE_USER, as_admin=True)
-    return appstate.jobflow_manager.get_flow(job.job_input.cluster), job
+    return await appstate.jobflow_manager.get_flow(job.job_input.cluster), job
 
 
 class ClientLifeTimeError(Exception):

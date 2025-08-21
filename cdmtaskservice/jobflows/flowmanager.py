@@ -2,12 +2,13 @@
 Handles what job flows are available to users and their current state.
 """
 
-from typing import Callable
+from typing import Awaitable, Callable
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.exceptions import UnavailableJobFlowError
 from cdmtaskservice import sites
 from dataclasses import dataclass
+import asyncio
 
 # Currently this isn't too useful since there's only one job flow, so if it's not available
 # the service might as well not start up.
@@ -39,7 +40,9 @@ class JobFlowManager():
         """ Create the job flow manager """
         self._flows = {}
         
-    def register_flow(self, cluster: sites.Cluster, flow_provider: Callable[[], JobFlowOrError]):
+    def register_flow(
+            self, cluster: sites.Cluster, flow_provider: Callable[[], Awaitable[JobFlowOrError]]
+        ):
         """
         Add a job flow provider to the manager.
         
@@ -49,7 +52,7 @@ class JobFlowManager():
         """
         self._flows[_not_falsy(cluster, "cluster")] = _not_falsy(flow_provider, "flow_provider")
         
-    def get_flow(self, cluster: sites.Cluster) -> JobFlow:
+    async def get_flow(self, cluster: sites.Cluster) -> JobFlow:
         """
         Get a job flow for a cluster.
         
@@ -57,7 +60,7 @@ class JobFlowManager():
         """
         # TODO DYNAMICFLOWS check DB to see if a flow has been marked inactive
         if _not_falsy(cluster, "cluster") in self._flows:
-            floworerr = self._flows[cluster]()
+            floworerr = await self._flows[cluster]()
             if floworerr.error:
                 raise UnavailableJobFlowError(
                     f"Job flow for cluster {cluster.value} is unavailable: {floworerr.error}"
@@ -66,10 +69,14 @@ class JobFlowManager():
         else:
             raise ValueError(f"Job flow for cluster {cluster.value} is not registered")
     
-    def list_clusters(self) -> set[sites.Cluster]:
+    async def list_clusters(self) -> set[sites.Cluster]:
         """ List the clusters with active job flows in this manager. """
         # TODO DYNAMICFLOWS check DB to see if a flow has been marked inactive
-        return [cluster for cluster, func in self._flows.items() if func().jobflow]
+        results = {}
+        async with asyncio.TaskGroup() as tg:
+            for cluster, func in self._flows.items():
+                results[cluster] = tg.create_task(func())
+        return {cl for cl, res in results.items() if res.result().jobflow}
 
 
 class InactiveJobFlowError(Exception):

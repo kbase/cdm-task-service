@@ -82,7 +82,7 @@ class Refdata:
             )
         statuses = []
         # TDOO REFDATA if a cluster isn't available, need a way to start staging later
-        clusters = self._flowman.list_clusters()
+        clusters = await self._flowman.list_clusters()
         for c in  clusters:
             statuses.append(models.ReferenceDataStatus(
                 cluster=c,
@@ -107,7 +107,7 @@ class Refdata:
         await self._mongo.save_refdata(rd)
         for c in clusters:
             # theoretically a race condition here but not much we can do about it
-            flow = self._flowman.get_flow(c)
+            flow = await self._flowman.get_flow(c)
             # Pass in the meta to avoid potential race conditions w/ etag changes
             await self._coman.run_coroutine(flow.stage_refdata(rd, meta))
         return rd
