@@ -50,7 +50,11 @@ class KafkaNotifier:
             acks='all',
         )
         # this will fail if it can't connect
-        await kp.start()
+        try:
+            await kp.start()
+        except Exception:
+            await kp.stop()
+            raise
         kn._prod = kp
         return kn
         
