@@ -14,6 +14,8 @@ from cdmtaskservice.exceptions import (
     InvalidReferenceDataStateError,
     InvalidUserError,
     UnauthorizedError,
+    UnavailableJobFlowError,
+    UnavailableResourceError,
 )
 from cdmtaskservice.http_bearer import MissingTokenError
 from cdmtaskservice.images import NoEntrypointError
@@ -76,7 +78,9 @@ _ERR_MAP = {
     ReferenceDataExistsError: ErrorMapping(ErrorType.REFDATA_EXISTS, _H400),
     InvalidJobStateError: ErrorMapping(ErrorType.INVALID_JOB_STATE, _H400),
     InvalidReferenceDataStateError: ErrorMapping(ErrorType.INVALID_REFDATA_STATE, _H400),
+    UnavailableResourceError: ErrorMapping(ErrorType.RESOURCE_UNAVAILABLE, _H400),
     InactiveJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_INACTIVE, _H400),
+    UnavailableJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_UNAVAILABLE, _H400),
     IllegalParameterError: ErrorMapping(ErrorType.ILLEGAL_PARAMETER, _H400),
 }
 
