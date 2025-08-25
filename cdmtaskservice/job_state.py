@@ -110,7 +110,7 @@ class JobState:
         )
         if not self._test_mode:
             # check the flow is available before we make any changes
-            flow = self._flowman.get_flow(job_input.cluster)
+            flow = await self._flowman.get_flow(job_input.cluster)
             # TODO SECURITY this needs to be moved to job flow providers when they exist, so
             #               it can be checked if the job flow doesn't exist
             flow.precheck(user, job_input)

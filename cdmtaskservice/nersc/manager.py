@@ -31,6 +31,7 @@ from cdmtaskservice.arg_checkers import (
 from cdmtaskservice.jaws import wdl
 from cdmtaskservice.jaws.config import JAWSConfig
 from cdmtaskservice.jaws.remote import get_filenames_for_container, ERRORS_JSON_FILE
+from cdmtaskservice.jaws.sitemapper import get_jaws_site
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
 from cdmtaskservice.nersc.paths import NERSCPaths
@@ -47,14 +48,6 @@ from cdmtaskservice.s3.remote import get_cache_path
 #              actually this is impossible to do safely - could be a different cluster of
 #              servers on a different version. Note in admin docs that old unused installs
 #              can be deleted. Server code is tiny anyway
-
-_CLUSTER_TO_JAWS_SITE = {
-    # It seems very unlikely, but we may need to add other JAWS sites for groups other than kbase
-    # If we do that the perlmutter-jaws name is unfortunate since there are multiple virtual
-    # sites there
-    sites.Cluster.PERLMUTTER_JAWS: "kbase",  # what would they call a site actually at kbase...?
-    sites.Cluster.LAWRENCIUM_JAWS: "jgi",  # historical name
-}
 
 _DT_TARGET = Machine.dtns
 # TODO NERSCUPDATE delete the following line when DTN downloads work normally.
@@ -343,7 +336,7 @@ class NERSCManager:
     
     def _get_refdata_file_complete_path(self, refdata_id, site: sites.Cluster) -> Path:
         # the file path that JAWS writes when refdata transfer to a site is complete
-        site = _CLUSTER_TO_JAWS_SITE[site]
+        site = get_jaws_site(site)
         return (
             self._refdata_root / "log" /
             (
@@ -691,9 +684,7 @@ class NERSCManager:
         _check_num(file_download_concurrency, "file_download_concurrency")
         if not _not_falsy(job, "job").job_input.inputs_are_S3File():
             raise ValueError("Job files must be S3File objects")
-        # getting a key error here is a programming error, but do it before pushing stuff to
-        # NERSC just in case
-        site = _CLUSTER_TO_JAWS_SITE[job.job_input.cluster]
+        site = get_jaws_site(job.job_input.cluster)
         cli = self._client_provider()
         await self._generate_and_load_job_files_to_nersc(cli, job, file_download_concurrency)
         perl = await cli.compute(Machine.perlmutter)
@@ -932,7 +923,8 @@ class NERSCManager:
         payload = {
             "path_condition": {
                 "path": str(self._get_refdata_file_complete_path(refdata.id, site)), 
-                "machine": Machine.dtns.value}, 
+                "machine": Machine.dtns.value
+            }, 
             "url": cb_url,
             # seconds. Assume that refdata transfers take less than a day. Make configurable?
             "timeout": 24 * 60 * 60,

@@ -107,6 +107,13 @@ class JAWSClient:
         res["updated"] = _add_tz(res["updated"])
         return res
     
+    async def is_site_up(self, site: str) -> bool:
+        """ Check whether a JAWS site is up. """
+        res = await self._get(f"status/{_require_string(site, 'site')}")
+        if res[f"{site}-Site"] == "UNKNOWN SITE":
+            raise ValueError(f"No such JAWS site: {site}") 
+        return all(v == "UP" for v in res.values())
+    
     async def cancel(self, run_id: str) -> dict[str, Any]:
         """ Cancel a job. """
         try:

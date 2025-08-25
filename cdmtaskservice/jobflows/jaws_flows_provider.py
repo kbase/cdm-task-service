@@ -2,6 +2,7 @@
 Manages initialization of JAWS based job flows 
 """
 import asyncio
+from async_lru import alru_cache
 from dataclasses import dataclass
 import logging
 from pathlib import Path
@@ -12,6 +13,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import UnavailableResourceError
 from cdmtaskservice.jaws.client import JAWSClient
 from cdmtaskservice.jaws.config import JAWSConfig
+from cdmtaskservice.jaws.sitemapper import get_jaws_site
 from cdmtaskservice.jobflows.flowmanager import JobFlowOrError
 from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
@@ -22,6 +24,7 @@ from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.nersc.paths import NERSCPaths
 from cdmtaskservice.nersc.status import NERSCStatus
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
+from cdmtaskservice import sites
 
 
 # This is going to be a nightmare to write tests for
@@ -159,7 +162,12 @@ class JAWSFlowProvider:
             raise UnavailableResourceError(err)
         return self._sfapi_client
 
-    def get_nersc_job_flow(self) -> JobFlowOrError:
+    @alru_cache(maxsize=10, ttl=30)
+    async def _is_site_available(self, site: sites.Cluster) -> bool:
+        site = get_jaws_site(site)
+        return await self._build_state.jaws_client.is_site_up(site)
+
+    async def get_nersc_job_flow(self) -> JobFlowOrError:
         """
         Get the NERSC / Perlmutter job flow manager.
         
@@ -171,10 +179,11 @@ class JAWSFlowProvider:
         err = self._check_build()
         if err:
             return JobFlowOrError(error=err)
-        # TODO NEXT check jaws client for kbase site availability (map from cluster)
+        if not await self._is_site_available(NERSCJAWSRunner.CLUSTER):
+            return JobFlowOrError(error="JAWS is not available")
         return JobFlowOrError(jobflow=self._build_state.nersc_flow)
     
-    def get_lrc_job_flow(self) -> (str, LawrenciumJAWSRunner):
+    async def get_lrc_job_flow(self) -> (str, LawrenciumJAWSRunner):
         """
         Get the Lawrencium job flow manager.
         
@@ -185,7 +194,8 @@ class JAWSFlowProvider:
         err = self._check_build()
         if err:
             return JobFlowOrError(error=err)
-        # TODO NEXT check jaws client for jgi site availability (map from cluster)
+        if not await self._is_site_available(LawrenciumJAWSRunner.CLUSTER):
+            return JobFlowOrError(error="JAWS is not available")
         return JobFlowOrError(jobflow=self._build_state.lrc_flow)
 
     # TODO NERSCSTART could maybe make this automatic vs lazy in the future. Would need to be
@@ -275,6 +285,7 @@ class JAWSFlowProvider:
         except Exception as e:
             if jaws_client:
                 await jaws_client.close()
+            # may want to record this and add a way for admins to get it via the API vs. just logs
             self._logr.exception(f"Failed to initialize NERSC dependencies: {e}:")
             return _BuildResult(
                 error="NERSC manager startup failed",

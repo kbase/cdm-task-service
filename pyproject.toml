@@ -8,6 +8,7 @@ dependencies = [
     "aiobotocore>=2.22.0",
     "aiohttp>=3.12.9",
     "aiokafka>=0.12.0",
+    "async-lru==2.0.5",
     "awscrt>=0.27.2",
     "bidict>=0.23.1",
     "cacheout>=0.16.0",
