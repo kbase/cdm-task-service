@@ -59,17 +59,22 @@ _BASEJOB = models.AdminJobDetails(
 async def test_indexes(mongo, mondb):
     await MongoDAO.create(mondb)
     cols = mongo.client[MONGO_TEST_DB].list_collection_names()
-    assert set(cols) == {"jobs", "refdata", "images"}
+    assert set(cols) == {"jobs", "refdata", "images", "sites"}
     jobindex = mongo.client[MONGO_TEST_DB]["jobs"].index_information()
+    siteindex = mongo.client[MONGO_TEST_DB]["sites"].index_information()
+    assert siteindex == {
+        "_id_": {"v": 2, "key": [("_id", 1)]},
+        "site_1": {"v": 2, "key": [("site", 1)], "unique": True}
+    }
     assert jobindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
-        '_update_time_-1': {'key': [('_update_time', -1)], 'v': 2},
-        'user_1__update_time_-1': {'key': [('user', 1), ('_update_time', -1)], 'v': 2},
-        'state_1__update_time_-1': {'v': 2, 'key': [('state', 1), ('_update_time', -1)]},
-        'user_1_state_1__update_time_-1': {
-            'v': 2,
-            'key': [('user', 1), ('state', 1), ('_update_time', -1)]
+        "_update_time_-1": {"key": [("_update_time", -1)], "v": 2},
+        "user_1__update_time_-1": {"key": [("user", 1), ("_update_time", -1)], "v": 2},
+        "state_1__update_time_-1": {"v": 2, "key": [("state", 1), ("_update_time", -1)]},
+        "user_1_state_1__update_time_-1": {
+            "v": 2,
+            "key": [("user", 1), ("state", 1), ("_update_time", -1)]
         },
         "transition_times.time_-1": {
             "v": 2,

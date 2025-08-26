@@ -17,6 +17,7 @@ from typing import NamedTuple, Callable
 
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
+from cdmtaskservice.exceptions import UnavailableResourceError
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
 from cdmtaskservice.kb_auth import KBaseAuth
@@ -33,9 +34,9 @@ from cdmtaskservice.notifications.kafka_checker import KafkaChecker
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
+from cdmtaskservice import sites
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSAuth, CTSUser
-from cdmtaskservice.exceptions import UnavailableResourceError
 
 # The main point of this module is to handle all the application state in one place
 # to keep it consistent and allow for refactoring without breaking other code
@@ -100,7 +101,6 @@ async def build_app(
     if test_mode:
         logr.info("KBCTS_TEST_MODE env var is 'true', will not submit jobs for processing")
     # check that the path is a valid path
-    flowman = JobFlowManager()
     coman = CoroutineWrangler()
     logr.info("Connecting to KBase auth service... ")
     auth = CTSAuth(
@@ -137,11 +137,13 @@ async def build_app(
         mongocli = await get_mongo_client(cfg)
         logr.info("Done")
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
+        await mongodao.initialize_sites(list(sites.Cluster))
         logr.info("Initializing Kafka client...")
         kafka_notifier = await KafkaNotifier.create(
             cfg.kafka_boostrap_servers, cfg.kafka_topic_jobs
         )
         logr.info("Done")
+        flowman = JobFlowManager(mongodao)
         jaws_job_flows = await _register_nersc_job_flows(
             logr, cfg, flowman, mongodao, s3config, kafka_notifier, coman
         )

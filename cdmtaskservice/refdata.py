@@ -82,7 +82,7 @@ class Refdata:
             )
         statuses = []
         # TDOO REFDATA if a cluster isn't available, need a way to start staging later
-        clusters = await self._flowman.list_clusters()
+        clusters = await self._flowman.list_usable_clusters()
         for c in  clusters:
             statuses.append(models.ReferenceDataStatus(
                 cluster=c,
