@@ -137,8 +137,15 @@ async def whoami(r: Request, user: CTSUser=Depends(_AUTH)) -> WhoAmI:
 
 
 class Site(sites.ComputeSite):
-    """ Information about a remote compute site and its status. """
+    """
+    Information about a remote compute site and its status.
     
+    For a site to be usable, it must be both active and available.
+    """
+    
+    active: Annotated[bool, Field(
+        description="Whether the compute site has been set to active by a service admin."
+    )]
     available: Annotated[bool, Field(description="Whether the compute site is available.")]
 
 
@@ -152,14 +159,17 @@ class Sites(BaseModel):
     "/sites/",
     response_model=Sites,
     summary="Available compute sites",
-    description="Information about the site available for running jobs."
+    description="Information about the sites available for running jobs."
 )
 async def get_sites(r: Request) -> Sites:
     ret = []
-    clusters = await app_state.get_app_state(r).jobflow_manager.list_clusters()
+    jfm = app_state.get_app_state(r).jobflow_manager
+    active = await jfm.list_active_clusters()
+    avail = await jfm.list_available_clusters()
     for cl, site in sites.CLUSTER_TO_SITE.items():
         ret.append(Site(
-            available=cl in clusters,
+            active=cl in active,
+            available=cl in avail,
             **site.model_dump()
         ))
     return Sites(sites=ret)
@@ -443,7 +453,7 @@ async def approve_image(
     summary="Delete an image",
     description="Delete a Docker image, making it no longer usable with this service. "
         + "If a digest and tag are provided the tag is ignored.",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
 async def delete_image(
@@ -595,7 +605,7 @@ class UpdateAdminMeta(BaseModel):
     summary="Update a job's admin metadata",
     description="Update the job's administrative metadata. Any extant metadata keys not included "
         + "in the request are unaffected. The job's owner can view the metadata.",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
 )
 async def update_job_admin_meta(
     r: Request,
@@ -612,7 +622,7 @@ async def update_job_admin_meta(
 
 @ROUTER_ADMIN.delete(
     "/jobs/{job_id}/clean",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Clean up after a job",
     description="Remove any job related files managed by this service at the remote compute site. "
@@ -654,7 +664,7 @@ async def get_refdata_admin(
 
 @ROUTER_ADMIN.delete(
     "/refdata/{refdata_id}/{cluster}/clean",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Clean up refdata staging files",
     description="Remove refdata staging related files managed by this service at the remote "
@@ -678,6 +688,42 @@ async def clean_refdata(
     refdata = await appstate.refdata.get_refdata_by_id(refdata_id, as_admin=True)
     flow = await appstate.jobflow_manager.get_flow(cluster)
     await flow.clean_refdata(refdata, force=force)
+
+
+@ROUTER_ADMIN.put(
+    "/sites/{site}/active",
+    summary="Activate a site",
+    description="Set a site to active, allowing submission of jobs and other activities "
+        + "that require accessing external site resources.",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def set_site_active(
+    r: Request,
+    site: Annotated[sites.Cluster, FastPath(description="The site to modify")],
+    user: CTSUser=Depends(_AUTH)
+):
+    _ensure_admin(user, "Only service administrators may alter sites.")
+    flowman = app_state.get_app_state(r).jobflow_manager
+    await flowman.set_site_active(site)
+
+
+@ROUTER_ADMIN.delete(
+    "/sites/{site}/active",
+    summary="Deactivate a site",
+    description="Set a site to inactive, disallowing submission of jobs and other activities "
+        + "that require accessing external site resources.",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def set_site_inactive(
+    r: Request,
+    site: Annotated[sites.Cluster, FastPath(description="The site to modify")],
+    user: CTSUser=Depends(_AUTH)
+):
+    _ensure_admin(user, "Only service administrators may alter sites.")
+    flowman = app_state.get_app_state(r).jobflow_manager
+    await flowman.set_site_inactive(site)
 
 
 class NERSCClientInfo(BaseModel):
@@ -793,7 +839,7 @@ async def handle_unsent_notifications(
     summary="Report data download complete",
     description="Report that data download for a job is complete. This method is not expected "
         + "to be called by users.",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
 async def download_complete(
@@ -809,7 +855,7 @@ async def download_complete(
     summary="Report refdata data download complete",
     description="Report that data download for refdata is complete. This method is not expected "
         + "to be called by users.",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
 async def refdata_download_complete(
@@ -832,7 +878,7 @@ async def refdata_download_complete(
     summary="Report job complete",
     description="Report a remote job is complete. This method is not expected "
         + "to be called by users.",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
 async def job_complete(
@@ -848,7 +894,7 @@ async def job_complete(
     summary="Report data upload complete",
     description="Report that data upload for a job is complete. This method is not expected "
         + "to be called by users.",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
 async def upload_complete(
@@ -864,7 +910,7 @@ async def upload_complete(
     summary="Report error log file upload complete",
     description="Report that log file upload for a job in an errored state is complete. "
         + "This method is not expected to be called by users.",
-    status_code = status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
 async def error_log_upload_complete(

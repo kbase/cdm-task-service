@@ -916,7 +916,7 @@ class NERSCManager:
         #      remove this hack and use the provided client (possibly using the bare POST method
         #      as below if there isn't a specific callback method).
         _not_falsy(refdata, "refdata")
-        _not_falsy(site, "site")  # TODO CODE better error than keyerror. Programming err though
+        _not_falsy(site, "site")
         cb_url = _require_string(callback_url, "callback_url")
         token = await self._client_provider().token  # will expire in a few minutes
         sfcli = AsyncClient(api_base_url="https://api.nersc.gov/api/beta", access_token=token)
@@ -944,7 +944,7 @@ class NERSCManager:
         site - the remote site that's the target of the transfer
         """
         _not_falsy(refdata, "refdata")
-        _not_falsy(site, "site")  # TODO CODE better error than keyerror. Programming err though
+        _not_falsy(site, "site")
         # similar to _get_transfer_result, but not similar enough to warrant DRYing things up
         path = self._get_refdata_file_complete_path(refdata.id, site)
         res = await self._download_json_file_from_NERSC(

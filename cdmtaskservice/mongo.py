@@ -9,7 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import IndexModel, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 from pymongo.results import DeleteResult
-from typing import Any, Awaitable, Callable, Coroutine
+from typing import Any, Awaitable, Callable, Coroutine, Iterable
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
@@ -53,6 +53,7 @@ class MongoDAO:
         if db is None:  # dbs don't work as a bool
             raise ValueError("db is required")
         self._db = db
+        self._col_sites = self._db.sites
         self._col_images = self._db.images
         self._col_jobs = self._db.jobs
         self._col_refdata = self._db.refdata
@@ -61,6 +62,8 @@ class MongoDAO:
     async def _create_indexes(self):
         # Tested that trying to create a unique index on a key that is not unique within documents
         # in the collection causes an error to be thrown 
+        
+        await self._col_sites.create_indexes([IndexModel([("site", ASCENDING)], unique=True)])
         
         # NOTE that since there's two unique indexes means this collection can't be sharded
         # but it's likely to be very small so shouldn't be an issue
@@ -105,6 +108,47 @@ class MongoDAO:
             # Non unique as files can be overwritten
             IndexModel([(models.FLD_REFDATA_FILE, ASCENDING)]),
         ])
+
+    async def initialize_sites(self, sites: Iterable[sites.Cluster]):
+        """
+        Add sites to the database only if they don't already exist,
+        and set them to active. Existing site states are left unchanged.
+        """
+        # Few sites, no need to parallelize
+        for site in _not_falsy(sites, "sites"):
+            _not_falsy(site, "site")
+            await self._col_sites.update_one(
+                {"site": site.value},
+                {"$setOnInsert": {"site": site.value, "active": True}},
+                upsert=True,
+            )
+
+    async def set_site_active(self, site: sites.Cluster):
+        """
+        Set a site to an active state.
+        """
+        await self._set_site_state(site, True)
+        
+    async def set_site_inactive(self, site: sites.Cluster):
+        """
+        Set a site to an inactive state.
+        """
+        await self._set_site_state(site, False)
+        
+    async def _set_site_state(self, site: sites.Cluster, active: bool):
+        await self._col_sites.update_one(
+            {"site": _not_falsy(site, "site").value},
+            {"$set": {"active": active}},
+            upsert=True,
+        )
+
+    async def list_active_clusters(self) -> set[sites.Cluster]:
+        """
+        Returns the currently active sites.
+        """
+        # don't bother with an index on active, not going to be that many sites
+        cursor = self._col_sites.find({"active": True}, {"site": 1})
+        return {sites.Cluster(doc["site"]) async for doc in cursor}
 
     async def save_image(self, image: models.Image):
         """

@@ -2,13 +2,15 @@
 Handles what job flows are available to users and their current state.
 """
 
+import asyncio
+from async_lru import alru_cache
+from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.exceptions import UnavailableJobFlowError
+from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice import sites
-from dataclasses import dataclass
-import asyncio
 
 # Currently this isn't too useful since there's only one job flow, so if it's not available
 # the service might as well not start up.
@@ -36,10 +38,11 @@ class JobFlowOrError():
 
 class JobFlowManager():
     
-    def __init__(self):
-        """ Create the job flow manager """
+    def __init__(self, mongodao: MongoDAO):
+        """ Create the job flow manager with a mongo client. """
+        self._mongo = _not_falsy(mongodao, "mongodao")
         self._flows = {}
-        
+
     def register_flow(
             self, cluster: sites.Cluster, flow_provider: Callable[[], Awaitable[JobFlowOrError]]
         ):
@@ -58,8 +61,9 @@ class JobFlowManager():
         
         Throws an error if the flow is inactive or unavailable.
         """
-        # TODO DYNAMICFLOWS check DB to see if a flow has been marked inactive
         if _not_falsy(cluster, "cluster") in self._flows:
+            if cluster not in await self.list_active_clusters():
+                raise InactiveJobFlowError(f"Job flow for cluster {cluster.value} is disabled")
             floworerr = await self._flows[cluster]()
             if floworerr.error:
                 raise UnavailableJobFlowError(
@@ -69,15 +73,44 @@ class JobFlowManager():
         else:
             raise ValueError(f"Job flow for cluster {cluster.value} is not registered")
     
-    async def list_clusters(self) -> set[sites.Cluster]:
-        """ List the clusters with active job flows in this manager. """
-        # TODO DYNAMICFLOWS check DB to see if a flow has been marked inactive
+    async def list_available_clusters(self) -> set[sites.Cluster]:
+        """
+        List the clusters with available job flows in this manager.
+        
+        Returns all available clusters, active or not.
+        """
         results = {}
         async with asyncio.TaskGroup() as tg:
             for cluster, func in self._flows.items():
                 results[cluster] = tg.create_task(func())
         return {cl for cl, res in results.items() if res.result().jobflow}
 
+    @alru_cache(maxsize=10, ttl=10)
+    async def list_active_clusters(self) -> set[sites.Cluster]:
+        """
+        Get a list of all sites set to active.
+        
+        Returns all active clusters, available or not.
+        """
+        return await self._mongo.list_active_clusters()
+
+    async def list_usable_clusters(self) -> set[sites.Cluster]:
+        """
+        Get a list of all usable sites, meaning they're availble and active.
+        """
+        return await self.list_active_clusters() & await self.list_available_clusters()
+
+    async def set_site_active(self, cluster: sites.Cluster):
+        """"
+        Set a site to active.
+        """
+        await self._mongo.set_site_active(_not_falsy(cluster, "cluster"))
+
+    async def set_site_inactive(self, cluster: sites.Cluster):
+        """"
+        Set a site to inactive.
+        """
+        await self._mongo.set_site_inactive(_not_falsy(cluster, "cluster"))
 
 class InactiveJobFlowError(Exception):
     """ Thrown when an inactive job flow is requested. """ 
