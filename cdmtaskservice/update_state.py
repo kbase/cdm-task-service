@@ -107,6 +107,16 @@ class RefdataUpdate(Update[models.ReferenceDataState]):
     """ An update for a refdata staging process. """
 
 
+def submitted_download() -> JobUpdate:
+    """
+    Update a job's state from created to download submitted.
+    """
+    return JobUpdate(
+        )._set_current_state(models.JobState.CREATED
+        )._set_new_state(models.JobState.DOWNLOAD_SUBMITTED
+    )
+
+
 def submitted_nersc_download(task_id: str) -> JobUpdate:
     """
     Update a job's state from created to download submitted and add a NERSC

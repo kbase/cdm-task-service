@@ -84,7 +84,10 @@ class ErrorType(Enum):
     NO_SUCH_JOB =                (40040, "No such job")
     """ The job was not found in the system. """
     
-    NO_SUCH_REFDATA =            (40040, "No such reference data")
+    NO_SUCH_SUBJOB =             (40050, "No such sub job")
+    """ The sub job was not found in the system. """
+    
+    NO_SUCH_REFDATA =            (40060, "No such reference data")
     """ The reference data was not found in the system. """
 
     IMAGE_TAG_EXISTS =           (50000, "Image tag exists")

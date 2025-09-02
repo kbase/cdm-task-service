@@ -27,6 +27,7 @@ from cdmtaskservice.mongo import (
     NoSuchImageError,
     NoSuchJobError,
     NoSuchReferenceDataError,
+    NoSuchSubJobError,
     ReferenceDataExistsError,
 )
 from cdmtaskservice.routes import ClientLifeTimeError
@@ -74,6 +75,7 @@ _ERR_MAP = {
     ImageDigestExistsError: ErrorMapping(ErrorType.IMAGE_DIGEST_EXISTS, _H400),
     NoSuchImageError: ErrorMapping(ErrorType.NO_SUCH_IMAGE, _H404),
     NoSuchJobError: ErrorMapping(ErrorType.NO_SUCH_JOB, _H404),
+    NoSuchSubJobError: ErrorMapping(ErrorType.NO_SUCH_SUBJOB, _H404),
     NoSuchReferenceDataError: ErrorMapping(ErrorType.NO_SUCH_REFDATA, _H404),
     ReferenceDataExistsError: ErrorMapping(ErrorType.REFDATA_EXISTS, _H400),
     InvalidJobStateError: ErrorMapping(ErrorType.INVALID_JOB_STATE, _H400),

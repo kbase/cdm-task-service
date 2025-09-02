@@ -54,12 +54,13 @@ FLD_JOB_CPU_HOURS = "cpu_hours"
 FLD_JOB_OUTPUTS = "outputs"
 FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
 FLD_JOB_LOGPATH = "logpath"
+FLD_SUBJOB_ID = "sub_id"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
 FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
 # Fields that are shared between multiple models for consistency
-# Currently refdata & jobs
+# Currently refdata, jobs, and subjobs
 FLD_COMMON_ID = "id"
 FLD_COMMON_STATE = "state"
 FLD_COMMON_TRANS_TIMES = "transition_times"
@@ -801,21 +802,10 @@ class JobStateTransition(BaseModel):
     )]
 
 
-class JobStatus(BaseModel):
-    """
-    Minimal information about a job to determine the current state of the job, e.g. whether it's
-    complete, etc.
-    """
+class _JobBase(BaseModel):
     # This is an outgoing data structure only so we don't add validators
     id: Annotated[str, Field(
         description="An opaque, unique string that serves as the job's ID.",
-    )]
-    user: Annotated[str, Field(examples=["myuserid"], description="The user that ran the job.")]
-    admin_meta: Annotated[dict[str, str | int | float], Field(
-        default_factory=dict,
-        examples=[{"name": "Getrude", "children": 31619}],
-        description="Metadata for the job set by service administrators. This metadata is mutable "
-            + "and arbitrary from the point of view of the service."
     )]
     state: Annotated[JobState, Field(examples=[JobState.COMPLETE.value])]
     transition_times: Annotated[list[JobStateTransition], Field(
@@ -825,6 +815,42 @@ class JobStatus(BaseModel):
             {"state": JobState.JOB_SUBMITTING, "time": "2024-10-24T22:47:67Z"},
         ]],
         description="A list of job state transitions."
+    )]
+
+
+class SubJob(_JobBase):
+    """
+    Information about the state of a subjob that is running as part of a job. 
+    """
+    # This is an outgoing data structure only so we don't add validators
+    sub_id: Annotated[int, Field(
+        description="The ID of the subjob, identical to the container number."
+    )]
+    # could make error and admin error classes, seems like overkill
+    error: Annotated[str | None, Field(
+        examples=["The front fell off"],
+        description="A description of the error that occurred."
+    )] = None
+    admin_error: Annotated[str | None, Field(
+        examples=["The back fell off"],
+        description="A description of the error that occurred oriented towards service "
+            + "admins, potentially including more details."
+    )] = None
+    traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
+
+
+class JobStatus(_JobBase):
+    """
+    Minimal information about a job to determine the current state of the job, e.g. whether it's
+    complete, etc.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    user: Annotated[str, Field(examples=["myuserid"], description="The user that ran the job.")]
+    admin_meta: Annotated[dict[str, str | int | float], Field(
+        default_factory=dict,
+        examples=[{"name": "Getrude", "children": 31619}],
+        description="Metadata for the job set by service administrators. This metadata is mutable "
+            + "and arbitrary from the point of view of the service."
     )]
 
 
