@@ -1,13 +1,21 @@
 
 from bson.son import SON
 import datetime
+from pymongo.errors import BulkWriteError
 import pytest
-from typing import Coroutine, Callable
+from typing import Coroutine, Callable, Any
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
-from cdmtaskservice.mongo import MongoDAO, NoSuchJobError
-from cdmtaskservice.update_state import submitting_job, submitted_nersc_refdata_download
+from cdmtaskservice.mongo import MongoDAO, NoSuchJobError, NoSuchSubJobError
+from cdmtaskservice.update_state import (
+    error,
+    submitted_download,
+    submitted_jaws_job,
+    submitted_nersc_refdata_download,
+    submitting_job,
+    submitting_upload,
+)
 
 from conftest import (
     mongo,  # @UnusedImport
@@ -54,12 +62,23 @@ _BASEJOB = models.AdminJobDetails(
     ]
 )
 
+_BASESUBJOB1 = models.SubJob(
+    id="bar",
+    sub_id=1,
+    state=models.JobState.CREATED,
+    transition_times=[models.JobStateTransition(state=models.JobState.CREATED,time=_SAFE_TIME)]
+)
+_BASESUBJOB2 = _BASESUBJOB1.model_copy(deep=True)
+_BASESUBJOB2.sub_id = 2
+_BASESUBJOB3 = _BASESUBJOB1.model_copy(deep=True)
+_BASESUBJOB3.sub_id = 3
+
 
 @pytest.mark.asyncio
 async def test_indexes(mongo, mondb):
     await MongoDAO.create(mondb)
     cols = mongo.client[MONGO_TEST_DB].list_collection_names()
-    assert set(cols) == {"jobs", "refdata", "images", "sites"}
+    assert set(cols) == {"jobs", "refdata", "images", "sites", "subjobs"}
     jobindex = mongo.client[MONGO_TEST_DB]["jobs"].index_information()
     siteindex = mongo.client[MONGO_TEST_DB]["sites"].index_information()
     assert siteindex == {
@@ -80,6 +99,15 @@ async def test_indexes(mongo, mondb):
             "v": 2,
             "key": [("transition_times.time", -1)],
             "partialFilterExpression": SON([("transition_times.notif_sent", False)])
+        }
+    }
+    subjobindex = mongo.client[MONGO_TEST_DB]["subjobs"].index_information()
+    assert subjobindex == {
+        "_id_": {"v": 2, "key": [("_id", 1)]},
+        'id_1_sub_id_1': {'key': [('id', 1), ('sub_id', 1)], 'unique': True, 'v': 2},
+        'id_1_transition_times.state_1_transition_times._retry_1': {
+            'key': [('id', 1), ('transition_times.state', 1), ('transition_times._retry', 1)],
+            'v': 2
         }
     }
     refindex = mongo.client[MONGO_TEST_DB]["refdata"].index_information()
@@ -106,21 +134,113 @@ async def test_indexes(mongo, mondb):
 
 
 @pytest.mark.asyncio
-async def test_redundant_update_time(mondb):
-    # Tests that an internal update time field is set correctly when performing actions
+async def test_job_basic_roundtrip(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+
+    got = await mc.get_job("foo", as_admin=True)
+    assert got == _BASEJOB
+
+
+@pytest.mark.asyncio
+async def test_update_job(mondb):
+    # tests updates that change standard and array fields as well as switching to error
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    dt2 = dt + datetime.timedelta(minutes=1)
+    await mc.update_job_state("foo", submitting_job(), dt, "tid1")  # no fields
+    await mc.update_job_state("foo", submitted_jaws_job("123"), dt, "tid2")  # array field
+    await mc.update_job_state("foo", submitting_upload(1.2), dt2, "tid3")  # std field
+    await mc.update_job_state("foo", error("usererr", "adminerr"), dt2, "tid4")
+    got = await mc.get_job("foo", as_admin=True)
+    
+    # check expected job structure
+    expected = _BASEJOB.model_copy(deep=True)
+    expected.state = models.JobState.ERROR
+    expected.cpu_hours = 1.2
+    expected.jaws_details = models.JAWSDetails(run_id = ["123"])
+    expected.error = "usererr"
+    expected.admin_error = "adminerr"
+    expected.transition_times.extend([
+        models.AdminJobStateTransition(
+            state=models.JobState.JOB_SUBMITTING,
+            time=dt,
+            trans_id="tid1",
+            notif_sent=False,
+        ),
+        models.AdminJobStateTransition(
+            state=models.JobState.JOB_SUBMITTED,
+            time=dt,
+            trans_id="tid2",
+            notif_sent=False,
+        ),
+        models.AdminJobStateTransition(
+            state=models.JobState.UPLOAD_SUBMITTING,
+            time=dt2,
+            trans_id="tid3",
+            notif_sent=False,
+        ),
+        models.AdminJobStateTransition(
+            state=models.JobState.ERROR,
+            time=dt2,
+            trans_id="tid4",
+            notif_sent=False,
+        ),
+    ])
+    assert got == expected
+
+
+@pytest.mark.asyncio
+async def test_update_job_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+    
+    u = submitting_job()
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    tid = "1"
+    await fail_update_job(mc, None, u, dt, tid, ValueError("job_id is required"))
+    await fail_update_job(mc, "   \t  ", u, dt, tid, ValueError("job_id is required"))
+    await fail_update_job(mc, "foo", None, dt, tid, ValueError("update is required"))
+    await fail_update_job(mc, "foo", u, None, tid, ValueError("time is required"))
+    await fail_update_job(mc, "foo", u, dt, None, ValueError("trans_id is required"))
+    await fail_update_job(mc, "foo", u, dt, "   \t    ", ValueError("trans_id is required"))
+    await fail_update_job(mc, "bar", u, dt, tid, NoSuchJobError(
+        "No job with ID 'bar' in state download_submitted exists"
+    ))
+    await fail_update_job(mc, "foo", submitting_upload(), dt, tid, NoSuchJobError(
+        "No job with ID 'foo' in state job_submitted exists"
+    ))
+
+
+async def fail_update_job(mc, job_id, update, dt, tid, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.update_job_state(job_id, update, dt, tid)
+
+
+def check_job_retry_fields(jobdoc: dict[str, Any]):
+    assert jobdoc["_retry"] == 0
+    check_trans_retry_fields(jobdoc)
+
+def check_trans_retry_fields(jobdoc: dict[str, Any]):
+    for tt in jobdoc["transition_times"]:
+        assert tt["_retry"] == 0
+
+
+@pytest.mark.asyncio
+async def test_job_hidden_fields(mondb):
+    # Tests that internal fields are set correctly when performing actions
     # on a job. Does not test other job saving / updating code.
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
 
-    # check job roundtripping works
-    got = await mc.get_job("foo", as_admin=True)
-    assert got == _BASEJOB
-    
-    # check that the update time is set correctly
+    # check that the internal fields are set correctly
     job = await mondb.jobs.find_one({"id": "foo"})
     assert job["_update_time"] == _SAFE_TIME
-    
-    # check that updating job state sets an internal update time
+    check_job_retry_fields(job)
+
+    # check that updating job state sets internal fields
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
     await mc.update_job_state("foo", submitting_job(), dt, "tid")
     got = await mc.get_job("foo", as_admin=True)
@@ -136,9 +256,220 @@ async def test_redundant_update_time(mondb):
     ))
     assert got == expected
     
-    # check that the update time is set correctly
+    # check that the internal fields are set correctly
     job = await mondb.jobs.find_one({"id": "foo"})
     assert job["_update_time"] == dt
+    check_job_retry_fields(job)
+
+
+@pytest.mark.asyncio
+async def test_subjob_basic_roundtrip(mondb):
+    mc = await MongoDAO.create(mondb)
+    
+    sjs = [_BASESUBJOB1, _BASESUBJOB2, _BASESUBJOB3]
+    await mc.initialize_subjobs(sjs)
+    
+    for i in range(1, 4):
+        sj = await mc.get_subjob("bar", i)
+        assert sj == sjs[i - 1]
+
+
+@pytest.mark.asyncio
+async def test_initialize_subjobs_fail_bad_args(mondb):
+    mc = await MongoDAO.create(mondb)
+    
+    await initialize_subjobs_fail(mc, None, ValueError("subjobs is required"))
+    await initialize_subjobs_fail(
+        mc, [_BASESUBJOB1, None, _BASESUBJOB2], ValueError("subjob is required")
+    )
+
+
+async def initialize_subjobs_fail(mc, subjobs, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.initialize_subjobs(subjobs)
+
+
+@pytest.mark.asyncio
+async def test_initialize_subjobs_fail_duplicate_ids(mondb):
+    # for now just throw a mongo error, this indicates a programming issue
+    mc = await MongoDAO.create(mondb)
+    bsj2 = _BASESUBJOB2.model_copy(deep=True)
+    bsj2.sub_id = 1
+    
+    sjs = [_BASESUBJOB1, bsj2, _BASESUBJOB3]
+    err = (
+        "E11000 duplicate key error collection: testing.subjobs index: id_1_sub_id_1 dup key: "
+        + "{ id: \"bar\", sub_id: 1"
+    )
+    with pytest.raises(BulkWriteError, match=err):
+        await mc.initialize_subjobs(sjs)
+
+
+@pytest.mark.asyncio
+async def test_get_subjobs_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB2])
+    
+    await get_subjobs_fail(mc, None, 2, ValueError("job_id is required"))
+    await get_subjobs_fail(mc, "   \t   ", 2, ValueError("job_id is required"))
+    await get_subjobs_fail(mc, "bar", None, ValueError("subjob_id is required"))
+    await get_subjobs_fail(mc, "bar", -1, ValueError("subjob_id must be >= 1"))
+    await get_subjobs_fail(mc, "foo", 2, NoSuchSubJobError(
+        "No sub job with job ID 'foo' and sub job ID 2 exists"
+    ))
+    await get_subjobs_fail(mc, "bar", 1, NoSuchSubJobError(
+        "No sub job with job ID 'bar' and sub job ID 1 exists"
+    ))
+    await get_subjobs_fail(mc, "bar", 3, NoSuchSubJobError(
+        "No sub job with job ID 'bar' and sub job ID 3 exists"
+    ))
+
+
+async def get_subjobs_fail(mc, job_id, subjob_id, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.get_subjob(job_id, subjob_id)
+
+
+@pytest.mark.asyncio
+async def test_update_subjob(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB1])
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    dt2 = dt + datetime.timedelta(minutes=1)
+    await mc.update_subjob_state("bar", 1, submitted_download(), dt)
+    await mc.update_subjob_state("bar", 1, submitting_job(), dt)
+    await mc.update_subjob_state("bar", 1, error("usererr", "adminerr"), dt2)
+    got = await mc.get_subjob("bar", 1)
+    
+    # check expected job structure
+    expected = _BASESUBJOB1.model_copy(deep=True)
+    expected.state = models.JobState.ERROR
+    expected.error = "usererr"
+    expected.admin_error = "adminerr"
+    expected.transition_times.extend([
+        models.JobStateTransition(state=models.JobState.DOWNLOAD_SUBMITTED, time=dt),
+        models.JobStateTransition(state=models.JobState.JOB_SUBMITTING, time=dt),
+        models.JobStateTransition(state=models.JobState.ERROR, time=dt2),
+    ])
+    assert got == expected
+
+
+@pytest.mark.asyncio
+async def test_update_subjob_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB1])
+    
+    u = submitted_download()
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await fail_update_subjob(mc, None, 1, u, dt, ValueError("job_id is required"))
+    await fail_update_subjob(mc, "   \t  ", 1, u, dt, ValueError("job_id is required"))
+    await fail_update_subjob(mc, "bar", None, u, dt, ValueError("subjob_id is required"))
+    await fail_update_subjob(mc, "bar", 0, u, dt, ValueError("subjob_id must be >= 1"))
+    await fail_update_subjob(mc, "bar", 1, None, dt, ValueError("update is required"))
+    await fail_update_subjob(mc, "bar", 1, u, None, ValueError("time is required"))
+    await fail_update_subjob(mc, "foo", 1, u, dt, NoSuchSubJobError(
+        "No job with ID 'foo' and subjob ID 1 in state created exists"
+    ))
+    await fail_update_subjob(mc, "bar", 2, u, dt, NoSuchSubJobError(
+        "No job with ID 'bar' and subjob ID 2 in state created exists"
+    ))
+    await fail_update_subjob(mc, "bar", 1, submitting_upload(), dt, NoSuchSubJobError(
+        "No job with ID 'bar' and subjob ID 1 in state job_submitted exists"
+    ))
+
+
+async def fail_update_subjob(mc, job_id, subjob_id, update, dt, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.update_subjob_state(job_id, subjob_id, update, dt)
+
+
+@pytest.mark.asyncio
+async def test_subjob_hidden_fields(mondb):
+    # Tests that internal fields are set correctly when performinging actions
+    # on a subjob. Does not test other job saving / updating code.
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB1])
+
+    # check that the internal fields are set correctly
+    job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 1})
+    check_trans_retry_fields(job)
+
+    # check that updating subjob state sets internal fields
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_subjob_state("bar", 1, submitted_download(), dt)
+    got = await mc.get_subjob("bar", 1)
+    
+    # check expected job structure
+    expected = _BASESUBJOB1.model_copy(deep=True)
+    expected.state = models.JobState.DOWNLOAD_SUBMITTED
+    expected.transition_times.append(models.JobStateTransition(
+        state=models.JobState.DOWNLOAD_SUBMITTED, time=dt
+    ))
+    assert got == expected
+    
+    # check that the internal fields are set correctly
+    job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 1})
+    check_trans_retry_fields(job)
+
+
+@pytest.mark.asyncio
+async def test_have_subjobs_reached_state(mondb):
+    mc = await MongoDAO.create(mondb)
+    
+    sjs = [_BASESUBJOB1, _BASESUBJOB2, _BASESUBJOB3]
+    await mc.initialize_subjobs(sjs)
+    
+    # can't tell the difference between no subjobs and no subjobs in state
+    assert await mc.have_subjobs_reached_state("nobar", models.JobState.CREATED) == (0, None)
+    assert await mc.have_subjobs_reached_state("bar", models.JobState.CREATED) == (3, _SAFE_TIME)
+    assert await mc.have_subjobs_reached_state(
+        "bar", models.JobState.DOWNLOAD_SUBMITTED
+    ) == (0, None)
+    
+    dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
+    await mc.update_subjob_state("bar", 1, submitted_download(), dt1)
+    assert await mc.have_subjobs_reached_state(
+        "bar", models.JobState.DOWNLOAD_SUBMITTED
+    ) == (1, dt1)
+    
+    dt2 = dt1 + datetime.timedelta(minutes=1)
+    await mc.update_subjob_state("bar", 2, submitted_download(), dt2)
+    assert await mc.have_subjobs_reached_state(
+        "bar", models.JobState.DOWNLOAD_SUBMITTED
+    ) == (2, dt2)
+    
+    dt3 = dt1 + datetime.timedelta(seconds=1)
+    await mc.update_subjob_state("bar", 3, submitted_download(), dt3)
+    assert await mc.have_subjobs_reached_state(
+        "bar", models.JobState.DOWNLOAD_SUBMITTED
+    ) == (3, dt2)
+    
+    dt4 = dt1 + datetime.timedelta(hours=1)
+    await mc.update_subjob_state("bar", 3, submitting_job(), dt4)
+    assert await mc.have_subjobs_reached_state(
+        "bar", models.JobState.DOWNLOAD_SUBMITTED
+    ) == (3, dt2)
+    
+    assert await mc.have_subjobs_reached_state(
+        "bar", models.JobState.JOB_SUBMITTING
+    ) == (1, dt4)
+
+
+@pytest.mark.asyncio
+async def test_have_subjobs_reached_state_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB1])
+    
+    s = models.JobState.CREATED
+    await fail_have_subjobs_reached_state(mc, None, s, ValueError("job_id is required"))
+    await fail_have_subjobs_reached_state(mc, "   \t  ", s, ValueError("job_id is required"))
+    await fail_have_subjobs_reached_state(mc, "bar", None, ValueError("state is required"))
+
+
+async def fail_have_subjobs_reached_state(mc, job_id, update, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.have_subjobs_reached_state(job_id, update)
 
 
 @pytest.mark.asyncio
@@ -243,7 +574,7 @@ async def test_job_update_sent_fail_no_such_job(mondb):
 
 
 async def _fail_job_update_sent(mc: MongoDAO, job_id: str, trans_id: str, expected: Exception):
-    with pytest.raises(type(expected), match=expected.args[0]):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
         await mc.job_update_sent(job_id, trans_id)
 
 
@@ -406,5 +737,5 @@ async def _fail_process_jobs_with_unsent_updates(
     older_than: datetime.datetime,
     expected: Exception,
 ):
-    with pytest.raises(type(expected), match=expected.args[0]):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
         await mc.process_jobs_with_unsent_updates(processor, older_than)

@@ -5,7 +5,7 @@ DAO for MongoDB.
 # low enough to YAGNI the idea.
 
 import datetime
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
 from pymongo import IndexModel, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 from pymongo.results import DeleteResult
@@ -31,6 +31,7 @@ _FLD_UPDATE_TIME = "_update_time"  # mark as internal field
 _FLD_TRANS_TIME_SEND = (
     f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT}"
 )
+_FLD_RETRY_ATTEMPT = "_retry"  # not really used for now, but preparation for later
 
 
 class MongoDAO:
@@ -56,6 +57,7 @@ class MongoDAO:
         self._col_sites = self._db.sites
         self._col_images = self._db.images
         self._col_jobs = self._db.jobs
+        self._col_subjobs = self._db.subjobs
         self._col_refdata = self._db.refdata
         self._setup_field_mappings()
         
@@ -102,6 +104,24 @@ class MongoDAO:
                 [(timefield, DESCENDING)],
                 partialFilterExpression={_FLD_TRANS_TIME_SEND: False}
             ),
+        ])
+        statefield = f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_COMMON_STATE_TRANSITION_STATE}"
+        retryfield = f"{models.FLD_COMMON_TRANS_TIMES}.{_FLD_RETRY_ATTEMPT}"
+        await self._col_subjobs.create_indexes([
+            # Ensure there's no duplicate subjobs
+            IndexModel(
+                [(models.FLD_COMMON_ID, ASCENDING), (models.FLD_SUBJOB_ID, ASCENDING)],
+                unique=True
+            ),
+            # Find subjobs in a specific state on a specific retry attempt
+            # Could make it unique as there should only be one state per retry, but that would
+            # prevent sharding the collection - which seems unlikely but there's no need to 
+            # block the ability when a unique index isn't needed
+            IndexModel([
+                (models.FLD_COMMON_ID, ASCENDING),
+                (statefield, ASCENDING),
+                (retryfield, ASCENDING)
+            ]),
         ])
         await self._col_refdata.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
@@ -229,6 +249,11 @@ class MongoDAO:
             raise ValueError("A digest or tag is required")
         return await fn(query), err
 
+    def _add_retry_attempt_to_trans_times(self, doc: dict[str, Any]):
+        # modifies in place
+        for ttdoc in doc[models.FLD_COMMON_TRANS_TIMES]:
+            ttdoc[_FLD_RETRY_ATTEMPT] = 0  # unused for now
+
     async def save_job(self, job: models.AdminJobDetails):
         """ Save a job. Job IDs are expected to be unique. """
         _not_falsy(job, "job")
@@ -236,6 +261,8 @@ class MongoDAO:
         # Could add a check in the job model that jobs have > 0 transitions and the last
         # transition == the job state... probably not necessary.
         jobd[_FLD_UPDATE_TIME] = job.transition_times[-1].time
+        jobd[_FLD_RETRY_ATTEMPT] = 0  # unused for now
+        self._add_retry_attempt_to_trans_times(jobd)
         jobi = jobd[models.FLD_JOB_JOB_INPUT]
         jobi[models.FLD_JOB_INPUT_RUNTIME] = jobi[models.FLD_JOB_INPUT_RUNTIME].total_seconds()
         # don't bother checking for duplicate key exceptions since the service is supposed
@@ -330,36 +357,50 @@ class MongoDAO:
 
     async def _update_job_state(
         self,
+        col: AsyncIOMotorCollection,
         job_id: str,
-        state: models.JobState,
+        update: JobUpdate,
         time: datetime.datetime,
-        trans_id: str,
-        push: dict[str, Any] | None = None,
-        set_: dict[str, Any] | None = None,
-        current_state: models.JobState | None = None,
+        trans_id: str | None = None,
+        subjob_id: int | None = None,
     ):
+        set_ = {}
+        push = {}
+        for fld, val in _not_falsy(update, "update").update_fields.items():
+            jbfld, ispush = self._FIELD_TO_KEY_AND_PUSH[fld]
+            target = push if ispush else set_
+            target[jbfld] = val
         query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
-        if current_state:
-            query[models.FLD_COMMON_STATE] = current_state.value
+        if update.current_state:
+            query[models.FLD_COMMON_STATE] = update.current_state.value
+        if subjob_id != None:
+            query[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id")
         transition = {
-            models.FLD_COMMON_STATE_TRANSITION_STATE: _not_falsy(state, "state").value,
+            models.FLD_COMMON_STATE_TRANSITION_STATE: update.new_state.value,
             models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
-            models.FLD_JOB_STATE_TRANSITION_ID: _require_string(trans_id, "trans_id"),
-            models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT: False
-            
+            _FLD_RETRY_ATTEMPT: 0,  # Unused for now
         }
-        res = await self._col_jobs.update_one(
+        if trans_id:
+            transition.update({
+                models.FLD_JOB_STATE_TRANSITION_ID: trans_id,
+                models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT: False
+            })
+        res = await col.update_one(
             query,
             {
                 "$push": (push if push else {}) | {models.FLD_COMMON_TRANS_TIMES: transition},
                 "$set": (set_ if set_ else {}) | {
-                    models.FLD_COMMON_STATE: state.value,
+                    models.FLD_COMMON_STATE: update.new_state.value,
                     _FLD_UPDATE_TIME: time,  # for indexing last state change time
                 }
             },
         )
         if not res.matched_count:
-            cs = f"in state {current_state.value} " if current_state else ""
+            cs = f"in state {update.current_state.value} " if update.current_state else ""
+            if subjob_id:
+                raise NoSuchSubJobError(
+                    f"No job with ID '{job_id}' and subjob ID {subjob_id} {cs}exists"
+                )
             raise NoSuchJobError(f"No job with ID '{job_id}' {cs}exists")
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
@@ -407,21 +448,12 @@ class MongoDAO:
             The caller is responsible for ensuring uniqueness of IDs.
         """
         # If we need to send notifications to more than one place this will need a refactor. YAGNI
-        # Could merge this and and the above method...? Seems ok as is though
-        set_ = {}
-        push = {}
-        for fld, val in update.update_fields.items():
-            jbfld, ispush = self._FIELD_TO_KEY_AND_PUSH[fld]
-            target = push if ispush else set_
-            target[jbfld] = val
         await self._update_job_state(
+            self._col_jobs,
             job_id,
-            update.new_state,
+            update,
             time,
-            current_state=update.current_state,
-            set_=set_,
-            push=push,
-            trans_id = trans_id
+            trans_id=_require_string(trans_id, "trans_id")
         )
 
     async def update_job_admin_meta(
@@ -538,6 +570,130 @@ class MongoDAO:
             count += 1
             await processor(self._doc_to_job(d, as_admin=True))
         return count
+
+    async def initialize_subjobs(self, subjobs: Iterable[models.SubJob]):
+        """
+        Initialize a set of subjobs for a job. The caller is expected to create the subjob
+        objects correctly.
+        
+        Any index collisions are thrown, as it is assumed that subjobs are only initialized
+        once, at the beginning of a job.
+        """
+        # TDOO CLEANUP it's possible that this method could fail part way though and leave
+        #              orphaned subjob documents. Could add a cleanup thread. YAGNI for now.
+        sjs = []
+        for sj in _not_falsy(subjobs, "subjobs"):
+            sjs.append(_not_falsy(sj, "subjob").model_dump())  # better exception message later
+            self._add_retry_attempt_to_trans_times(sjs[-1])
+        await self._col_subjobs.insert_many(sjs)
+
+    async def get_subjob(self, job_id: str, subjob_id: int) -> models.SubJob:
+        """
+        Get a subjob given the job ID and the subjob ID.
+        """
+        # May want a bulk method at some point that takes a range of IDs or returns all
+        doc = await self._col_subjobs.find_one({
+            models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
+            models.FLD_SUBJOB_ID: _check_num(subjob_id, "subjob_id")
+        })
+        # if subjob_id isn't an integer, will throw an error. Could add a precheck later
+        if not doc:
+            raise NoSuchSubJobError(
+                f"No sub job with job ID '{job_id}' and sub job ID {subjob_id} exists"
+            )
+        doc = self._clean_doc(doc)
+        return models.SubJob(**doc)
+
+    async def update_subjob_state(
+        self,
+        job_id: str,
+        subjob_id: int,
+        update: JobUpdate,
+        time: datetime.datetime,
+    ):
+        """
+        Update the sub job state.
+    
+        job_id - the job ID.
+        subjob_id - the subjob ID.
+        update - the update to apply to the job.
+        time - the time at which the job transitioned to the new state.
+        """
+        await self._update_job_state(
+            self._col_subjobs,
+            job_id,
+            update,
+            time,
+            # if not an int, error will occur. Could add a more stringent check later
+            subjob_id=_check_num(subjob_id, "subjob_id")
+        )
+
+    async def have_subjobs_reached_state(self, job_id: str, state: models.JobState
+    ) -> tuple[int, datetime.datetime | None]:
+        """
+        Check if subjobs for a job_id have reached a specific job state.
+        
+        Subjobs may be in a state past the given state.
+        
+        Returns a tuple consisting of:
+        * The number of subjobs that have reached the state
+        * The latest time for the set of subjobs that have reached the state, or None if none
+          of them have.
+        
+        Note that the method does not distinguish between no subjobs existing in the given state
+        and no subjobs existing at all. Get the subjobs via the standard method to check for
+        basic existence.
+        """
+        pipeline = [
+            {"$match": {
+                models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
+                models.FLD_COMMON_TRANS_TIMES: {
+                    "$elemMatch": {
+                        models.FLD_COMMON_STATE_TRANSITION_STATE: _not_falsy(state, "state"),
+                        _FLD_RETRY_ATTEMPT: 0  # unused for now
+                    }
+                }
+            }},
+            {"$project": {
+                models.FLD_SUBJOB_ID: 1,
+                "matching_entries": {
+                    "$filter": {
+                        "input": f"${models.FLD_COMMON_TRANS_TIMES}",
+                        "as": "tt",
+                        "cond": {
+                            "$and": [
+                                {"$eq": [
+                                    f"$$tt.{models.FLD_COMMON_STATE_TRANSITION_STATE}",
+                                     state
+                                ]},
+                                {"$eq": [f"$$tt.{_FLD_RETRY_ATTEMPT}", 0]}  # unused for now
+                            ]
+                        }
+                    }
+                }
+            }},
+            {"$group": {
+                "_id": None,
+                "count": {"$sum": 1},  # one per subjob
+                # inner $max = max timestamp within one subjob (should be just one)
+                # outer $max = max across all subjobs
+                "latest_ts": {
+                    "$max": {
+                        "$max": {
+                            "$map": {
+                                "input": "$matching_entries",
+                                "as": "me",
+                                "in": f"$$me.{models.FLD_COMMON_STATE_TRANSITION_TIME}"
+                            }
+                        }
+                    }
+                }
+            }}
+        ]
+        result = await self._col_subjobs.aggregate(pipeline).to_list(length=1)
+        if not result:
+            return 0, None
+        return result[0]["count"], result[0]["latest_ts"]
 
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""
@@ -692,6 +848,10 @@ class NoSuchImageError(Exception):
 
 class NoSuchJobError(Exception):
     """ The job does not exist in the system. """
+
+
+class NoSuchSubJobError(Exception):
+    """ The sub job does not exist in the system. """
 
 
 class NoSuchReferenceDataError(Exception):
