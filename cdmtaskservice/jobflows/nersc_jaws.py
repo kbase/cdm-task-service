@@ -467,7 +467,7 @@ class NERSCJAWSRunner(JobFlow):
         # flow
         if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
-        if not force and job.state not in models.JOB_TERMINAL_STATES:
+        if not force and not job.state.is_terminal():
             raise IllegalParameterError("Job is not in a terminal state and cannot be cleaned")
         jaws_paths = []
         if job.jaws_details and job.jaws_details.run_id:
