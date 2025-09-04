@@ -785,9 +785,15 @@ class JobState(str, Enum):
     ERROR_PROCESSING_SUBMITTING = "error_processing_submitting"
     ERROR_PROCESSING_SUBMITTED = "error_processing_submitted"
     ERROR = "error"
+    
+    @classmethod
+    def terminal_states(cls) -> set[Self]:
+        """Return the list of terminal states."""
+        return {cls.COMPLETE, cls.ERROR}
 
-
-JOB_TERMINAL_STATES = {JobState.COMPLETE, JobState.ERROR}  # canceled at some point
+    def is_terminal(self) -> bool:
+        """Return True if this state is a terminal state."""
+        return self in self.terminal_states()
 
 
 class JobStateTransition(BaseModel):

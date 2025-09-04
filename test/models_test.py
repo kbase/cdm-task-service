@@ -60,3 +60,16 @@ def test_job_input_fail_too_many_containers():
             input_files=[f"foo/bar{i}" for i in range(1, 3)],
             output_dir="foo/bar"
     )
+
+
+def test_job_state_terminal_states():
+    assert models.JobState.terminal_states() == {models.JobState.ERROR, models.JobState.COMPLETE}
+
+
+def test_job_state_is_terminal():
+    expected = {s: False for s in list(models.JobState)}
+    expected[models.JobState.COMPLETE] = True
+    expected[models.JobState.ERROR] = True
+    
+    for s, term in expected.items():
+        assert s.is_terminal() is term
