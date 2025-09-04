@@ -628,14 +628,14 @@ class MongoDAO:
             subjob_id=_check_num(subjob_id, "subjob_id")
         )
 
-    async def have_subjobs_reached_state(self, job_id: str, state: models.JobState
-    ) -> tuple[int, datetime.datetime | None]:
+    async def have_subjobs_reached_state(self, job_id: str, *states: models.JobState
+    ) -> dict[models.JobState, tuple[int, datetime.datetime | None]]:
         """
-        Check if subjobs for a job_id have reached a specific job state.
+        Check if subjobs for a job_id have reached one or more specific job states.
         
         Subjobs may be in a state past the given state.
         
-        Returns a tuple consisting of:
+        Returns a dictionary of each input state to a tuple consisting of:
         * The number of subjobs that have reached the state
         * The latest time for the set of subjobs that have reached the state, or None if none
           of them have.
@@ -644,16 +644,20 @@ class MongoDAO:
         and no subjobs existing at all. Get the subjobs via the standard method to check for
         basic existence.
         """
+        sts = [_not_falsy(s, "state").value for s in states]  # better exception later
         pipeline = [
+            # Only process subjobs for this job_id, and only those that have a
+            # transition in the states of interest.
             {"$match": {
                 models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
                 models.FLD_COMMON_TRANS_TIMES: {
                     "$elemMatch": {
-                        models.FLD_COMMON_STATE_TRANSITION_STATE: _not_falsy(state, "state"),
+                        models.FLD_COMMON_STATE_TRANSITION_STATE: {"$in": sts},
                         _FLD_RETRY_ATTEMPT: 0  # unused for now
                     }
                 }
             }},
+            # Project matching transitions only
             {"$project": {
                 models.FLD_SUBJOB_ID: 1,
                 "matching_entries": {
@@ -662,9 +666,8 @@ class MongoDAO:
                         "as": "tt",
                         "cond": {
                             "$and": [
-                                {"$eq": [
-                                    f"$$tt.{models.FLD_COMMON_STATE_TRANSITION_STATE}",
-                                     state
+                                {"$in": [
+                                    f"$$tt.{models.FLD_COMMON_STATE_TRANSITION_STATE}", sts
                                 ]},
                                 {"$eq": [f"$$tt.{_FLD_RETRY_ATTEMPT}", 0]}  # unused for now
                             ]
@@ -672,28 +675,32 @@ class MongoDAO:
                     }
                 }
             }},
+            # Flatten transitions so we can group by state
+            {"$unwind": "$matching_entries"},
+            # Deduplicate state per subjob, but still get latest timestamp per state/subjob
             {"$group": {
-                "_id": None,
-                "count": {"$sum": 1},  # one per subjob
-                # inner $max = max timestamp within one subjob (should be just one)
-                # outer $max = max across all subjobs
-                "latest_ts": {
-                    "$max": {
-                        "$max": {
-                            "$map": {
-                                "input": "$matching_entries",
-                                "as": "me",
-                                "in": f"$$me.{models.FLD_COMMON_STATE_TRANSITION_TIME}"
-                            }
-                        }
-                    }
+                "_id": {
+                    "subjob": f"${models.FLD_SUBJOB_ID}",
+                    "state": f"$matching_entries.{models.FLD_COMMON_STATE_TRANSITION_STATE}"
+                },
+                "latest_for_subjob": {
+                    "$max": f"$matching_entries.{models.FLD_COMMON_STATE_TRANSITION_TIME}"
                 }
+            }},
+            # Now group by state across all subjobs
+            {"$group": {
+                "_id": "$_id.state",
+                "count": {"$sum": 1},  # one per subjob in this state
+                "latest_ts": {"$max": "$latest_for_subjob"}
             }}
         ]
-        result = await self._col_subjobs.aggregate(pipeline).to_list(length=1)
-        if not result:
-            return 0, None
-        return result[0]["count"], result[0]["latest_ts"]
+        # should only have 1 list entry per job state
+        result = await self._col_subjobs.aggregate(pipeline).to_list(length=None)
+        ret = {models.JobState(r["_id"]): (r["count"], r["latest_ts"]) for r in result}
+        for s in states:
+            if s not in ret:
+                ret[s] = (0, None)
+        return ret
 
     async def save_refdata(self, refdata: models.ReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""

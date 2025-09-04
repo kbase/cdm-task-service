@@ -420,40 +420,48 @@ async def test_have_subjobs_reached_state(mondb):
     sjs = [_BASESUBJOB1, _BASESUBJOB2, _BASESUBJOB3]
     await mc.initialize_subjobs(sjs)
     
+    c = models.JobState.CREATED
+    ds = models.JobState.DOWNLOAD_SUBMITTED
+    js = models.JobState.JOB_SUBMITTING
+    
     # can't tell the difference between no subjobs and no subjobs in state
-    assert await mc.have_subjobs_reached_state("nobar", models.JobState.CREATED) == (0, None)
-    assert await mc.have_subjobs_reached_state("bar", models.JobState.CREATED) == (3, _SAFE_TIME)
-    assert await mc.have_subjobs_reached_state(
-        "bar", models.JobState.DOWNLOAD_SUBMITTED
-    ) == (0, None)
+    assert await mc.have_subjobs_reached_state("nobar", c) == {c: (0, None)}
+    assert await mc.have_subjobs_reached_state("bar", c) == {c: (3, _SAFE_TIME)}
+    assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (0, None)}
+    assert await mc.have_subjobs_reached_state("bar", c, ds) == {c: (3, _SAFE_TIME), ds: (0, None)}
     
     dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
     await mc.update_subjob_state("bar", 1, submitted_download(), dt1)
-    assert await mc.have_subjobs_reached_state(
-        "bar", models.JobState.DOWNLOAD_SUBMITTED
-    ) == (1, dt1)
+    assert await mc.have_subjobs_reached_state("bar", c) == {c: (3, _SAFE_TIME)}
+    assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (1, dt1)}
+    assert await mc.have_subjobs_reached_state("bar", c, ds) == {c: (3, _SAFE_TIME), ds: (1, dt1)}
     
     dt2 = dt1 + datetime.timedelta(minutes=1)
     await mc.update_subjob_state("bar", 2, submitted_download(), dt2)
-    assert await mc.have_subjobs_reached_state(
-        "bar", models.JobState.DOWNLOAD_SUBMITTED
-    ) == (2, dt2)
+    assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (2, dt2)}
+    assert await mc.have_subjobs_reached_state("bar", c, ds) == {c: (3, _SAFE_TIME), ds: (2, dt2)}
     
     dt3 = dt1 + datetime.timedelta(seconds=1)
     await mc.update_subjob_state("bar", 3, submitted_download(), dt3)
-    assert await mc.have_subjobs_reached_state(
-        "bar", models.JobState.DOWNLOAD_SUBMITTED
-    ) == (3, dt2)
+    assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (3, dt2)}
+    assert await mc.have_subjobs_reached_state("bar", c, ds) == {c: (3, _SAFE_TIME), ds: (3, dt2)}
     
     dt4 = dt1 + datetime.timedelta(hours=1)
     await mc.update_subjob_state("bar", 3, submitting_job(), dt4)
-    assert await mc.have_subjobs_reached_state(
-        "bar", models.JobState.DOWNLOAD_SUBMITTED
-    ) == (3, dt2)
-    
-    assert await mc.have_subjobs_reached_state(
-        "bar", models.JobState.JOB_SUBMITTING
-    ) == (1, dt4)
+    assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (3, dt2)}
+    assert await mc.have_subjobs_reached_state("bar", js) == {js: (1, dt4)}
+    assert await mc.have_subjobs_reached_state("bar", *list(models.JobState)) == {
+        c: (3, _SAFE_TIME),
+        ds: (3, dt2),
+        js: (1, dt4),
+        models.JobState.JOB_SUBMITTED: (0, None),
+        models.JobState.UPLOAD_SUBMITTING: (0, None),
+        models.JobState.UPLOAD_SUBMITTED: (0, None),
+        models.JobState.COMPLETE: (0, None),
+        models.JobState.ERROR_PROCESSING_SUBMITTING: (0, None),
+        models.JobState.ERROR_PROCESSING_SUBMITTED: (0, None),
+        models.JobState.ERROR: (0, None),
+    }
 
 
 @pytest.mark.asyncio
@@ -462,14 +470,15 @@ async def test_have_subjobs_reached_state_fail(mondb):
     await mc.initialize_subjobs([_BASESUBJOB1])
     
     s = models.JobState.CREATED
-    await fail_have_subjobs_reached_state(mc, None, s, ValueError("job_id is required"))
-    await fail_have_subjobs_reached_state(mc, "   \t  ", s, ValueError("job_id is required"))
-    await fail_have_subjobs_reached_state(mc, "bar", None, ValueError("state is required"))
+    await fail_have_subjobs_reached_state(mc, None, ValueError("job_id is required"), s)
+    await fail_have_subjobs_reached_state(mc, "   \t  ", ValueError("job_id is required"), s)
+    await fail_have_subjobs_reached_state(mc, "bar", ValueError("state is required"), None)
+    await fail_have_subjobs_reached_state(mc, "bar", ValueError("state is required"), s, None, s)
 
 
-async def fail_have_subjobs_reached_state(mc, job_id, update, expected):
+async def fail_have_subjobs_reached_state(mc, job_id, expected, *states):
     with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
-        await mc.have_subjobs_reached_state(job_id, update)
+        await mc.have_subjobs_reached_state(job_id, *states)
 
 
 @pytest.mark.asyncio
