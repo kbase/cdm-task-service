@@ -498,8 +498,7 @@ class JobInputPreview(BaseModel):
         examples=[1],
         default=1,
         description="The number of containers to run in parallel. Input files will be split "
-            + "between the containers. If there are more containers than input files the "
-            + "container count will be reduced appropriately.",
+            + "between the containers.",
         ge=1,
         le=1000,
     )] = 1
