@@ -109,3 +109,10 @@ services:
     # environment:
     #  - MONGO_INITDB_ROOT_USERNAME=root
     #  - MONGO_INITDB_ROOT_PASSWORD=secret
+
+  htcondor-mini:
+    image: htcondor/mini:24.11.2-el9
+    ports:
+      - "9618:9618"
+    volumes:
+      - ./docker_compose/htcondor/submit_test_script:/opt/submit_test_script
