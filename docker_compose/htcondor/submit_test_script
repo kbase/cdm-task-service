@@ -1,0 +1,6 @@
+Executable = /bin/sleep
+Arguments  = 30
+Output     = /tmp/sleep.out
+Error      = /tmp/sleep.err
+Log        = /tmp/sleep.log
+Queue
