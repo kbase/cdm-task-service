@@ -78,6 +78,7 @@ Metadata  :
 * An S3 instance for use as a file store, but see "S3 requirements" below
 * MongoDB 7+
 * Kafka 2.1+
+* If submitting jobs to HTCondor, see HTCondor requirements below
 
 ### S3 requirements
 
@@ -87,12 +88,41 @@ Metadata  :
 * The provided credentials must enable listing readable buckets, as the service performs that
   operation to check the host and credentials on startup.
 * If using Minio, the minimum version is `2025-02-07T23-21-09Z`.
-  
+
+### HTCondor requirements
+
+Due to the multitude of ways HTCondor (HTC) connectivity and authentication can be configured,
+the service does not expect any particular HTC configuration other than calling
+
+```python
+import htcondor
+
+schedd = htcondor.Schedd()
+```
+
+... should Just Work (TM) and jobs should be able to be submitted with that `Schedd` instance.
+
+The service administrator is expected to set up the HTCondor configuration so that is true. If
+using the Docker image, a configuration file and / or credentials will likely need to be mounted
+into the container, e.g.
+
+* An `IDTOKEN` and, if necessary, the `_CONDOR_SEC_TOKEN_DIRECTORY` to tell HTC the token's
+  location.
+* A condor configuration file and password file if using `PASSWORD` authentication.
+
 ## Powered by
 
-<a href="https://jaws-docs.readthedocs.io" title="JGI JAWS">
-    <img src="images/JAWS.webp" alt='JGI JAWS' width="200" />
-</a>
+<div>
+  <a href="https://jaws-docs.readthedocs.io" title="JGI JAWS">
+      <img src="images/JAWS.webp" alt="JGI JAWS" width="200" />
+  </a>
+</div>
+
+<div>
+  <a href="https://htcondor.org/" title="HTcondor">
+      <img src="images/HTC.png" alt="HTcondor" width="200" />
+  </a>
+</div>
 
 ## Development
 
