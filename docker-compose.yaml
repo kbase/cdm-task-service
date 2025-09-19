@@ -1,5 +1,8 @@
 # This docker-compose is for developer convenience, not for running in production.
 
+volumes:
+  condor-token:
+
 services:
 
   # For running the FastAPI server
@@ -18,8 +21,14 @@ services:
       minio:
         condition: service_started
       kafka:
-       condition: service_healthy
+        condition: service_healthy
+      htcondor-mini:
+        condition: service_started
     environment:
+      # TODO HTC this will need changes once we determine how to get
+      #          htcondor.Schedd() to work without a schedd_ad
+      - COLLECTOR_HOST=htcondor-mini:9618
+      - _CONDOR_SEC_TOKEN_DIRECTORY=/etc/condor/tokens.d
       - KBCTS_PORT=5000
       - KBCTS_KBASE_AUTH2_URL=https://ci.kbase.us/services/auth
       - KBCTS_KBASE_AUTH2_ADMIN_ROLES=CDM_TASK_SERVICE_ADMIN
@@ -63,6 +72,7 @@ services:
       - KBCTS_SERVICE_GROUP=local_development
     volumes:
       - ./tmp_creds:/creds
+      - condor-token:/etc/condor/tokens.d
 
   kafka:
     # Note the image should sync with the test.cfg.example and GHA test files.
@@ -116,3 +126,7 @@ services:
       - "9618:9618"
     volumes:
       - ./docker_compose/htcondor/submit_test_script:/opt/submit_test_script
+      - ./docker_compose/htcondor/start_condor_and_gen_token.sh:/opt/start_condor_and_gen_token.sh
+      - condor-token:/etc/condor/tokens.d   # shared token directory
+    # for some reason the script is failing without the `sh`, not sure why
+    command: sh /opt/start_condor_and_gen_token.sh
