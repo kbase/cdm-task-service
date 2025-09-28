@@ -25,9 +25,7 @@ services:
       htcondor-mini:
         condition: service_started
     environment:
-      # TODO HTC this will need changes once we determine how to get
-      #          htcondor.Schedd() to work without a schedd_ad
-      - COLLECTOR_HOST=htcondor-mini:9618
+      - _CONDOR_COLLECTOR_HOST=htcondor-mini:9618
       - _CONDOR_SEC_TOKEN_DIRECTORY=/etc/condor/tokens.d
       - KBCTS_PORT=5000
       - KBCTS_KBASE_AUTH2_URL=https://ci.kbase.us/services/auth

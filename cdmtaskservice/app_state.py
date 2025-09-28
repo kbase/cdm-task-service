@@ -52,6 +52,8 @@ class AppState(NamedTuple):
     jobflow_manager: JobFlowManager
     kafka_checker: KafkaChecker
     allowed_paths: list[str]
+    condor_exe_path: Path
+    jobrunner_archive_path: Path
 
 
 class RequestState(NamedTuple):
@@ -170,7 +172,16 @@ async def build_app(
         kc = KafkaChecker(mongodao, kafka_notifier)
         sfcliprov = _get_sfapi_client_provider(jaws_job_flows)
         app.state._cdmstate = AppState(
-            auth, sfcliprov, job_state, refdata, images, flowman, kc, cfg.allowed_s3_paths
+            auth,
+            sfcliprov,
+            job_state,
+            refdata,
+            images,
+            flowman,
+            kc,
+            cfg.allowed_s3_paths,
+            _get_local_path(cfg.condor_exe_path),
+            _get_local_path(cfg.jobrunner_archive_path),
         )
         await _check_unsent_kafka_messages(logr, cfg, kc)
     except:
@@ -182,6 +193,13 @@ async def build_app(
             # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
             await asyncio.wait_for(kafka_notifier.close(), 10)
         raise
+
+
+def _get_local_path(path: str) -> Path:
+    p = Path(path)
+    if not p.is_file():
+        raise ValueError(f"Path {path} does not exist or is not a file")
+    return p
 
 
 def _get_sfapi_client_provider(jaws_flows: JAWSFlowProvider

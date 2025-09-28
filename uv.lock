@@ -296,6 +296,7 @@ dependencies = [
     { name = "requests" },
     { name = "sfapi-client" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "yarl" },
 ]
 
 [package.dev-dependencies]
@@ -328,6 +329,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.3" },
     { name = "sfapi-client", specifier = ">=0.4.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.3" },
+    { name = "yarl", specifier = "==1.20.0" },
 ]
 
 [package.metadata.requires-dev]

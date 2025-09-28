@@ -95,16 +95,18 @@ Due to the multitude of ways HTCondor (HTC) connectivity and authentication can 
 the service does not expect any particular HTC configuration other than calling
 
 ```python
-import htcondor
+import htcondor2
 
-schedd = htcondor.Schedd()
+schedd = htcondor2.Schedd()
 ```
 
 ... should Just Work (TM) and jobs should be able to be submitted with that `Schedd` instance.
+At minimum some sort of authentication must be set up and `COLLECTOR_HOST` must be supplied
+in a config file or the environment (via `_CONDOR_COLLECTOR_HOST`).
 
-The service administrator is expected to set up the HTCondor configuration so that is true. If
-using the Docker image, a configuration file and / or credentials will likely need to be mounted
-into the container, e.g.
+The service administrator is expected to set up the HTCondor configuration so that the above
+is true. If using the Docker image, a configuration file and / or credentials will likely need
+to be mounted into the container, e.g.
 
 * An `IDTOKEN` and, if necessary, the `_CONDOR_SEC_TOKEN_DIRECTORY` to tell HTC the token's
   location.

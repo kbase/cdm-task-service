@@ -29,11 +29,12 @@ RUN pip install --upgrade pip && \
     pip install uv	
 
 # install deps
+ARG UV_DEV_ARGUMENT=--no-dev
 RUN mkdir /uvinstall
 WORKDIR /uvinstall
 COPY pyproject.toml uv.lock .python-version .
 ENV UV_PROJECT_ENVIRONMENT=/usr/local/
-RUN uv sync --locked --inexact --no-dev
+RUN uv sync --locked --inexact $UV_DEV_ARGUMENT
 
 # install the actual code
 RUN mkdir /cts
@@ -46,6 +47,12 @@ COPY --from=build /git/git_commit.py /cts/cdmtaskservice/
 ENV KBCTS_CRANE_PATH=/cts/crane
 
 WORKDIR /cts
+
+# build the job runner archive
+
+RUN tar -czf cts.tgz --exclude="*/__pycache__*" cdmtaskservice -C /uvinstall .
+ENV KBCTS_JOB_RUNNER_ARCHIVE_PATH=/cts/cts.tgz
+ENV KBCTS_HTC_EXE_PATH=/cts/cdmtaskservice/condor/run_job.sh
 
 ENTRYPOINT ["tini", "--", "/cts/entrypoint.sh"]
 

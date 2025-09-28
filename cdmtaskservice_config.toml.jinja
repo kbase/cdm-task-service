@@ -76,6 +76,31 @@ token = "{{ KBCTS_JAWS_TOKEN or "" }}"
 # The JAWS group to use to run jobs.
 group = "{{ KBCTS_JAWS_GROUP or "kbase" }}"
 
+[HTCondor]
+
+# The local path, accessible to the server, to the executable file to run on the HTCondor workers.
+# If using the provided Dockerfile, this value is set there.
+executable_path = "{{ KBCTS_HTC_EXE_PATH }}"
+
+# A URL that will override the default location for HTCondor to download the executable file
+# for the worker. By default this is constructed from the service root url (below) and a
+# default path.
+# If set, it becomes the user's responsibility to keep the executable file up to date with the
+# service.
+executable_url_override = "{{ KBCTS_HTC_EXE_URL_OVERRIDE or "" }}"
+
+[JobRunner]
+
+# The local path, accessible to the server, to the job runner code tgz archive file.
+# If using the provided Dockerfile, this value is set there.
+archive_path = "{{ KBCTS_JOB_RUNNER_ARCHIVE_PATH }}"
+
+# A URL that will override the default location to download the job runner code archive tgz file.
+# By default this is constructed from the service root url (below) and a default path.
+# If set, it becomes the user's responsibility to keep the archive file up to date with the
+# service.
+archive_url_override = "{{ KBCTS_JOB_RUNNER_ARCHIVE_URL_OVERRIDE or "" }}"
+
 [S3]
 
 # The connection parameters for the S3 instance to use for data source and storage.
@@ -168,6 +193,7 @@ check_unsent_messages_on_startup_delay_min = {{ KBCTS_KAFKA_STARTUP_UNSENT_MSG_D
 [Images]
 
 # The path to a crane executable. See the README for details.
+# If using the provided Dockerfile, this value is set there.
 crane_path = "{{ KBCTS_CRANE_PATH or "" }}"
 
 [Service]

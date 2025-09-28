@@ -14,10 +14,13 @@ from fastapi import (
     Query,
     Path as FastPath
 )
+from fastapi.responses import FileResponse
+from pathlib import Path
 from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
 from typing import Annotated, Any
 
 from cdmtaskservice import app_state
+from cdmtaskservice import localfiles
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice import sites
@@ -46,6 +49,7 @@ ROUTER_IMAGES = APIRouter(tags=["Images"], prefix="/images")
 ROUTER_REFDATA = APIRouter(tags=["Reference Data"], prefix="/refdata")
 ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
 ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
+ROUTER_REMOTE_RUNNER = APIRouter(tags=["Job Runner"])
 
 _AUTH = KBaseHTTPBearer()
 
@@ -931,6 +935,29 @@ async def _callback_handling(
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, SERVICE_USER, as_admin=True)
     return await appstate.jobflow_manager.get_flow(job.job_input.cluster), job
+
+
+@ROUTER_REMOTE_RUNNER.get(
+    localfiles.CONDOR_EXE_PATH,
+    summary="Get the condor executable script",
+    description="Not for general use.\n\nGets the executable script to run on workers "
+        + "for running HTCondor jobs.",
+    response_class=FileResponse,
+)
+async def get_condor_job_runner_executable(r: Request):
+    file = app_state.get_app_state(r).condor_exe_path
+    return FileResponse(file, filename=Path(localfiles.CONDOR_EXE_PATH).name)
+
+
+@ROUTER_REMOTE_RUNNER.get(
+    localfiles.JOBRUNNER_ARCHIVE_PATH,
+    summary="Get the job runner code archive.",
+    description="Not for general use.\n\nGets the code archive file for external job runners.",
+    response_class=FileResponse,
+)
+async def get_job_runner_archive(r: Request):
+    file = app_state.get_app_state(r).jobrunner_archive_path
+    return FileResponse(file, filename=Path(localfiles.JOBRUNNER_ARCHIVE_PATH).name)
 
 
 class ClientLifeTimeError(Exception):
