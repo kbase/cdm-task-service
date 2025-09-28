@@ -106,8 +106,9 @@ class CondorClient:
             "environment": self._get_environment(job),
             "output":  f"cts/{job.id}/cts-{job.id}-$(container_number).out",
             "error": f"cts/{job.id}/cts-{job.id}-$(container_number).err",
-            # TODO CONDOR debug where does the log file go?
-            "log": f"cts/{job.id}/cts-{job.id}-$(container_number).log",
+            # Prefixing the log file with directories seems to make log creation unreliable.
+            # Not sure why
+            "log": f"cts-{job.id}-$(container_number).log",
             "request_cpus": str(job.job_input.cpus),
             "request_memory": mem,
             # request_disk needed?
