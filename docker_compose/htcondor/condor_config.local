@@ -1,0 +1,7 @@
+# Note condor_config.local doesn't exist in /etc/condor in the htcondor-mini image
+
+# Define the clientgroup name
+CLIENTGROUP = "test_cg"
+
+# Advertise the attribute to the schedd
+STARTD_ATTRS = CLIENTGROUP $(STARTD_ATTRS)

@@ -1,5 +1,8 @@
 #!/bin/sh
 
+mkdir /condor_workdir
+chmod 777 /condor_workdir
+
 chmod 755 /etc/condor/tokens.d/
 
 # Kick off a background job to fetch token after startup delay waiting for condor

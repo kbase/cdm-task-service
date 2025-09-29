@@ -25,9 +25,7 @@ services:
       htcondor-mini:
         condition: service_started
     environment:
-      # TODO HTC this will need changes once we determine how to get
-      #          htcondor.Schedd() to work without a schedd_ad
-      - COLLECTOR_HOST=htcondor-mini:9618
+      - _CONDOR_COLLECTOR_HOST=htcondor-mini:9618
       - _CONDOR_SEC_TOKEN_DIRECTORY=/etc/condor/tokens.d
       - KBCTS_PORT=5000
       - KBCTS_KBASE_AUTH2_URL=https://ci.kbase.us/services/auth
@@ -127,6 +125,7 @@ services:
     volumes:
       - ./docker_compose/htcondor/submit_test_script:/opt/submit_test_script
       - ./docker_compose/htcondor/start_condor_and_gen_token.sh:/opt/start_condor_and_gen_token.sh
+      - ./docker_compose/htcondor/condor_config.local:/etc/condor/condor_config.local
       - condor-token:/etc/condor/tokens.d   # shared token directory
     # for some reason the script is failing without the `sh`, not sure why
     command: sh /opt/start_condor_and_gen_token.sh

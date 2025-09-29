@@ -45,13 +45,29 @@ from cdmtaskservice.user import CTSAuth, CTSUser
 class AppState(NamedTuple):
     """ Holds application state. """
     auth: CTSAuth
+    """ The authentication client for the service. """
     sfapi_client_provider: Callable[[], NERSCSFAPIClientProvider]
+    """ A callable that returns a provider for a NERSC SFAPI client. """
     job_state: JobState
+    """ The job state manager class. """
     refdata: Refdata
+    """ The refdata manager class. """
     images: Images
+    """ The Docker images manager class. """
     jobflow_manager: JobFlowManager
+    """ The job flow manager class. """
     kafka_checker: KafkaChecker
+    """ The Kafka state checker class. """
     allowed_paths: list[str]
+    """
+    What paths are allowed for reading and writing files in S3.
+    If empty, the user can read and write to anywhere the service can read and write,
+    other than where job logs are stored.
+    """
+    condor_exe_path: Path
+    """ The local path to the executable file for use when running jobs with HTCondor. """ 
+    code_archive_path: Path
+    """ The local path to the *.tgz archive file for use with jobs in an external runner. """
 
 
 class RequestState(NamedTuple):
@@ -170,7 +186,16 @@ async def build_app(
         kc = KafkaChecker(mongodao, kafka_notifier)
         sfcliprov = _get_sfapi_client_provider(jaws_job_flows)
         app.state._cdmstate = AppState(
-            auth, sfcliprov, job_state, refdata, images, flowman, kc, cfg.allowed_s3_paths
+            auth,
+            sfcliprov,
+            job_state,
+            refdata,
+            images,
+            flowman,
+            kc,
+            cfg.allowed_s3_paths,
+            _get_local_path(cfg.condor_exe_path),
+            _get_local_path(cfg.code_archive_path),
         )
         await _check_unsent_kafka_messages(logr, cfg, kc)
     except:
@@ -182,6 +207,13 @@ async def build_app(
             # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
             await asyncio.wait_for(kafka_notifier.close(), 10)
         raise
+
+
+def _get_local_path(path: str) -> Path:
+    p = Path(path)
+    if not p.is_file():
+        raise ValueError(f"Path {path} does not exist or is not a file")
+    return p
 
 
 def _get_sfapi_client_provider(jaws_flows: JAWSFlowProvider
