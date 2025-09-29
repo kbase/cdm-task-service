@@ -113,6 +113,8 @@ class CondorClient:
             "request_memory": mem,
             # request_disk needed?
 
+            # Fair share stuff - this is way too hard to test. Eventually just check it
+            # shows up in the job classad
             "Concurrency_Limits": job.user,
             "+AccountingGroup": f'"{job.user}"',
             
@@ -121,7 +123,7 @@ class CondorClient:
             "+container_number": "$(container_number)",
         }
         if self._cligrp:
-            # TODO CONDOR TEST clientgroup works
+            # HTCondor will && this with its own requirements
             subdict["requirements"] =  f'(CLIENTGROUP == "{self._cligrp}")'
         sub = htcondor2.Submit(subdict | STATIC_SUB)
         itemdata = [

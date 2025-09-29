@@ -10,7 +10,7 @@ echo "PATH=$PATH"
 # an empty file so that job output doesn't get transferred.
 touch __DUMMY_OUTPUT__
 
-# Put pip and uv on the path, since they're installed for the user only'
+# Put pip and uv on the path, since they're installed for the user only
 export PATH=$HOME/.local/bin:$PATH
 
 tar -xf $JOBRUNNER_ARCHIVE
