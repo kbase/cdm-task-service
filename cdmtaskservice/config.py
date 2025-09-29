@@ -53,11 +53,11 @@ class CDMTaskServiceConfig:
     jaws_token: str - the JAWS token used to run jobs.
     jaws_group: str - the JAWS group used to run jobs.
     condor_exe_path: str - the local path to the HTCondor worker executable.
-    condor_exe_url_override: url - a url, if any, to use for downloading the HTCondor executable
-        rather than the default location.
+    condor_exe_url_override: str | None - a url, if any, to use for downloading the HTCondor
+        executable rather than the default location.
     jobrunner_archive_path: str - the local path to the job runner tgz code archive.
-    jobrunner_archive_url_override: url - a url, if any, to use for downloading the job runner tgz
-        code archive rather than the default location.
+    jobrunner_archive_url_override: str | None - a url, if any, to use for downloading the job
+        runner tgz code archive rather than the default location.
     s3_url: str - the URL of the S3 instance to use for data storage.
     s3_external_url: str - the URL of the S3 instance accessible to external code or services.
     s3_verify_external_url: bool - whether to verify connectivity to the external S3 url at

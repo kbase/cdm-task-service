@@ -74,7 +74,7 @@ class CondorClient:
             raise ValueError(
                 f"Condor url {url} cannot contain query or fragment sections")
 
-        # posizpath ensures use of "/"
+        # posixpath ensures use of "/"
         filename = posixpath.basename(parsed.path)
         if not filename:
             raise ValueError(f"Condor url {url} does not end in a file name")
