@@ -43,17 +43,18 @@ class CondorClient:
         schedd: htcondor2.Schedd,
         initial_dir: Path,
         executable_url: str,
-        runner_archive_url: str,
+        code_archive_url: str,
         client_group: str | None = None
     ):
         """
         Create the client.
         
         schedd: An htcondor Schedd instance, configured to submit jobs to the cluster.
-        initial_dir - where the job should start on the condor worker. The path must exist there.
+        initial_dir - where the job logs should be stored on the condor scheduler host.
+            The path must exist there and locally.
         executable_url - the url for the executable to run in the condor worker for each job.
             Must end in a file name and have no query or fragment.
-        runner_archive_url - the url for the *.tgz file archive to transfer to the condor worker
+        code_archive_url - the url for the *.tgz file code archive to transfer to the condor worker
             for each job. Must end in a file name and have no query or fragment.
         client_group - the client group to submit jobs to, if any. This is a classad on
             a worker with the name CLIENTGROUP.
@@ -64,8 +65,8 @@ class CondorClient:
         self._initial_dir.mkdir(parents=True, exist_ok=True)
         self._exe_url = _require_string(executable_url, "executable_url")
         self._exe_name = self._get_name_from_url(self._exe_url)
-        self._runner_archive_url = _require_string(runner_archive_url, "runner_archive_url")
-        self._runner_archive_name = self._get_name_from_url(self._runner_archive_url)
+        self._code_archive_url = _require_string(code_archive_url, "code_archive_url")
+        self._code_archive_name = self._get_name_from_url(self._code_archive_url)
         self._cligrp = client_group
         
     def _get_name_from_url(self, url: str) -> str:
@@ -84,7 +85,7 @@ class CondorClient:
         env = {
             "JOB_ID": job.id,
             "CONTAINER_NUMBER": "$(container_number)",
-            "JOBRUNNER_ARCHIVE": self._runner_archive_name
+            "CODE_ARCHIVE": self._code_archive_name
             # TODO CONDOR need CTS and minio urls
         }
         environment = ""
@@ -102,7 +103,7 @@ class CondorClient:
             # Has to exist locally and on the condor Schedd host
             # Which doesn't make any sense
             "initialdir": str(self._initial_dir),
-            "transfer_input_files": f"{self._exe_url}, {self._runner_archive_url}",
+            "transfer_input_files": f"{self._exe_url}, {self._code_archive_url}",
             "environment": self._get_environment(job),
             "output":  f"cts/{job.id}/cts-{job.id}-$(container_number).out",
             "error": f"cts/{job.id}/cts-{job.id}-$(container_number).err",

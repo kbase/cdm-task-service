@@ -15,7 +15,7 @@ _SEC_NERSC_JAWS = "NERSC_JAWS"
 _SEC_NERSC = "NERSC"
 _SEC_JAWS = "JAWS"
 _SEC_HTCONDOR = "HTCondor"
-_SEC_JOBRUNNER = "JobRunner"
+_SEC_EXTERNAL_EXEC = "ExternalExecution"
 _SEC_S3 = "S3"
 _SEC_MONGODB = "MongoDB"
 _SEC_JOBS = "Jobs"
@@ -24,7 +24,7 @@ _SEC_IMAGE = "Images"
 _SEC_SERVICE = "Service"
 
 _SECS=[
-    _SEC_AUTH, _SEC_NERSC_JAWS, _SEC_NERSC, _SEC_JAWS, _SEC_HTCONDOR, _SEC_JOBRUNNER, _SEC_S3,
+    _SEC_AUTH, _SEC_NERSC_JAWS, _SEC_NERSC, _SEC_JAWS, _SEC_HTCONDOR, _SEC_EXTERNAL_EXEC, _SEC_S3,
     _SEC_MONGODB, _SEC_JOBS, _SEC_KAFKA, _SEC_IMAGE, _SEC_SERVICE
 ]
 
@@ -55,9 +55,9 @@ class CDMTaskServiceConfig:
     condor_exe_path: str - the local path to the HTCondor worker executable.
     condor_exe_url_override: str | None - a url, if any, to use for downloading the HTCondor
         executable rather than the default location.
-    jobrunner_archive_path: str - the local path to the job runner tgz code archive.
-    jobrunner_archive_url_override: str | None - a url, if any, to use for downloading the job
-        runner tgz code archive rather than the default location.
+    code_archive_path: str - the local path to the tgz code archive.
+    code_archive_url_override: str | None - a url, if any, to use for downloading the 
+        tgz code archive rather than the default location.
     s3_url: str - the URL of the S3 instance to use for data storage.
     s3_external_url: str - the URL of the S3 instance accessible to external code or services.
     s3_verify_external_url: bool - whether to verify connectivity to the external S3 url at
@@ -137,9 +137,9 @@ class CDMTaskServiceConfig:
         self.condor_exe_url_override = _get_string_optional(
             config, _SEC_HTCONDOR, "executable_url_override"
         )
-        self.jobrunner_archive_path = _get_string_required(config, _SEC_JOBRUNNER, "archive_path")
-        self.jobrunner_archive_url_override = _get_string_optional(
-            config, _SEC_JOBRUNNER, "archive_url_override"
+        self.code_archive_path = _get_string_required(config, _SEC_EXTERNAL_EXEC, "archive_path")
+        self.code_archive_url_override = _get_string_optional(
+            config, _SEC_EXTERNAL_EXEC, "archive_url_override"
         )
         self.s3_url = _get_string_required(config, _SEC_S3, "url")
         self.s3_external_url = _get_string_required(config, _SEC_S3, "external_url")
@@ -240,8 +240,8 @@ class CDMTaskServiceConfig:
             f"JAWS group: {self.jaws_group}",
             f"HTCondor exe path: {self.condor_exe_path}",
             f"HTCondor exe url override: {self.condor_exe_url_override}",
-            f"Jobrunner archive path: {self.jobrunner_archive_path}",
-            f"Jobrunner archive url override: {self.jobrunner_archive_url_override}",
+            f"Code archive path: {self.code_archive_path}",
+            f"Code archive url override: {self.code_archive_url_override}",
             f"S3 URL: {self.s3_url}",
             f"S3 external URL: {self.s3_external_url}",
             f"S3 verify external URL: {self.s3_verify_external_url}",

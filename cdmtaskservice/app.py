@@ -208,7 +208,7 @@ def create_app():
     app.include_router(routes.ROUTER_REFDATA)
     app.include_router(routes.ROUTER_ADMIN)
     app.include_router(routes.ROUTER_CALLBACKS)
-    app.include_router(routes.ROUTER_REMOTE_RUNNER)
+    app.include_router(routes.ROUTER_EXTERNAL_EXEC)
 
     async def build_app_wrapper():
         await app_state.build_app(app, cfg)

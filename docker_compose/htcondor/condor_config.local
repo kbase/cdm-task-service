@@ -4,4 +4,4 @@
 CLIENTGROUP = "test_cg"
 
 # Advertise the attribute to the schedd
-STARTD_ATTRS = CLIENTGROUP, $(STARTD_ATTRS)
+STARTD_ATTRS = CLIENTGROUP $(STARTD_ATTRS)

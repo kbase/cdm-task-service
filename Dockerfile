@@ -48,10 +48,10 @@ ENV KBCTS_CRANE_PATH=/cts/crane
 
 WORKDIR /cts
 
-# build the job runner archive
+# build the code archive
 
 RUN tar -czf cts.tgz --exclude="*/__pycache__*" cdmtaskservice -C /uvinstall .
-ENV KBCTS_JOB_RUNNER_ARCHIVE_PATH=/cts/cts.tgz
+ENV KBCTS_CODE_ARCHIVE_PATH=/cts/cts.tgz
 ENV KBCTS_HTC_EXE_PATH=/cts/cdmtaskservice/condor/run_job.sh
 
 ENTRYPOINT ["tini", "--", "/cts/entrypoint.sh"]

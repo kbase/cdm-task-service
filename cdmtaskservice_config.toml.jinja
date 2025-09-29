@@ -89,17 +89,18 @@ executable_path = "{{ KBCTS_HTC_EXE_PATH }}"
 # service.
 executable_url_override = "{{ KBCTS_HTC_EXE_URL_OVERRIDE or "" }}"
 
-[JobRunner]
+[ExternalExecution]
 
-# The local path, accessible to the server, to the job runner code tgz archive file.
+# The local path, accessible to the server, to the external execution code tgz archive file.
 # If using the provided Dockerfile, this value is set there.
-archive_path = "{{ KBCTS_JOB_RUNNER_ARCHIVE_PATH }}"
+archive_path = "{{ KBCTS_CODE_ARCHIVE_PATH }}"
 
-# A URL that will override the default location to download the job runner code archive tgz file.
+# A URL that will override the default location to download the external execution code
+# archive tgz file.
 # By default this is constructed from the service root url (below) and a default path.
 # If set, it becomes the user's responsibility to keep the archive file up to date with the
 # service.
-archive_url_override = "{{ KBCTS_JOB_RUNNER_ARCHIVE_URL_OVERRIDE or "" }}"
+archive_url_override = "{{ KBCTS_CODE_ARCHIVE_URL_OVERRIDE or "" }}"
 
 [S3]
 
