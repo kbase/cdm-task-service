@@ -239,7 +239,8 @@ class CondorClient:
             )
         return {k: job_ads[0][k] for k in _RETURNED_JOB_ADS if job_ads[0].get(k) is not None}
         
-    async def get_job_status(self, cluster_id: int) -> tuple[list[dict[str, Any]]]:
+    async def get_job_status(self, cluster_id: int
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """
         Get the htcondor status for a job. Returns all containers.
         A subset of the job ClassAd fields are returned.
@@ -260,11 +261,11 @@ class CondorClient:
         )
         if not running_job_ads and not complete_job_ads:
             raise ValueError(f"No records found for cluster ID {cluster_id}")
-        id2ad = {(ad["ClusterID"], ad["ProcID"]): ad for ad in running_job_ads}
+        id2ad = {(ad["ClusterId"], ad["ProcId"]): ad for ad in running_job_ads}
         for ad in complete_job_ads:
-            cont_id = (ad["ClusterID"], ad["ProcID"])
+            job_key = (ad["ClusterId"], ad["ProcId"])
             # remove jobs that have transitioned to complete between the queries
-            id2ad.pop(cont_id, None)
+            id2ad.pop(job_key, None)
         running = [{k: ad[k] for k in _RETURNED_JOB_ADS if ad.get(k) is not None}
                    for ad in id2ad.values()
                    ]
