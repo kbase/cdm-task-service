@@ -13,10 +13,12 @@ class Cluster(str, Enum):
     
     perlmutter-jaws: The Perlmutter cluster at NERSC run via JAWS.
     lawrencium-jaws: The Lawrencium cluster at LBNL run via JAWS.
+    kbase: KBase compute nodes.
     """
 
     PERLMUTTER_JAWS = "perlmutter-jaws"
     LAWRENCIUM_JAWS = "lawrencium-jaws"
+    KBASE = "kbase"
 
 
 class ComputeSite(BaseModel):
@@ -26,7 +28,7 @@ class ComputeSite(BaseModel):
         examples=[Cluster.PERLMUTTER_JAWS.value],
         description="The site identifier",
     )]
-    nodes: Annotated[int, Field(
+    nodes: Annotated[int | None, Field(
         examples=[3042],
         description="The number of nodes at the site, or null if the node count is not static"
     )] = None
@@ -77,9 +79,25 @@ LAWRENCIUM_JAWS = ComputeSite(
 )
 
 
+KBASE = ComputeSite(
+    cluster=Cluster.KBASE,
+    nodes=None,
+    cpus_per_node=84 * 2,
+    memory_per_node_gb=990,  # Leave 10GB for overhead
+    max_runtime_min=(7 * 24 * 60) - 15, # Leave 15 slack for overhead
+    notes=[
+        "The DOE Systems Biology Knowledge Base compute systems.",
+        "The number of nodes may be adjusted up or down to support the needs of KBase "
+        + "as a whole.",
+        "Queue times are typically somewhere between Lawrencium and NERSC."
+    ]
+)
+
+
 CLUSTER_TO_SITE = {
     Cluster.PERLMUTTER_JAWS: PERLMUTTER_JAWS,
     Cluster.LAWRENCIUM_JAWS: LAWRENCIUM_JAWS,
+    Cluster.KBASE: KBASE,
 }
 """ A mapping of compute clusters to their site information. """
 
