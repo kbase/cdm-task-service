@@ -7,10 +7,76 @@ import asyncio
 import htcondor2
 from pathlib import Path
 import posixpath
+from typing import Any
 from yarl import URL
 
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
+from cdmtaskservice.arg_checkers import (
+    not_falsy as _not_falsy,
+    require_string as _require_string,
+    check_num as _check_num,
+)
 from cdmtaskservice import models
+
+
+_AD_JOB_ID = "CTSJobID"
+_AD_CONTAINER_NUMBER = "CTSContainerNumber"
+
+_LOCATIONS = ["Iwd", "Err", "Out", "UserLog"]
+_IDS = ["ClusterId", "ProcId", _AD_JOB_ID, _AD_CONTAINER_NUMBER]
+_RESOURCES = [
+    "RequestCpus",
+    "RequestDisk",
+    "RequestMemory",
+    "CpusProvisioned",
+    "DiskProvisioned",
+    "GPUsProvisioned",
+    "CpusUsage",
+    "RemoteUserCpu",
+    "CumulativeRemoteSysCpu",
+    "CumulativeRemoteUserCpu",
+    "DiskUsage",
+    "DiskUsage_RAW",
+    "ResidentSetSize",
+    "ResidentSetSize_RAW",
+    "ImageSize",
+    "ImageSize_RAW",
+]
+_CONDOR_DEETS = ["Owner", "User", "CondorVersion", "CondorPlatform"]
+_INPUTS = ["Environment", "Requirements", "TransferInput", "LeaveJobInQueue"]
+_JOB_STATE = [
+    "Rank",
+    "JobPrio",
+    "JobStatus",
+    "ExitCode",
+    "ExitStatus",
+    "JobRunCount",
+    "NumRestarts",
+    "NumJobStarts",
+    "HoldReason",
+    "HoldReasonCode",
+    "VacateReason",
+    "VacateReasonCode",
+]
+_FAIR_SHARE = ["ConcurrencyLimits", "AccountingGroup"]
+_TIME = [
+    "JobStartDate",
+    "CommittedTime",
+    "CommittedSuspensionTime",
+    "CompletionDate",
+    "CumulativeSuspensionTime",
+    "CumulativeTransferTime",
+    "JobCurrentFinishTransferInputDate",
+    "JobCurrentFinishTransferOutputDate",
+    "JobCurrentStartDate",
+    "JobCurrentStartExecutingDate",
+    "JobCurrentStartTransferInputDate",
+    "JobCurrentStartTransferOutputDate",
+]
+_OTHER = ["StartdPrincipal", "RemoteHost", "LastRemoteHost"]
+_RETURNED_JOB_ADS = (
+    _LOCATIONS + _IDS + _RESOURCES + _CONDOR_DEETS + _INPUTS + _JOB_STATE + _FAIR_SHARE + _TIME
+    + _OTHER
+)
 
 
 # A lot of this is copied from
@@ -120,8 +186,8 @@ class CondorClient:
             "+AccountingGroup": f'"{job.user}"',
             
             # Make finding jobs with query / history easier
-            "+CTS_Job_ID": job.id,
-            "+container_number": "$(container_number)",
+            f"+{_AD_JOB_ID}": f'"{job.id}"',  # must be quoted
+            f"+{_AD_CONTAINER_NUMBER}": "$(container_number)",
         }
         if self._cligrp:
             # HTCondor will && this with its own requirements
@@ -144,3 +210,65 @@ class CondorClient:
         # could probably make itemdata an generator, YAGNI
         jobres = await asyncio.to_thread(self._schedd.submit, sub, itemdata=iter(itemdata))
         return jobres.cluster()
+    
+    # TODO CANCEL_JOB for condor
+
+    async def get_container_status(self, cluster_id: int, container_number: int) -> dict[str, Any]:
+        """
+        Get the htcondor status for a specific container for a job.
+        A subset of the job ClassAd fields are returned.
+        """
+        _check_num(cluster_id, "cluster_id")
+        _check_num(container_number, "container_number")
+        constraint = f"ClusterId == {cluster_id} && {_AD_CONTAINER_NUMBER} == {container_number}"
+        job_ads = await asyncio.to_thread(  # Don't block the event loop
+            self._schedd.query,
+            constraint=constraint,
+            projection=_RETURNED_JOB_ADS,
+        )
+        if not job_ads:
+            job_ads = await asyncio.to_thread(
+                self._schedd.history,
+                constraint=constraint,
+                projection=_RETURNED_JOB_ADS,
+            )
+        if not job_ads:
+            raise ValueError(
+                f"No record found for cluster ID {cluster_id} and container number "
+                + f"{container_number}"
+            )
+        return {k: job_ads[0][k] for k in _RETURNED_JOB_ADS if job_ads[0].get(k) is not None}
+        
+    async def get_job_status(self, cluster_id: int) -> tuple[list[dict[str, Any]]]:
+        """
+        Get the htcondor status for a job. Returns all containers.
+        A subset of the job ClassAd fields are returned.
+        
+        Returns a 2-tuple of running jobs and completed jobs.
+        """
+        _check_num(cluster_id, "cluster_id")
+        constraint = f"ClusterId == {cluster_id}"
+        running_job_ads = await asyncio.to_thread(  # Don't block the event loop
+            self._schedd.query,
+            constraint=constraint,
+            projection=_RETURNED_JOB_ADS,
+        )
+        complete_job_ads = await asyncio.to_thread(
+            self._schedd.history,
+            constraint=constraint,
+            projection=_RETURNED_JOB_ADS,
+        )
+        if not running_job_ads and not complete_job_ads:
+            raise ValueError(f"No records found for cluster ID {cluster_id}")
+        id2ad = {(ad["ClusterID"], ad["ProcID"]): ad for ad in running_job_ads}
+        for ad in complete_job_ads:
+            cont_id = (ad["ClusterID"], ad["ProcID"])
+            # remove jobs that have transitioned to complete between the queries
+            id2ad.pop(cont_id, None)
+        running = [{k: ad[k] for k in _RETURNED_JOB_ADS if ad.get(k) is not None}
+                   for ad in id2ad.values()
+                   ]
+        complete = [{k: ad[k] for k in _RETURNED_JOB_ADS if ad.get(k) is not None}
+                    for ad in complete_job_ads
+                    ]
+        return running, complete
