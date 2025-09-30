@@ -215,7 +215,9 @@ class CondorClient:
 
     async def get_container_status(self, cluster_id: int, container_number: int) -> dict[str, Any]:
         """
-        Get the htcondor status for a specific container for a job.
+        Get the HTCondor status for a specific container for a job, specified by the job's
+        HTCondor ClusterID.
+        The container_number in practice is the HTCondor ProcId + 1.
         A subset of the job ClassAd fields are returned.
         """
         _check_num(cluster_id, "cluster_id")
