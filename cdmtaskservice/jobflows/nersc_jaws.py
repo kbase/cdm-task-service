@@ -107,11 +107,6 @@ class NERSCJAWSRunner(JobFlow):
         self._callback_root = _require_string(service_root_url, "service_root_url")
         self._on_refdata_complete = on_refdata_complete
     
-    @classmethod
-    def get_cluster(cls) -> sites.Cluster:
-        """ Get the cluster on which this job flow manager operates. """
-        return cls.CLUSTER
-    
     async def _handle_exception(
         self, e: Exception, entity_id: str, errtype: str, refdata: bool = False
     ):
@@ -209,12 +204,13 @@ class NERSCJAWSRunner(JobFlow):
             self.CLUSTER, refdata_id, update, timestamp.utcdatetime()
         )
 
-    def precheck(self, user: CTSUser, job_input: models.JobInput):
+    async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
         """
         Check that the inputs to a job are acceptable prior to running a job. Will throw an
         error if the inputs don't meet requirements.
         
         user - the user running the job.
+        job_id - the job's ID.
         job_input - the job input.
         """
         _not_falsy(user, "user")

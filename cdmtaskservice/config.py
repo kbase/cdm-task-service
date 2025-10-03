@@ -244,7 +244,7 @@ class CDMTaskServiceConfig:
             f"JAWS group: {self.jaws_group}",
             f"HTCondor exe path: {self.condor_exe_path}",
             f"HTCondor exe url override: {self.condor_exe_url_override}",
-            f"HTCondor intialdir: {self.condor_initialdir}",
+            f"HTCondor initialdir: {self.condor_initialdir}",
             f"HTCondor client group: {self.condor_clientgroup}",
             f"Code archive path: {self.code_archive_path}",
             f"Code archive url override: {self.code_archive_url_override}",
