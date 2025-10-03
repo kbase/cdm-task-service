@@ -938,7 +938,7 @@ async def _callback_handling(
 
 
 @ROUTER_EXTERNAL_EXEC.get(
-    localfiles.CONDOR_EXE_PATH,
+    f"/{localfiles.CONDOR_EXE_PATH}",
     summary="Get the condor executable script",
     description="Not for general use.\n\nGets the executable script to run on workers "
         + "for running HTCondor jobs.",
@@ -950,7 +950,7 @@ async def get_condor_executable(r: Request):
 
 
 @ROUTER_EXTERNAL_EXEC.get(
-    localfiles.CODE_ARCHIVE_PATH,
+    f"/{localfiles.CODE_ARCHIVE_PATH}",
     summary="Get the code archive.",
     description="Not for general use.\n\nGets the code archive file for external job execution.",
     response_class=FileResponse,

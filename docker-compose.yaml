@@ -42,6 +42,10 @@ services:
       # Don't commit your token to github please
       - KBCTS_JAWS_TOKEN=tokengoeshere
       - KBCTS_JAWS_GROUP=kbase
+      # From ./docker_compose/htcondor/start_condor_and_gen_token.sh
+      - KBCTS_HTC_INITIAL_DIR=/condor_workdir
+      # From ./docker_compose/htcondor/condor_config.local
+      - KBCTS_HTC_CLIENT_GROUP=test_cg
       # Note that the host minio must be bound to 0.0.0.0:9002 or 172.17.0.1:9002 (the docker
       # bridge interface). The latter is safer but only works for bridge networks
       - KBCTS_S3_URL=http://host.docker.internal:9002
@@ -66,7 +70,7 @@ services:
       - KBCTS_JOB_MAX_CPU_HOURS=200
       - KBCTS_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KBCTS_KAFKA_TOPIC_JOBS=cts-jobs
-      - KBCTS_SERVICE_ROOT_URL=https://ci.kbase.us/services/cts
+      - KBCTS_SERVICE_ROOT_URL=https://cdm_task_service:5000
       - KBCTS_SERVICE_GROUP=local_development
     volumes:
       - ./tmp_creds:/creds

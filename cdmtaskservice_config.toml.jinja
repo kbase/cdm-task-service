@@ -89,6 +89,15 @@ executable_path = "{{ KBCTS_HTC_EXE_PATH }}"
 # service.
 executable_url_override = "{{ KBCTS_HTC_EXE_URL_OVERRIDE or "" }}"
 
+# The initial job directory on the condor SCHEDD daemon host and locally. Equivalent to the
+# "initialdir" argument in a submit file or to Submit(). Must exist or be createable by the
+# service locally and must exist on the SCHEDD host.
+initialdir = "{{ KBCTS_HTC_INITIAL_DIR or "/condor_workdir" }}"
+
+# The client group to submit to. This is a ClassAd on HTC workers with the name CLIENTGROUP.
+# If omitted, the service will not distinguish between workers.
+clientgroup = "{{ KBCTS_HTC_CLIENT_GROUP or "" }}"
+
 [ExternalExecution]
 
 # The local path, accessible to the server, to the external execution code tgz archive file.

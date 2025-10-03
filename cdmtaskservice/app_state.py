@@ -13,6 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 from pathlib import Path
 from typing import NamedTuple, Callable
+from yarl import URL
 
 
 from cdmtaskservice.config import CDMTaskServiceConfig
@@ -23,10 +24,12 @@ from cdmtaskservice.images import Images
 from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.jaws_flows_provider import JAWSFlowProvider
+from cdmtaskservice.jobflows.kbase import KBaseFlowProvider, KBaseRunner
 from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.job_state import JobState
+from cdmtaskservice.localfiles import get_condor_exe_url, get_code_archive_url
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
@@ -163,6 +166,7 @@ async def build_app(
         jaws_job_flows = await _register_nersc_job_flows(
             logr, cfg, flowman, mongodao, s3config, kafka_notifier, coman
         )
+        _register_kbase_job_flow(cfg, flowman, mongodao, s3config, kafka_notifier, coman)
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3, coman, flowman)
         images = Images(mongodao, imginfo, refdata)
@@ -245,7 +249,7 @@ async def _register_nersc_job_flows(
     coman: CoroutineWrangler
 ) -> JAWSFlowProvider:
     # This is only useful for testing with other processes that just want to pull job records
-    # but not start or run jobs. As such it's undocumented.
+    # but not start or run jobs or only run KBase jobs. As such it's undocumented.
     if os.environ.get("KBCTS_SKIP_NERSC") == "true":
         logr.info("KBCTS_SKIP_NERSC env var is 'true', skipping NERSC and JAWS startup")
         return None
@@ -264,6 +268,30 @@ async def _register_nersc_job_flows(
     flowman.register_flow(NERSCJAWSRunner.CLUSTER, jaws_job_flows.get_nersc_job_flow)
     flowman.register_flow(LawrenciumJAWSRunner.CLUSTER, jaws_job_flows.get_lrc_job_flow)
     return jaws_job_flows
+
+
+def _register_kbase_job_flow(
+    cfg: CDMTaskServiceConfig,
+    flowman: JobFlowManager,
+    mongodao: MongoDAO,
+    s3config: S3Config,
+    kafka_notifier: KafkaNotifier,
+    coman: CoroutineWrangler
+):
+    exe_ov = URL(cfg.condor_exe_url_override) if cfg.condor_exe_url_override else None
+    code_ov = URL(cfg.code_archive_url_override) if cfg.code_archive_url_override else None
+    kbase_provider = KBaseFlowProvider.create(
+        Path(cfg.condor_initialdir),
+        str(get_condor_exe_url(base_url=URL(cfg.service_root_url), override=exe_ov)),
+        str(get_code_archive_url(base_url=URL(cfg.service_root_url), override=code_ov)),
+        mongodao,
+        s3config,
+        kafka_notifier,
+        coman,
+        cfg.service_root_url,
+        condor_client_group=cfg.condor_clientgroup
+    )
+    flowman.register_flow(KBaseRunner.CLUSTER, kbase_provider.get_kbase_job_flow)
 
 
 def get_app_state(r: Request) -> AppState:
