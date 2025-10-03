@@ -55,7 +55,7 @@ class JobState:
         """
         Create the job state manager.
         
-        mongo - a MongoDB DAO object.
+        mongo - a MongoDB DAO.
         s3Client - an S3Client pointed at the S3 storage system to use.
         images - a handler for getting images.
         kafka - a Kafka notifier.

@@ -18,6 +18,10 @@ from cdmtaskservice.arg_checkers import (
 from cdmtaskservice import models
 
 
+# Some of this stuff is pretty specific to KBase but the likelihood we'll ever be submitting
+# to some other condor instance is pretty low, so don't worry about it 
+
+
 _AD_JOB_ID = "CTSJobID"
 _AD_CONTAINER_NUMBER = "CTSContainerNumber"
 
@@ -95,7 +99,7 @@ STATIC_SUB = {
     # For some reason setting transfer_output_files to the empty string isn't working.
     # We specify an empty file so that large job output doesn't get transferred.
     "transfer_output_files": "__DUMMY_OUTPUT__",
-    "getenv": "False"
+    "getenv": "False",
 }
 
 

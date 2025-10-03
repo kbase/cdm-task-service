@@ -12,11 +12,6 @@ from cdmtaskservice.exceptions import UnavailableJobFlowError
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice import sites
 
-# Currently this isn't too useful since there's only one job flow, so if it's not available
-# the service might as well not start up.
-# In the future, this module should be able to enable and disable job flowa and report their
-# status to users.
-
 
 class JobFlow:
     """

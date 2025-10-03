@@ -87,7 +87,7 @@ class NERSCJAWSRunner(JobFlow):
         
         nersc_manager - the NERSC manager.
         jaws_client - a JAWS Central client.
-        mongodao - the Mongo DAO object.
+        mongodao - the Mongo DAO.
         s3config - the S3 configuration.
         kafka - a Kafka notifier.
         coro_manager - a coroutine manager.

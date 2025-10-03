@@ -5,14 +5,14 @@ Deals with serving local files via the API.
 from yarl import URL
 
 
-CONDOR_EXE_PATH = "/external_exec/files/condor/executable.sh"
+CONDOR_EXE_PATH = "external_exec/files/condor/executable.sh"
 """
 The path of the url where, by default, the HTCondor executable file can be found. This file
 is run on the condor workers.
 """
 
 
-CODE_ARCHIVE_PATH = "/external_exec/files/code_archive.tgz"
+CODE_ARCHIVE_PATH = "external_exec/files/code_archive.tgz"
 """
 The path of the url where, by default, the code archive tgz can be found.
 """

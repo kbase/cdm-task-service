@@ -5,6 +5,7 @@ echo "JOBID=$JOB_ID"
 echo "CONTAINER_NUMBER=$CONTAINER_NUMBER"
 echo "CODE_ARCHIVE=$CODE_ARCHIVE"
 echo "PATH=$PATH"
+echo "PWD=$PWD"
 
 # For some reason setting transfer_output_files to the empty string isn't working. We touch
 # an empty file so that job output doesn't get transferred.
