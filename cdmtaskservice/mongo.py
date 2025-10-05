@@ -813,7 +813,7 @@ class MongoDAO:
         if not res.matched_count:
             cs = f"in state {current_state.value} " if current_state else ""
             raise NoSuchReferenceDataError(
-                f"No reference data with ID '{refdata_id}' for cluster {cluster.value} {cs}exits"
+                f"No reference data with ID '{refdata_id}' for cluster {cluster.value} {cs}exists"
             )
 
     async def update_refdata_state(

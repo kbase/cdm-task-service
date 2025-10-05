@@ -5,14 +5,11 @@ Manages running jobs at NERSC using the JAWS system.
 import logging
 import os
 from pathlib import Path
-import traceback
 from typing import Any, Callable, Awaitable
-import uuid
 
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice import sites
-from cdmtaskservice import timestamp
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
@@ -30,6 +27,7 @@ from cdmtaskservice.exceptions import (
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
+from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
 from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
@@ -46,11 +44,8 @@ from cdmtaskservice.update_state import (
     submitting_error_processing,
     submitted_nersc_error_processing,
     error,
-    JobUpdate,
     submitted_nersc_refdata_download,
     refdata_complete,
-    refdata_error,
-    RefdataUpdate,
 )
 from cdmtaskservice.user import CTSUser
 
@@ -102,28 +97,10 @@ class NERSCJAWSRunner(JobFlow):
         self._s3ext = s3config.external_client
         self._s3insecure = s3config.insecure
         self._s3logdir = s3config.error_log_path
-        self._kafka = _not_falsy(kafka, "kafka")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")
         self._on_refdata_complete = on_refdata_complete
-    
-    async def _handle_exception(
-        self, e: Exception, entity_id: str, errtype: str, refdata: bool = False
-    ):
-        logging.getLogger(__name__).exception(
-            f"Error {errtype} {'refdata' if refdata else 'job'}.",
-            extra={logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id}
-        )
-        await self._save_err_to_mongo(
-            entity_id,
-            # We'll need to see what kinds of errors happen and change the user message
-            # appropriately. Just provide a generic message for now, as most errors aren't
-            # going to be fixable by users
-            "An unexpected error occurred",
-            str(e),
-            traceback=traceback.format_exc(),
-            refdata=refdata,
-        )
+        self._updates = JobFlowStateUpdates(self.CLUSTER, self._mongo, _not_falsy(kafka, "kafka"))
     
     async def _get_transfer_result(
         self,
@@ -139,7 +116,7 @@ class NERSCJAWSRunner(JobFlow):
         try:
             res, data = await trans_func()
         except Exception as e:
-            await self._handle_exception(e, entity_id, err_type, refdata=refdata)
+            await self._updates.handle_exception(e, entity_id, err_type, refdata=refdata)
             raise
         if res.state == TransferState.INCOMPLETE:
             errcls = InvalidReferenceDataStateError if refdata else InvalidJobStateError
@@ -153,7 +130,7 @@ class NERSCJAWSRunner(JobFlow):
                     logfields.REMOTE_TRACEBACK: res.traceback
                 }
             )
-            await self._save_err_to_mongo(
+            await self._updates.save_error(
                 entity_id,
                 f"An unexpected error occurred during file {op.lower()}",
                 res.message,
@@ -164,46 +141,6 @@ class NERSCJAWSRunner(JobFlow):
         else:
             return data
     
-    async def _save_err_to_mongo(
-        self,
-        entity_id: str,
-        user_err: str,
-        admin_err: str,
-        traceback: str = None,
-        logpath: str = None,
-        refdata=False,
-    ):
-        # if this fails, well, then we're screwed
-        # could probably simplify this with a partial fn to hold the cluster arg.. meh
-        if refdata:
-            await self._update_refdata_state(entity_id, refdata_error(
-                user_err, admin_err, traceback=traceback)
-            )
-        else:
-            await self._update_job_state(entity_id, error(
-                user_err, admin_err, traceback=traceback, log_files_path=logpath
-            ))
-
-    async def _update_job_state(self, job_id: str, update: JobUpdate):
-        # may want to factor this to a shared module if we ever support other flows
-        # TODO TEST will need to mock out uuid
-        trans_id = str(uuid.uuid4())
-        # TODO TEST will need a way to mock out timestamps
-        update_time = timestamp.utcdatetime()
-        async def cb():
-            await self._mongo.job_update_sent(job_id, trans_id)
-        await self._mongo.update_job_state(job_id, update, update_time, trans_id)
-        await self._kafka.update_job_state(
-            job_id, update.new_state, update_time, trans_id, callback=cb()
-        )
-
-    async def _update_refdata_state(self, refdata_id: str, update: RefdataUpdate
-    ):
-        await self._mongo.update_refdata_state(
-            # TODO TEST will need a way to mock out timestamps
-            self.CLUSTER, refdata_id, update, timestamp.utcdatetime()
-        )
-
     async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
         """
         Check that the inputs to a job are acceptable prior to running a job. Will throw an
@@ -265,9 +202,9 @@ class NERSCJAWSRunner(JobFlow):
             # May need to refactor this and the mongo method later to be more generic to
             # remote cluster and have job_state handle choosing the correct mongo method & params
             # to run
-            await self._update_job_state(job.id, submitted_nersc_download(task_id))
+            await self._updates.update_job_state(job.id, submitted_nersc_download(task_id))
         except Exception as e:
-            await self._handle_exception(e, job.id, "starting file download for")
+            await self._updates.handle_exception(e, job.id, "starting file download for")
 
     async def download_complete(self, job: models.AdminJobDetails):
         """
@@ -281,7 +218,7 @@ class NERSCJAWSRunner(JobFlow):
         await self._get_transfer_result(  # check for errors
             tfunc, job.id, "Download", "getting download results for",
         )
-        await self._update_job_state(job.id, submitting_job())
+        await self._updates.update_job_state(job.id, submitting_job())
         await self._coman.run_coroutine(self._submit_jaws_job(job))
     
     async def _submit_jaws_job(self, job: models.AdminJobDetails):
@@ -289,11 +226,11 @@ class NERSCJAWSRunner(JobFlow):
             # TODO PERF configure file download concurrency
             jaws_job_id = await self._nman.run_JAWS(job)
             # See notes above about adding the NERSC task id to the job
-            await self._update_job_state(job.id, submitted_jaws_job(jaws_job_id))
+            await self._updates.update_job_state(job.id, submitted_jaws_job(jaws_job_id))
             jaws_info = await poll_jaws(self._jaws, job.id, jaws_job_id)
             await self._job_complete(job, jaws_info)
         except Exception as e:
-            await self._handle_exception(e, job.id, "starting JAWS job for")
+            await self._updates.handle_exception(e, job.id, "starting JAWS job for")
 
     async def job_complete(self, job: models.AdminJobDetails):
         """
@@ -312,17 +249,17 @@ class NERSCJAWSRunner(JobFlow):
             raise InvalidJobStateError("JAWS run is incomplete")
         res = jaws_client.result(jaws_info)
         if res == jaws_client.JAWSResult.SUCCESS:
-            await self._update_job_state(
+            await self._updates.update_job_state(
                 job.id, submitting_upload(cpu_hours=jaws_info["cpu_hours"])
             )
             await self._coman.run_coroutine(self._upload_files(job, jaws_info))
         elif res == jaws_client.JAWSResult.FAILED:
-            await self._update_job_state(
+            await self._updates.update_job_state(
                 job.id, submitting_error_processing(cpu_hours=jaws_info["cpu_hours"])
             )
             await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
         elif res == jaws_client.JAWSResult.CANCELED:
-            await self._update_job_state(job.id, error(
+            await self._updates.update_job_state(job.id, error(
                 "The job was unexpectedly canceled",
                 "JAWS reported the job as canceled",
                 cpu_hours=jaws_info["cpu_hours"],
@@ -331,7 +268,7 @@ class NERSCJAWSRunner(JobFlow):
         elif res == jaws_client.JAWSResult.SYSTEM_ERROR:
             # there's no way to force a jaws system error that I'm aware of, will need to
             # test via unit tests
-            await self._update_job_state(job.id, error(
+            await self._updates.update_job_state(job.id, error(
                 "An unexpected error occurred",
                 "JAWS failed to run the job - check the JAWS job logs",
                 cpu_hours=jaws_info["cpu_hours"],
@@ -358,9 +295,9 @@ class NERSCJAWSRunner(JobFlow):
                 get_error_log_upload_complete_callback(self._callback_root, job.id),
                 insecure_ssl=self._s3insecure,
             )
-            await self._update_job_state(job.id, submitted_nersc_error_processing(task_id))
+            await self._updates.update_job_state(job.id, submitted_nersc_error_processing(task_id))
         except Exception as e:
-            await self._handle_exception(e, job.id, "starting error processing for")
+            await self._updates.handle_exception(e, job.id, "starting error processing for")
     
     async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
         # This is kind of similar to the method above, not sure if trying to merge is worth it
@@ -381,9 +318,9 @@ class NERSCJAWSRunner(JobFlow):
                 insecure_ssl=self._s3insecure,
             )
             # See notes above about adding the NERSC task id to the job
-            await self._update_job_state(job.id, submitted_nersc_upload(task_id))
+            await self._updates.update_job_state(job.id, submitted_nersc_upload(task_id))
         except Exception as e:
-            await self._handle_exception(e, job.id, "starting file upload for")
+            await self._updates.handle_exception(e, job.id, "starting file upload for")
 
     async def upload_complete(self, job: models.AdminJobDetails):
         """
@@ -417,9 +354,9 @@ class NERSCJAWSRunner(JobFlow):
                     )
                 outfiles.append(models.S3File(file=o.path, crc64nvme=o.crc64nvme))
             # TODO DISKSPACE will need to clean up job results @ NERSC
-            await self._update_job_state(job.id, complete(outfiles))
+            await self._updates.update_job_state(job.id, complete(outfiles))
         except Exception as e:
-            await self._handle_exception(e, job.id, "completing")
+            await self._updates.handle_exception(e, job.id, "completing")
 
 
     async def error_log_upload_complete(self, job: models.AdminJobDetails):
@@ -443,7 +380,7 @@ class NERSCJAWSRunner(JobFlow):
         else:  # will probably need to expand this as we learn about JAWS errors
             err = "An unexpected error occurred."
         # if we can't talk to mongo there's not much to do
-        await self._save_err_to_mongo(
+        await self._updates.save_error(
             job.id,
             err,
             f"Example container error: {data[0][1]}",
@@ -510,9 +447,13 @@ class NERSCJAWSRunner(JobFlow):
                 refdata=True,
                 unpack=refdata.unpack,
             )
-            await self._update_refdata_state(refdata.id, submitted_nersc_refdata_download(task_id))
+            await self._updates.update_refdata_state(
+                refdata.id, submitted_nersc_refdata_download(task_id)
+            )
         except Exception as e:
-            await self._handle_exception(e, refdata.id, "starting file download for", refdata=True)
+            await self._updates.handle_exception(
+                e, refdata.id, "starting file download for", refdata=True
+            )
 
     async def refdata_complete(self, refdata_id: str):
         """
@@ -532,7 +473,7 @@ class NERSCJAWSRunner(JobFlow):
             tfunc, refdata.id, "Download", "getting download results for", refdata=True
         )
         # TODO DISKSPACE will need to clean up refdata manifests & d/l result json files
-        await self._update_refdata_state(refdata.id, refdata_complete())
+        await self._updates.update_refdata_state(refdata.id, refdata_complete())
         if self._on_refdata_complete:
             # don't wait for this function to run before returning
             await self._coman.run_coroutine(self._on_refdata_complete(refdata))

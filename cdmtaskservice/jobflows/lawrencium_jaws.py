@@ -84,7 +84,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
                 self._callback_root, refdata.id, self.CLUSTER
             )
             await self._nman.setup_refdata_transfer_callback(refdata, self.CLUSTER, callback_url)
-            await self._update_refdata_state(refdata.id, submitted_refdata_download())
+            await self._updates.update_refdata_state(refdata.id, submitted_refdata_download())
             # Note on eventual retries - JAWS writes a file to note that the transfer is
             # done, whether it succeeded or failed. The file path is based on the file that the
             # s3 remote code writes when refdata is staged. Therefore on a retry, these files
@@ -92,7 +92,9 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
             # callback immediately. Either the files need to be deleted or a file with a new
             # filename needs to be written (maybe insert _attempt_# or something into the name).
         except Exception as e:
-            await self._handle_exception(e, refdata.id, "setting up callbacks for", refdata=True)
+            await self._updates.handle_exception(
+                e, refdata.id, "setting up callbacks for", refdata=True
+            )
 
     async def refdata_complete(self, refdata_id: str):
         """
@@ -111,7 +113,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         await self._get_transfer_result(  # check for errors
             tfunc, refdata.id, "Transfer", "transferring", refdata=True
         )
-        await self._update_refdata_state(refdata.id, refdata_complete())
+        await self._updates.update_refdata_state(refdata.id, refdata_complete())
 
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """
