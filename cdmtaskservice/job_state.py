@@ -108,19 +108,17 @@ class JobState:
                 f"Job compute time of {compute_time} CPU hours is greater than the limit of "
                 + f"{self._cpu_hrs}"
         )
-        if not self._test_mode:
-            # check the flow is available before we make any changes
-            flow = await self._flowman.get_flow(job_input.cluster)
-            # TODO SECURITY this needs to be moved to job flow providers when they exist, so
-            #               it can be checked if the job flow doesn't exist
-            flow.precheck(user, job_input)
         # Could parallelize these ops but probably not worth it
         image = await self._images.get_image(job_input.image)
         await self._check_refdata(job_input, image)
         await self._check_output_path(job_input)
         new_input, meta = await self._check_and_update_files(job_input)
-        ji = job_input.model_copy(update={"input_files": new_input})
         job_id = str(uuid.uuid4())  # TODO TEST for testing we'll need to set up a mock for this
+        if not self._test_mode:
+            # check the flow is available before we make any changes
+            flow = await self._flowman.get_flow(job_input.cluster)
+            await flow.preflight(user, job_id, job_input)
+        ji = job_input.model_copy(update={"input_files": new_input})
         # TODO TEST will need a way to mock out timestamps
         update_time = utcdatetime()
         # TODO TEST will need to mock out uuid

@@ -10,12 +10,16 @@ import time
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
 from cdmtaskservice.condor.client import CondorClient
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
+from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
 from cdmtaskservice.jobflows.s3config import S3Config
+from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice import sites
 from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.user import CTSUser
+from cdmtaskservice.timestamp import utcdatetime
 
 
 _RETRY_DELAY_SEC = 5 * 60  # cnfigurable?
@@ -56,6 +60,38 @@ class KBaseRunner(JobFlow):
         
         self._logr.info("Initialized kbase job flow")  # TODO REMOVE
         # TODO NOW implement stuff
+
+    async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
+        """
+        Check that the inputs to a job are acceptable prior to running a job and set up subjob
+        data. Will throw an error if the inputs don't meet requirements.
+        
+        user - the user running the job.
+        job_id - the job's ID.
+        job_input - the job input
+        """
+        _not_falsy(user, "user")
+        _require_string(job_id, "job_id")
+        _not_falsy(job_input, "job_input")
+        if not user.is_kbase_staff:
+            raise UnauthorizedError(
+                f"To use the {self.CLUSTER.value} site, you must be a KBase staff member."
+            )
+        update_time = utcdatetime()
+        # It's possible but unlikely that we'll save these subjobs and then the main job
+        # doesn't save. If so, no big deal, we just have orphaned subjobs. Could make a cleanup
+        # routine if necessary 
+        await self._mongo.initialize_subjobs([
+            models.SubJob(
+                id=job_id,
+                sub_id=i,
+                state=models.JobState.CREATED,
+                transition_times=[models.JobStateTransition(
+                    state=models.JobState.CREATED,
+                    time=update_time
+                )]
+            ) for i in range(1, job_input.num_containers + 1)
+        ])
 
 
 class KBaseFlowProvider:
