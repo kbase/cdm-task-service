@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     conlist,
     Field,
+    field_serializer,
     field_validator,
     HttpUrl,
     model_validator,
@@ -762,6 +763,12 @@ class ImageUsage(BaseModel):
             + "suggested but not required.",
         max_length=10000,
     )] = None
+    
+    @field_serializer("urls")
+    def serialize_urls(self, urls: list[HttpUrl]) -> list[str] | None:
+        if not urls:
+            return None
+        return [str(u) for u in urls]
 
 
 class Image(ImageUsage, JobImage):
@@ -956,6 +963,7 @@ class AdminJobStateTransition(JobStateTransition):
         description="Whether an update has been sent to the notification system for "
         + "this state transition."
     )]
+
 
 class AdminJobDetails(Job):
     """

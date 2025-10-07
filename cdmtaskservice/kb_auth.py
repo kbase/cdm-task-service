@@ -102,8 +102,7 @@ class KBaseAuth:
 
     async def get_user(self, token: str) -> KBaseUser:
         """
-        Get a username from a token as well as the user's administration status.
-        Verifies the user has all the required roles set in the create() method.
+        Get a username from a token as well as the user's custom roles.
         
         token - The user's token.
         
