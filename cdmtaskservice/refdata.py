@@ -32,7 +32,7 @@ class Refdata:
         """ 
         Create the refdata manager.
         
-        mongo - a MongoDB DAO object.
+        mongo - a MongoDB DAO.
         s3Client - an S3Client pointed at the S3 storage system to use.
         coro_manager - a coroutine manager.
         flow_manager- the job flow manager.

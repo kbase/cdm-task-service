@@ -55,6 +55,8 @@ class CDMTaskServiceConfig:
     condor_exe_path: str - the local path to the HTCondor worker executable.
     condor_exe_url_override: str | None - a url, if any, to use for downloading the HTCondor
         executable rather than the default location.
+    condor_initialdir: str - the path to use as the condor initialdir.
+    condor_clientgroup: str | None - the clientgroup to use for condor submission, if any.
     code_archive_path: str - the local path to the tgz code archive.
     code_archive_url_override: str | None - a url, if any, to use for downloading the 
         tgz code archive rather than the default location.
@@ -137,6 +139,8 @@ class CDMTaskServiceConfig:
         self.condor_exe_url_override = _get_string_optional(
             config, _SEC_HTCONDOR, "executable_url_override"
         )
+        self.condor_initialdir = _get_string_required(config, _SEC_HTCONDOR, "initialdir")
+        self.condor_clientgroup = _get_string_optional(config, _SEC_HTCONDOR, "clientgroup")
         self.code_archive_path = _get_string_required(config, _SEC_EXTERNAL_EXEC, "archive_path")
         self.code_archive_url_override = _get_string_optional(
             config, _SEC_EXTERNAL_EXEC, "archive_url_override"
@@ -240,6 +244,8 @@ class CDMTaskServiceConfig:
             f"JAWS group: {self.jaws_group}",
             f"HTCondor exe path: {self.condor_exe_path}",
             f"HTCondor exe url override: {self.condor_exe_url_override}",
+            f"HTCondor intialdir: {self.condor_initialdir}",
+            f"HTCondor client group: {self.condor_clientgroup}",
             f"Code archive path: {self.code_archive_path}",
             f"Code archive url override: {self.code_archive_url_override}",
             f"S3 URL: {self.s3_url}",

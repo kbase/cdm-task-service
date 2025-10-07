@@ -89,7 +89,7 @@ class JAWSFlowProvider:
         jaws_config - configuration for communicating with the JAWS job runner at NERSC. The JAWS
             username is expected to be a NERSC user and the same user as for the SFAPI creds.
             It is typically a collaboration account.
-        mongodao - the Mongo DAO object.
+        mongodao - the Mongo DAO.
         s3config - the S3 configuration.
         kafka_notifier - a kafka notifier.
         coman - a coroutine manager.
@@ -170,9 +170,6 @@ class JAWSFlowProvider:
     async def get_nersc_job_flow(self) -> JobFlowOrError:
         """
         Get the NERSC / Perlmutter job flow manager.
-        
-        Returns a tuple of an error string and the manager. Only one of those elements is ever
-        present in the tuple.
         """
         # These names may need changing if we start supporting the Doubna NERSC system 
         self._check_closed()
@@ -183,12 +180,9 @@ class JAWSFlowProvider:
             return JobFlowOrError(error="JAWS is not available")
         return JobFlowOrError(jobflow=self._build_state.nersc_flow)
     
-    async def get_lrc_job_flow(self) -> (str, LawrenciumJAWSRunner):
+    async def get_lrc_job_flow(self) -> JobFlowOrError:
         """
         Get the Lawrencium job flow manager.
-        
-        Returns a tuple of an error string and the manager. Only one of those elements is ever
-        present in the tuple.
         """
         self._check_closed()
         err = self._check_build()
@@ -228,7 +222,7 @@ class JAWSFlowProvider:
                 res = await self._build_deps()
                 fut.set_result(res)
             asyncio.create_task(init())
-            return("Recovery for NERSC based job flows in process")
+            return "Recovery for NERSC based job flows in process"
         elif isinstance(state, asyncio.Future):
             if state.done():
                 err = self._handle_build_result(state.result())
@@ -238,7 +232,7 @@ class JAWSFlowProvider:
                         + f"Last error: {self._last_fail_error}"
                     )
             else:
-                return("Recovery for NERSC based job flows in process")
+                return "Recovery for NERSC based job flows in process"
         return None
     
     async def _build_deps(self):
@@ -286,7 +280,7 @@ class JAWSFlowProvider:
             if jaws_client:
                 await jaws_client.close()
             # may want to record this and add a way for admins to get it via the API vs. just logs
-            self._logr.exception(f"Failed to initialize NERSC dependencies: {e}:")
+            self._logr.exception(f"Failed to initialize NERSC dependencies: {e}")
             return _BuildResult(
                 error="NERSC manager startup failed",
                 sfapi_client=sfapi_client,
@@ -310,7 +304,7 @@ class JAWSFlowProvider:
         else:
             self._build_state = br._to_deps()
             self._last_fail_error = None
-            self._loast_fail_time = None
+            self._last_fail_time = None
             return None
 
     def _build_flows(self, jaws_client: JAWSClient, nerscman: NERSCManager
