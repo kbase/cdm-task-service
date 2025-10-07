@@ -22,7 +22,7 @@ from cdmtaskservice.user import CTSUser
 from cdmtaskservice.timestamp import utcdatetime
 
 
-_RETRY_DELAY_SEC = 5 * 60  # cnfigurable?
+_RETRY_DELAY_SEC = 5 * 60  # configurable?
 
 
 class KBaseRunner(JobFlow):
@@ -47,7 +47,7 @@ class KBaseRunner(JobFlow):
         
         condor_client - a HTCondor client, configured to interact with the remote condor instance.
         mongodao - the Mongo DAO.
-        s3client - an S3 client initialized to interacted with the S3 storage system.
+        s3client - an S3 client initialized to interact with the S3 storage system.
         kafka - a Kafka notifier.
         coro_manager - a coroutine manager.
         """
