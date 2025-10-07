@@ -25,6 +25,9 @@ class UpdateField(StrEnum):
     JAWS_RUN_ID = auto()
     """ The ID of a JAWS run. """
     
+    HTCONDOR_CLUSTER_ID = auto()
+    """ The cluster ID of an HTCondor run. """
+    
     CPU_HOURS = auto()
     """ The number of hours a job ran. """
     
@@ -127,6 +130,18 @@ def submitted_nersc_download(task_id: str) -> JobUpdate:
         )._set_new_state(models.JobState.DOWNLOAD_SUBMITTED
         )._set_fields(
             {UpdateField.NERSC_DOWNLOAD_TASK_ID: _require_string(task_id, "task_id")}
+    )
+
+
+def submitted_htcondor_download(cluster_id: int) -> JobUpdate:
+    """
+    Update a job's state from created to download submitted and add an HTCondor cluster ID.
+    """
+    return JobUpdate(
+        )._set_current_state(models.JobState.CREATED
+        )._set_new_state(models.JobState.DOWNLOAD_SUBMITTED
+        )._set_fields(
+            {UpdateField.HTCONDOR_CLUSTER_ID: _check_num(cluster_id, "cluster_id")}
     )
 
 

@@ -51,6 +51,8 @@ FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
 FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
+FLD_JOB_HTC_DETAILS = "htcondor_details"
+FLD_HTC_DETAILS_CLUSTER_ID = "cluster_id"
 FLD_JOB_CPU_HOURS = "cpu_hours"
 FLD_JOB_OUTPUTS = "outputs"
 FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
@@ -950,7 +952,20 @@ class JAWSDetails(BaseModel):
     # Output only model, no validation
     run_id: Annotated[list[str], Field(
         description="Run IDs for a JGI JAWS job. Multiple run IDs indicate job retries after "
-            + "failures.")]
+            + "failures."
+    )]
+
+
+class HTCondorDetails(BaseModel):
+    """
+    Details about a HTCondor job run.
+    """
+    # Output only model, no validation
+    cluster_id: Annotated[list[int], Field(
+        # Note that HTC has a retry feature, may want to look into that vs rerunning
+        description="Cluster IDs for a HTCondor job. Multiple cluster IDs indicate job "
+            + "retries after failures."
+    )]
 
 
 class AdminJobStateTransition(JobStateTransition):
@@ -995,6 +1010,7 @@ class AdminJobDetails(Job):
     )]
     nersc_details: NERSCDetails | None = None
     jaws_details: JAWSDetails | None = None
+    htcondor_details: HTCondorDetails | None = None
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
