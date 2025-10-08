@@ -405,6 +405,7 @@ class MongoDAO:
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
+    _FLD_HTC_CLUSTER_ID = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_CLUSTER_ID}"
     _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
     _FLD_NERSC_LOG_UL_TASK = (
         f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
@@ -413,6 +414,7 @@ class MongoDAO:
         self._FIELD_TO_KEY_AND_PUSH = {
             UpdateField.NERSC_DOWNLOAD_TASK_ID: (self._FLD_NERSC_DL_TASK, True),
             UpdateField.JAWS_RUN_ID: (self._FLD_JAWS_RUN_ID, True),
+            UpdateField.HTCONDOR_CLUSTER_ID: (self._FLD_HTC_CLUSTER_ID, True),
             UpdateField.CPU_HOURS: (models.FLD_JOB_CPU_HOURS, False),
             UpdateField.NERSC_UPLOAD_TASK_ID: (self._FLD_NERSC_UL_TASK, True),
             UpdateField.OUTPUT_FILE_PATHS: (models.FLD_JOB_OUTPUTS, False),

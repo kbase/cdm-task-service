@@ -10,16 +10,22 @@ import time
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
 from cdmtaskservice.condor.client import CondorClient
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import UnauthorizedError
+from cdmtaskservice.exceptions import (
+    UnauthorizedError,
+    InvalidJobStateError,
+    InvalidReferenceDataStateError,
+)
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
 from cdmtaskservice.jobflows.s3config import S3Config
+from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice import sites
-from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
 from cdmtaskservice.user import CTSUser
 from cdmtaskservice.timestamp import utcdatetime
+from cdmtaskservice.update_state import submitted_htcondor_download
 
 
 _RETRY_DELAY_SEC = 5 * 60  # configurable?
@@ -54,12 +60,10 @@ class KBaseRunner(JobFlow):
         self._condor = _not_falsy(condor_client, "condor_client")
         self._mongo = _not_falsy(mongodao, "mongodao")
         self._s3 = _not_falsy(s3client, "s3client")
-        self._kafka = _not_falsy(kafka, "kafka")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._logr = logging.getLogger(__name__)
         
-        self._logr.info("Initialized kbase job flow")  # TODO REMOVE
-        # TODO NOW implement stuff
+        self._updates = JobFlowStateUpdates(self.CLUSTER, self._mongo, _not_falsy(kafka, "kafka"))
 
     async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
         """
@@ -85,13 +89,78 @@ class KBaseRunner(JobFlow):
             models.SubJob(
                 id=job_id,
                 sub_id=i,
-                state=models.JobState.CREATED,
-                transition_times=[models.JobStateTransition(
-                    state=models.JobState.CREATED,
-                    time=update_time
-                )]
+                state=models.JobState.DOWNLOAD_SUBMITTED,
+                transition_times=[
+                    models.JobStateTransition(
+                        state=models.JobState.CREATED,
+                        time=update_time
+                    ),
+                    # This is a little weird, but we want to transition the main job doc from
+                    # CREATED to DOWNLOAD_SUBMITTED after submitting the job to HTC.
+                    # That means the next transition is to JOB_SUMITTING, and so the containers
+                    # need to skip the DOWNLOAD_SUBMITTED state.
+                    # The alternative would be to add yet another state, and since the container
+                    # state won't be available to regular users that seems like overkill.
+                    # Also we'd have to figure out how that state fits into the other job flows.
+                    models.JobStateTransition(
+                        state=models.JobState.DOWNLOAD_SUBMITTED,
+                        time=update_time
+                    ),
+                ]
             ) for i in range(1, job_input.num_containers + 1)
         ])
+
+    async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
+        """
+        Start running a job. It is expected that the Job has been persisted to the data
+        storage system and is in the created state.
+        
+        job - the job
+        objmeta - the S3 object metadata for the files in the job. CRC64/NVME checksums
+            are required for all objects.
+        """
+        if _not_falsy(job, "job").state != models.JobState.CREATED:
+            raise InvalidJobStateError("Job must be in the created state")
+        # Could check that the s3 and job paths / etags match... YAGNI
+        try:
+            cluster_id = await self._condor.run_job(job)
+            # It's theoretically possible that all the containers could transition to
+            # JOB_SUBMITTING and therefore trigger a main job transition, which will fail, prior
+            # to this update being applied to the DB. That seems impossible in practice
+            # so we don't worry about it. If it starts occurring, could have the remote job wait
+            # for the main job to transition to DOWNLOAD_SUBMITTED before submitting its
+            # state transition request.
+            await self._updates.update_job_state(job.id, submitted_htcondor_download(cluster_id))
+        except Exception as e:
+            await self._updates.handle_exception(e, job.id, "starting condor run for ")
+
+    async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
+        """
+        Do nothing. Job cleanup is handled by HTCondor.
+        """
+        pass # Intentionally do nothing 
+
+
+    async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):
+        """
+        Start staging reference data. It is expected that the ReferenceData has been persisted to
+        the data storage system and is in the created state.
+        
+        refdata - the reference data
+        objmeta - the S3 object metadata for the reference data file. The CRC64/NVME checksum
+            is required.
+        """
+        refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
+        if refstate.state != models.ReferenceDataState.CREATED:
+            raise InvalidReferenceDataStateError("Reference data must be in the created state")
+        # Could check that the s3 and refdata path / etag match... YAGNI
+        # TODO KBASE_CLUSTER implement
+
+    async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
+        """
+        Do nothing. There's nothing to clean up.
+        """
+        pass # Intentionally do nothing 
 
 
 class KBaseFlowProvider:
