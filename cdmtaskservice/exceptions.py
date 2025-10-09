@@ -35,8 +35,5 @@ class UnavailableResourceError(Exception):
     """ An error thrown when a resouce is unavailable. """
 
 
-class UnavailableJobFlowError(Exception):
-    """
-    An error thrown when a job flow cannot be used due to unavailable resources or
-    startup errors.
-    """
+class UnsupportedOperationError(Exception):
+    """ An error thrown when an unsupported operation is requested. """

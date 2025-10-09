@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
-from cdmtaskservice.exceptions import UnavailableJobFlowError
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice import sites
 
@@ -66,7 +65,9 @@ class JobFlowManager():
                 )
             return floworerr.jobflow
         else:
-            raise ValueError(f"Job flow for cluster {cluster.value} is not registered")
+            raise UnavailableJobFlowError(
+                f"Job flow for cluster {cluster.value} is not registered"
+            )
     
     async def list_available_clusters(self) -> set[sites.Cluster]:
         """
@@ -107,5 +108,13 @@ class JobFlowManager():
         """
         await self._mongo.set_site_inactive(_not_falsy(cluster, "cluster"))
 
+
 class InactiveJobFlowError(Exception):
     """ Thrown when an inactive job flow is requested. """ 
+
+
+class UnavailableJobFlowError(Exception):
+    """
+    An error thrown when a job flow cannot be used due to unavailable resources or
+    startup errors.
+    """
