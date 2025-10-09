@@ -127,6 +127,7 @@ async def build_app(
         set(cfg.auth_full_admin_roles),
         cfg.kbase_staff_role,
         cfg.has_nersc_account_role,
+        cfg.external_executor_role,
     )
     logr.info("Done")
     jaws_job_flows = None
@@ -289,7 +290,8 @@ def _register_kbase_job_flow(
         kafka_notifier,
         coman,
         cfg.service_root_url,
-        condor_client_group=cfg.condor_clientgroup
+        condor_client_group=cfg.condor_clientgroup,
+        env_vars=cfg.get_condor_env_vars(),
     )
     flowman.register_flow(KBaseRunner.CLUSTER, kbase_provider.get_kbase_job_flow)
 

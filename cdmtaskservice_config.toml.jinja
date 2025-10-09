@@ -5,15 +5,20 @@ url = "{{ KBCTS_KBASE_AUTH2_URL or "https://ci.kbase.us/services/auth" }}"
 
 # KBase auth2 custom roles that signify that a user is an admin for the CDM task service
 # This is a comma delimited list, e.g. "KBASE_ADMIN, CDM_TASK_SERVICE_ADMIN"
-admin_roles_full = "{{ KBCTS_KBASE_AUTH2_ADMIN_ROLES or ""}}"
+admin_roles_full = "{{ KBCTS_KBASE_AUTH2_ADMIN_ROLES or "" }}"
 
 # KBase auth2 custom role that signifies a user is a KBase staff member.
 # This role is required to use the CDM task service.
-kbase_staff_role = "{{ KBCTS_KBASE_STAFF_ROLE or "KBASE_STAFF"}}"
+kbase_staff_role = "{{ KBCTS_KBASE_STAFF_ROLE or "KBASE_STAFF" }}"
 
 # KBase auth2 custom role that signifies a user possesses a NERSC account.
-# This role is required to use the CDM task service.
-has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"}}"
+# This role is required to run jobs at NERSC and LRC.
+has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT" }}"
+
+# KBase auth2 custom role that signifies a request is coming from a user representing an
+# external job executor. Used by executors running on HTCondor workers to get
+# and update job state.
+external_executor_role = "{{ KBCTS_EXTERNAL_EXECUTOR_ROLE or "CTS_EXTERNAL_EXECUTOR" }}"
 
 [NERSC_JAWS]
 
@@ -97,6 +102,21 @@ initialdir = "{{ KBCTS_HTC_INITIAL_DIR or "/condor_workdir" }}"
 # The client group to submit to. This is a ClassAd on HTC workers with the name CLIENTGROUP.
 # If omitted, the service will not distinguish between workers.
 clientgroup = "{{ KBCTS_HTC_CLIENT_GROUP or "" }}"
+
+# The environment variable on the HTCondor workers that will contain a KBase token for
+# the job executor to use to contact the service. This token must have the external exectutor role
+# defined in the Authentication section above.
+token_env_var = "{{ KBCTS_HTC_TOKEN_ENV_VAR or "CTS_EXECUTOR_TOKEN" }}"
+
+# The environment variable on the HTCondor workers that will contain the S3 access key
+# for the S3 system defined in the S3 section below.
+s3_access_key_env_var = "{{ KBCTS_HTC_S3_ACCESS_KEY_ENV_VAR or "CTS_EXECUTOR_S3_ACCESS_KEY" }}"
+
+# The environment variable on the HTCondor workers that will contain the S3 access secret
+# for the S3 system defined in the S3 section below.
+s3_access_secret_env_var = "{{
+     KBCTS_HTC_S3_ACCESS_SECRET_ENV_VAR or "CTS_EXECUTOR_S3_ACCESS_SECRET"
+}}"
 
 [ExternalExecution]
 

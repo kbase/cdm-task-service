@@ -6,6 +6,7 @@ A configuration parser for the CDM task service. The configuration is expected t
 import tomllib
 from typing import BinaryIO, TextIO
 
+from cdmtaskservice.condor.client import HTCondorWorkerEnvVars
 from cdmtaskservice.jaws.config import JAWSConfig
 from cdmtaskservice.nersc.paths import NERSCPaths
 
@@ -39,6 +40,8 @@ class CDMTaskServiceConfig:
         a full admin for the CDM task service
     kbase_staff_role: str - the Auth2 custom role indicating a user is a member of KBase staff.
     has_nersc_account_role: str - the Auth2 custom role indicating a user has a NERSC account.
+    external_executor_role: str - the Auth2 custom role indicating a user is an external job
+        executor.
     nersc_jaws_user: str - the user name of the user associated with the NERSC and JAWS
         credentials.
     jaws_refdata_root_dir: str - the JAWS refdata root directory to use for refdata storage.
@@ -57,6 +60,12 @@ class CDMTaskServiceConfig:
         executable rather than the default location.
     condor_initialdir: str - the path to use as the condor initialdir.
     condor_clientgroup: str | None - the clientgroup to use for condor submission, if any.
+    condor_token_env_var: str - the environment variable on the condor worker containing a
+        KBase token for use when contacting the service.
+    condor_s3_access_key_env_var: str - the environment variable on the condor worker containing
+        the s3 access key for the S3 instance.
+    condor_s3_access_secret_env_var: str - the environment variable on the condor worker containing
+        the s3 access secret for the S3 instance.
     code_archive_path: str - the local path to the tgz code archive.
     code_archive_url_override: str | None - a url, if any, to use for downloading the 
         tgz code archive rather than the default location.
@@ -114,6 +123,9 @@ class CDMTaskServiceConfig:
         self.has_nersc_account_role = _get_string_required(
             config, _SEC_AUTH, "has_nersc_account_role"
         )
+        self.external_executor_role = _get_string_required(
+            config, _SEC_AUTH, "external_executor_role"
+        )
         self.jaws_refdata_root_dir = _get_string_required(
             config, _SEC_NERSC_JAWS, "refdata_root_dir"
         )
@@ -141,6 +153,13 @@ class CDMTaskServiceConfig:
         )
         self.condor_initialdir = _get_string_required(config, _SEC_HTCONDOR, "initialdir")
         self.condor_clientgroup = _get_string_optional(config, _SEC_HTCONDOR, "clientgroup")
+        self.condor_token_env_var = _get_string_required(config, _SEC_HTCONDOR, "token_env_var")
+        self.condor_s3_access_key_env_var = _get_string_required(
+            config, _SEC_HTCONDOR, "s3_access_key_env_var"
+        )
+        self.condor_s3_access_secret_env_var = _get_string_required(
+            config, _SEC_HTCONDOR, "s3_access_secret_env_var"
+        )
         self.code_archive_path = _get_string_required(config, _SEC_EXTERNAL_EXEC, "archive_path")
         self.code_archive_url_override = _get_string_optional(
             config, _SEC_EXTERNAL_EXEC, "archive_url_override"
@@ -205,13 +224,13 @@ class CDMTaskServiceConfig:
                         name2 = "container_s3_log_dir" if is_log2 else "allowed path"
                         raise ValueError(f"{name1} '{p1}' is a prefix of {name2} '{p2}'")
 
-    def get_nersc_paths(self):
+    def get_nersc_paths(self) -> NERSCPaths:
         """
         Get the set of NERSC paths for use with the service.
         """
         return self._nersc_paths
     
-    def get_jaws_config(self):
+    def get_jaws_config(self) -> JAWSConfig:
         """
         Get configuration information for JAWS.
         """
@@ -220,6 +239,16 @@ class CDMTaskServiceConfig:
             token=self.jaws_token,
             group=self.jaws_group,
             url=self.jaws_url,
+        )
+        
+    def get_condor_env_vars(self) -> HTCondorWorkerEnvVars:
+        """
+        Get information about environment variables on HTcondor workers for external executors.
+        """
+        return HTCondorWorkerEnvVars(
+            token_env_var=self.condor_token_env_var,
+            s3_access_key_env_var=self.condor_s3_access_key_env_var,
+            s3_access_secret_env_var=self.condor_s3_access_secret_env_var,
         )
 
     def print_config(self, output: TextIO):
@@ -233,6 +262,7 @@ class CDMTaskServiceConfig:
             f"Authentication full admin roles: {self.auth_full_admin_roles}",
             f"Authentication KBase staff role: {self.kbase_staff_role}",
             f"Authentication has NERSC account role: {self.has_nersc_account_role}",
+            f"Authentication external executor role: {self.external_executor_role}",
             f"NERSC / JAWS user: {self.nersc_jaws_user}",
             f"NERSC / JAWS refdata root dir: {self.jaws_refdata_root_dir}",
             f"NERSC / JAWS DTN staging dir: {self.jaws_staging_dir_dtn}",
@@ -246,6 +276,9 @@ class CDMTaskServiceConfig:
             f"HTCondor exe url override: {self.condor_exe_url_override}",
             f"HTCondor initialdir: {self.condor_initialdir}",
             f"HTCondor client group: {self.condor_clientgroup}",
+            f"HTCondor token env var: {self.condor_token_env_var}",
+            f"HTCondor S3 access key env var: {self.condor_s3_access_key_env_var}",
+            f"HTCondor S3 access secret env var: {self.condor_s3_access_secret_env_var}",
             f"Code archive path: {self.code_archive_path}",
             f"Code archive url override: {self.code_archive_url_override}",
             f"S3 URL: {self.s3_url}",

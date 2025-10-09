@@ -5,6 +5,7 @@ Task Service.
 
 import asyncio
 from classad2 import ClassAd, ExprTree
+from dataclasses import dataclass
 import htcondor2
 from pathlib import Path
 import posixpath
@@ -104,6 +105,29 @@ STATIC_SUB = {
 }
 
 
+@dataclass(frozen=True)
+class HTCondorWorkerEnvVars:
+    """ Names of environment variables where external executors should look up information. """
+    
+    # TODO CODE check args aren't None / whitespace only. Not a lib class so YAGNI for now
+    
+    token_env_var: str = "CTS_EXECUTOR_TOKEN"
+    """
+    The environment variable on the condor worker containing a KBase token for use when
+    contacting the service.
+    """
+
+    s3_access_key_env_var: str = "CTS_EXECUTOR_S3_ACCESS_KEY"
+    """
+    The environment variable on the condor worker containing the s3 access key for the S3 instance.
+    """
+    
+    s3_access_secret_env_var: str = "CTS_EXECUTOR_S3_ACCESS_SECRET"
+    """
+    The environment variable on the condor worker containing the s3 access key for the S3 instance.
+    """
+
+
 class CondorClient:
     """
     The condor client.
@@ -116,7 +140,8 @@ class CondorClient:
         service_root_url: str,
         executable_url: str,
         code_archive_url: str,
-        client_group: str | None = None
+        client_group: str | None = None,
+        env_vars: HTCondorWorkerEnvVars = HTCondorWorkerEnvVars()
     ):
         """
         Create the client.
@@ -132,6 +157,8 @@ class CondorClient:
             for each job. Must end in a file name and have no query or fragment.
         client_group - the client group to submit jobs to, if any. This is a classad on
             a worker with the name CLIENTGROUP.
+        env_vars - the environment variables on the HTCondor workers should look for job
+            information.
         """
         self._schedd = _not_falsy(schedd, "schedd")
         self._initial_dir = _not_falsy(initial_dir, "initial_dir")
@@ -143,6 +170,7 @@ class CondorClient:
         self._code_archive_url = _require_string(code_archive_url, "code_archive_url")
         self._code_archive_name = self._get_name_from_url(self._code_archive_url)
         self._cligrp = client_group
+        self._env_vars = _not_falsy(env_vars, "env_vars")
         
     def _get_name_from_url(self, url: str) -> str:
         parsed = URL(url)
@@ -162,6 +190,9 @@ class CondorClient:
             "CONTAINER_NUMBER": "$(container_number)",
             "CODE_ARCHIVE": self._code_archive_name,
             "SERVICE_ROOT_URL": self._service_root_url,
+            "TOKEN_ENV_VAR": self._env_vars.token_env_var,
+            "S3_ACCESS_ENV_VAR": self._env_vars.s3_access_key_env_var,
+            "S3_SECRET_ENV_VAR": self._env_vars.s3_access_secret_env_var,
             # TODO CONDOR need minio url
         }
         environment = ""
