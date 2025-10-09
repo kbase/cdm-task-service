@@ -577,13 +577,19 @@ async def get_job_admin(
 async def get_job_runner_status(
     r: Request,
     job_id: _ANN_JOB_ID,
+    container_number: Annotated[int, Query(
+        openapi_examples={"container_number": {"value": 12}},
+        description="The number of the container to query. If the containers are tracked "
+            + "by the external runner rather than this service, this parameter is ignored.",
+        ge=1
+    )] = 1, 
     user: CTSUser=Depends(_AUTH),
 ) -> dict[str, Any]:
     _ensure_admin(user, "Only service administrators can get job runner status.")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, user, as_admin=True)
     flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
-    return await flow.get_job_external_runner_status(job)
+    return await flow.get_job_external_runner_status(job, container_number=container_number)
 
 
 class UpdateAdminMeta(BaseModel):

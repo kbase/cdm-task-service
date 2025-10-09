@@ -6,8 +6,13 @@ import htcondor2
 import logging
 from pathlib import Path
 import time
+from typing import Any
 
-from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
+from cdmtaskservice.arg_checkers import (
+    not_falsy as _not_falsy,
+    check_num as _check_num,
+    require_string as _require_string,
+)
 from cdmtaskservice.condor.client import CondorClient
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
@@ -109,6 +114,31 @@ class KBaseRunner(JobFlow):
                 ]
             ) for i in range(1, job_input.num_containers + 1)
         ])
+
+    async def get_job_external_runner_status(
+        self,
+        job: models.AdminJobDetails,
+        container_number: int = 1
+    ) -> dict[str, Any]:
+        """
+        Get details from the external job runner (HTCondor in this case) about the job.
+        
+        Returns the HTC ClassAd dict as returned from HTC. If the job has not yet been submitted
+        to HTC, an empty dict is returned.
+        """
+        # allow getting details from earlier runs? Seems unnecessary
+        if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
+            raise ValueError(f"Job cluster must match {self.CLUSTER}")
+        _check_num(container_number, "container_number")
+        if container_number > job.job_input.num_containers:
+            raise ValueError(
+                f"Provided container number {container_number} is larger than "
+                + f"the number of containers for the job: {job.job_input.num_containers}")
+        if not job.htcondor_details or not job.htcondor_details.cluster_id:
+            return {}  # job not submitted yet
+        # if cluster_id exists, there's a cluster ID in it
+        cluster_id = job.htcondor_details.cluster_id[-1]
+        return await self._condor.get_container_status(cluster_id, container_number)
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """

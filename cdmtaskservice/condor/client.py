@@ -4,6 +4,7 @@ Task Service.
 """
 
 import asyncio
+from classad2 import ClassAd, ExprTree
 import htcondor2
 from pathlib import Path
 import posixpath
@@ -217,6 +218,16 @@ class CondorClient:
     
     # TODO CANCEL_JOB for condor
 
+    def _classad_to_dict(self, ca: ClassAd) -> dict[str, Any]:
+        ret = {}
+        for k in _RETURNED_JOB_ADS:
+            v = ca.get(k)
+            if v is not None:
+                if isinstance(v, ExprTree):
+                    v = str(v)  # eval()ing he ExprTree isn't helpful, want the expression
+                ret[k] = v
+        return ret
+
     async def get_container_status(self, cluster_id: int, container_number: int) -> dict[str, Any]:
         """
         Get the HTCondor status for a specific container for a job, specified by the job's
@@ -243,7 +254,7 @@ class CondorClient:
                 f"No record found for cluster ID {cluster_id} and container number "
                 + f"{container_number}"
             )
-        return {k: job_ads[0][k] for k in _RETURNED_JOB_ADS if job_ads[0].get(k) is not None}
+        return self._classad_to_dict(job_ads[0])
         
     async def get_job_status(self, cluster_id: int
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -272,10 +283,6 @@ class CondorClient:
             job_key = (ad["ClusterId"], ad["ProcId"])
             # remove jobs that have transitioned to complete between the queries
             id2ad.pop(job_key, None)
-        running = [{k: ad[k] for k in _RETURNED_JOB_ADS if ad.get(k) is not None}
-                   for ad in id2ad.values()
-                   ]
-        complete = [{k: ad[k] for k in _RETURNED_JOB_ADS if ad.get(k) is not None}
-                    for ad in complete_job_ads
-                    ]
+        running = [self._classad_to_dict(ad) for ad in id2ad.values()]
+        complete = [self._classad_to_dict(ad) for ad in complete_job_ads]
         return running, complete
