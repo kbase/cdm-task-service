@@ -158,13 +158,20 @@ class NERSCJAWSRunner(JobFlow):
                 + "and have a NERSC account"
             )
 
-    async def get_job_external_runner_status(self, job: models.AdminJobDetails) -> dict[str, Any]:
+    async def get_job_external_runner_status(
+        self,
+        job: models.AdminJobDetails,
+        container_number: int = None
+    ) -> dict[str, Any]:
         """
         Get details from the external job runner (JAWS in this case) about the job.
         
         Returns the JAWS status dict as returned from JAWS. If the job has not yet been submitted
         to JAWS, an empty dict is returned.
+        
+        Since the containers are managed by JAWS, the container number is ignored.
         """
+        # Could get the jaws logs and return container specific info in the future
         # allow getting details from earlier runs? Seems unnecessary
         if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
