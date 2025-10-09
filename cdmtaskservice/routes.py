@@ -239,7 +239,8 @@ class SubmitJobResponse(BaseModel):
     "/",
     response_model=SubmitJobResponse,
     summary="Submit a job",
-    description="Submit a job to the system."
+    description="Submit a job to the system.\n\n"
+        + "Note that currently the kbase job flow does not support manifest files."
 )
 async def submit_job(
     r: Request,

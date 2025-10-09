@@ -14,12 +14,13 @@ from cdmtaskservice.exceptions import (
     InvalidReferenceDataStateError,
     InvalidUserError,
     UnauthorizedError,
-    UnavailableJobFlowError,
     UnavailableResourceError,
+    UnsupportedOperationError,
 )
 from cdmtaskservice.http_bearer import MissingTokenError
 from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
+from cdmtaskservice.jobflows.flowmanager import InactiveJobFlowError, UnavailableJobFlowError
 from cdmtaskservice import kb_auth
 from cdmtaskservice.mongo import (
     ImageTagExistsError,
@@ -38,7 +39,6 @@ from cdmtaskservice.s3.client import (
     S3PathNotFoundError,
 )
 from cdmtaskservice.s3.paths import S3PathSyntaxError
-from cdmtaskservice.jobflows.flowmanager import InactiveJobFlowError
 
 _H400 = status.HTTP_400_BAD_REQUEST
 _H401 = status.HTTP_401_UNAUTHORIZED
@@ -84,6 +84,7 @@ _ERR_MAP = {
     InactiveJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_INACTIVE, _H400),
     UnavailableJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_UNAVAILABLE, _H400),
     IllegalParameterError: ErrorMapping(ErrorType.ILLEGAL_PARAMETER, _H400),
+    UnsupportedOperationError: ErrorMapping(ErrorType.UNSUPPORTED_OP, _H400),
 }
 
 

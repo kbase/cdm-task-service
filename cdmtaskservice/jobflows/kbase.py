@@ -19,6 +19,7 @@ from cdmtaskservice.exceptions import (
     UnauthorizedError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
+    UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
 from cdmtaskservice.jobflows.s3config import S3Config
@@ -85,6 +86,11 @@ class KBaseRunner(JobFlow):
         if not user.is_kbase_staff:
             raise UnauthorizedError(
                 f"To use the {self.CLUSTER.value} site, you must be a KBase staff member."
+            )
+        param = job_input.params.get_file_parameter()
+        if param and param.type is models.ParameterType.MANIFEST_FILE:
+            raise UnsupportedOperationError(  # Implement if requested by users
+                f"Manifest files are not currently supported for the {self.CLUSTER.value} job flow"
             )
         update_time = utcdatetime()
         # It's possible but unlikely that we'll save these subjobs and then the main job
@@ -166,25 +172,25 @@ class KBaseRunner(JobFlow):
 
     async def download_complete(self, job: models.AdminJobDetails):
         """ Throws an exception as this method is not supported. """
-        raise UnauthorizedError(
+        raise UnsupportedOperationError(
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
         
     async def job_complete(self, job: models.AdminJobDetails):
         """ Throws an exception as this method is not supported. """
-        raise UnauthorizedError(
+        raise UnsupportedOperationError(
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
         
     async def upload_complete(self, job: models.AdminJobDetails):
         """ Throws an exception as this method is not supported. """
-        raise UnauthorizedError(
+        raise UnsupportedOperationError(
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
     
     async def error_log_upload_complete(self, job: models.AdminJobDetails):
         """ Throws an exception as this method is not supported. """
-        raise UnauthorizedError(
+        raise UnsupportedOperationError(
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
         
