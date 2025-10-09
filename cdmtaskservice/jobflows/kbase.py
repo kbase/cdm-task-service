@@ -164,6 +164,30 @@ class KBaseRunner(JobFlow):
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "starting condor run for ")
 
+    async def download_complete(self, job: models.AdminJobDetails):
+        """ Throws an exception as this method is not supported. """
+        raise UnauthorizedError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+        
+    async def job_complete(self, job: models.AdminJobDetails):
+        """ Throws an exception as this method is not supported. """
+        raise UnauthorizedError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+        
+    async def upload_complete(self, job: models.AdminJobDetails):
+        """ Throws an exception as this method is not supported. """
+        raise UnauthorizedError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+    
+    async def error_log_upload_complete(self, job: models.AdminJobDetails):
+        """ Throws an exception as this method is not supported. """
+        raise UnauthorizedError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+        
     async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
         """
         Do nothing. Job cleanup is handled by HTCondor.
