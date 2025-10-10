@@ -1,5 +1,12 @@
 #!/bin/sh
 
+# Stage the cts token & s3 secret
+mkdir /cts
+echo $CTS_EXCECUTOR_TOKEN_FOR_FILE > /cts/cts_token
+echo $CTS_EXECUTOR_S3_ACCESS_SECRET_FOR_FILE > /cts/s3_secret
+chown submituser /cts/*
+chmod 600 /cts/*
+
 mkdir /condor_workdir
 chmod 777 /condor_workdir
 
