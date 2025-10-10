@@ -258,8 +258,8 @@ class KBaseFlowProvider:
         s3config - the S3 configuration.
         kafka_notifier - a kafka notifier.
         coman - a coroutine manager.
-        service_root_url - the URL of the service root, used by the remote job to update job
-            state.
+        service_root_url - the URL of the service root, used by the remote job to get and update
+            job state.
         condor_client_group - the client group to submit jobs to, if any. This is a classad on
             a worker with the name CLIENTGROUP.
         """
@@ -345,6 +345,7 @@ class KBaseFlowProvider:
             condor = CondorClient(
                 schedd,
                 self._initial_dir,
+                self._service_root_url,
                 self._exe_url,
                 self._code_archive_url,
                 client_group=self._cligrp,

@@ -113,6 +113,7 @@ class CondorClient:
         self,
         schedd: htcondor2.Schedd,
         initial_dir: Path,
+        service_root_url: str,
         executable_url: str,
         code_archive_url: str,
         client_group: str | None = None
@@ -123,6 +124,8 @@ class CondorClient:
         schedd: An htcondor Schedd instance, configured to submit jobs to the cluster.
         initial_dir - where the job logs should be stored on the condor scheduler host.
             The path must exist there and locally.
+        service_root_url - the URL of the service root, used by the remote job to get and update
+            job state.
         executable_url - the url for the executable to run in the condor worker for each job.
             Must end in a file name and have no query or fragment.
         code_archive_url - the url for the *.tgz file code archive to transfer to the condor worker
@@ -134,6 +137,7 @@ class CondorClient:
         self._initial_dir = _not_falsy(initial_dir, "initial_dir")
         # Why this has to exist locally is beyond me
         self._initial_dir.mkdir(parents=True, exist_ok=True)
+        self._service_root_url = _require_string(service_root_url, "service_root_url")
         self._exe_url = _require_string(executable_url, "executable_url")
         self._exe_name = self._get_name_from_url(self._exe_url)
         self._code_archive_url = _require_string(code_archive_url, "code_archive_url")
@@ -156,8 +160,9 @@ class CondorClient:
         env = {
             "JOB_ID": job.id,
             "CONTAINER_NUMBER": "$(container_number)",
-            "CODE_ARCHIVE": self._code_archive_name
-            # TODO CONDOR need CTS and minio urls
+            "CODE_ARCHIVE": self._code_archive_name,
+            "SERVICE_ROOT_URL": self._service_root_url,
+            # TODO CONDOR need minio url
         }
         environment = ""
         for key, val in env.items():
