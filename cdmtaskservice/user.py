@@ -63,7 +63,7 @@ class CTSAuth:
             service_admin_roles: set[str],
             is_kbase_staff_role: str,
             has_nersc_account_role: str,
-            external_exector_role: str,
+            external_executor_role: str,
     ):
         """
         Create the auth client.
@@ -75,7 +75,7 @@ class CTSAuth:
             member.
         has_nersc_account_role - a KBase auth role that designates that a user has a NERSC
             account.
-        external_executor_roel -a KBase auth role that degignates the user is a external
+        external_executor_roel -a KBase auth role that designates the user is a external
             job executor.
         """
         # In the future this mey need changes to support other auth sources...?
@@ -84,8 +84,8 @@ class CTSAuth:
         self._admin_roles = _not_falsy(service_admin_roles, "service_admin_roles")
         self._kbstaff_role = require_string(is_kbase_staff_role, "is_kbase_staff_role")
         self._nersc_role = require_string(has_nersc_account_role, "has_nersc_account_role")
-        self._external_exector_role = require_string(
-            external_exector_role, "external_exector_role"
+        self._external_executor_role = require_string(
+            external_executor_role, "external_executor_role"
         )
 
 
@@ -108,7 +108,7 @@ class CTSAuth:
         roles = set()
         if user.roles & self._admin_roles:
             roles.add(CTSRole.FULL_ADMIN)
-        if self._external_exector_role in user.roles:
+        if self._external_executor_role in user.roles:
             roles.add(CTSRole.EXTERNAL_EXECUTOR)
         user = CTSUser(
             user=user.user,
