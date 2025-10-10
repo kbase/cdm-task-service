@@ -6,7 +6,7 @@ A configuration parser for the CDM task service. The configuration is expected t
 import tomllib
 from typing import BinaryIO, TextIO
 
-from cdmtaskservice.condor.client import HTCondorWorkerEnvVars
+from cdmtaskservice.condor.client import HTCondorWorkerPaths
 from cdmtaskservice.jaws.config import JAWSConfig
 from cdmtaskservice.nersc.paths import NERSCPaths
 
@@ -60,11 +60,9 @@ class CDMTaskServiceConfig:
         executable rather than the default location.
     condor_initialdir: str - the path to use as the condor initialdir.
     condor_clientgroup: str | None - the clientgroup to use for condor submission, if any.
-    condor_token_env_var: str - the environment variable on the condor worker containing a
+    condor_token_path: str - the path on the condor worker containing a
         KBase token for use when contacting the service.
-    condor_s3_access_key_env_var: str - the environment variable on the condor worker containing
-        the s3 access key for the S3 instance.
-    condor_s3_access_secret_env_var: str - the environment variable on the condor worker containing
+    condor_s3_access_secret_path: str - the path on the condor worker containing
         the s3 access secret for the S3 instance.
     code_archive_path: str - the local path to the tgz code archive.
     code_archive_url_override: str | None - a url, if any, to use for downloading the 
@@ -153,12 +151,9 @@ class CDMTaskServiceConfig:
         )
         self.condor_initialdir = _get_string_required(config, _SEC_HTCONDOR, "initialdir")
         self.condor_clientgroup = _get_string_optional(config, _SEC_HTCONDOR, "clientgroup")
-        self.condor_token_env_var = _get_string_required(config, _SEC_HTCONDOR, "token_env_var")
-        self.condor_s3_access_key_env_var = _get_string_required(
-            config, _SEC_HTCONDOR, "s3_access_key_env_var"
-        )
-        self.condor_s3_access_secret_env_var = _get_string_required(
-            config, _SEC_HTCONDOR, "s3_access_secret_env_var"
+        self.condor_token_path = _get_string_required(config, _SEC_HTCONDOR, "token_path")
+        self.condor_s3_access_secret_path = _get_string_required(
+            config, _SEC_HTCONDOR, "s3_access_secret_path"
         )
         self.code_archive_path = _get_string_required(config, _SEC_EXTERNAL_EXEC, "archive_path")
         self.code_archive_url_override = _get_string_optional(
@@ -241,14 +236,13 @@ class CDMTaskServiceConfig:
             url=self.jaws_url,
         )
         
-    def get_condor_env_vars(self) -> HTCondorWorkerEnvVars:
+    def get_condor_paths(self) -> HTCondorWorkerPaths:
         """
         Get information about environment variables on HTcondor workers for external executors.
         """
-        return HTCondorWorkerEnvVars(
-            token_env_var=self.condor_token_env_var,
-            s3_access_key_env_var=self.condor_s3_access_key_env_var,
-            s3_access_secret_env_var=self.condor_s3_access_secret_env_var,
+        return HTCondorWorkerPaths(
+            token_path=self.condor_token_path,
+            s3_access_secret_path=self.condor_s3_access_secret_path,
         )
 
     def print_config(self, output: TextIO):
@@ -276,9 +270,8 @@ class CDMTaskServiceConfig:
             f"HTCondor exe url override: {self.condor_exe_url_override}",
             f"HTCondor initialdir: {self.condor_initialdir}",
             f"HTCondor client group: {self.condor_clientgroup}",
-            f"HTCondor token env var: {self.condor_token_env_var}",
-            f"HTCondor S3 access key env var: {self.condor_s3_access_key_env_var}",
-            f"HTCondor S3 access secret env var: {self.condor_s3_access_secret_env_var}",
+            f"HTCondor token path: {self.condor_token_path}",
+            f"HTCondor S3 access secret path: {self.condor_s3_access_secret_path}",
             f"Code archive path: {self.code_archive_path}",
             f"Code archive url override: {self.code_archive_url_override}",
             f"S3 URL: {self.s3_url}",

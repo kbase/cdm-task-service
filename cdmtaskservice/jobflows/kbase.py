@@ -13,7 +13,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     require_string as _require_string,
 )
-from cdmtaskservice.condor.client import CondorClient, HTCondorWorkerEnvVars
+from cdmtaskservice.condor.client import CondorClient, HTCondorWorkerPaths
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
     UnauthorizedError,
@@ -241,8 +241,8 @@ class KBaseFlowProvider:
         kafka_notifier: KafkaNotifier,
         coman: CoroutineWrangler,
         service_root_url: str,
+        paths: HTCondorWorkerPaths,
         condor_client_group: str | None = None,
-        env_vars: HTCondorWorkerEnvVars | None = None,
     ):
         """
         WARNING: this class is not thread safe.
@@ -261,10 +261,10 @@ class KBaseFlowProvider:
         coman - a coroutine manager.
         service_root_url - the URL of the service root, used by the remote job to get and update
             job state.
+        paths - paths where external executors should look up job information
+            on the HTcondor workers.
         condor_client_group - the client group to submit jobs to, if any. This is a classad on
             a worker with the name CLIENTGROUP.
-        env_vars - environment variables where external executors should look up job information
-            on the HTcondor workers. Uses client defaults if not supplied.
         """
     
         kb = cls()
@@ -276,8 +276,8 @@ class KBaseFlowProvider:
         kb._kafka = _not_falsy(kafka_notifier, "kafka_notifier")
         kb._coman = _not_falsy(coman, "coman")
         kb._service_root_url = _require_string(service_root_url, "service_root_url")
+        kb._paths = _not_falsy(paths, "paths")
         kb._cligrp = condor_client_group
-        kb._env_vars = env_vars
         
         kb._logr = logging.getLogger(__name__)
         
@@ -352,8 +352,8 @@ class KBaseFlowProvider:
                 self._service_root_url,
                 self._exe_url,
                 self._code_archive_url,
+                self._paths,
                 client_group=self._cligrp,
-                env_vars = self._env_vars,
                 # TODO CONDOR add s3 host / insecure/ log path
             )
             kbase = KBaseRunner(

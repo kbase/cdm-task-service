@@ -290,8 +290,8 @@ def _register_kbase_job_flow(
         kafka_notifier,
         coman,
         cfg.service_root_url,
+        cfg.get_condor_paths(),
         condor_client_group=cfg.condor_clientgroup,
-        env_vars=cfg.get_condor_env_vars(),
     )
     flowman.register_flow(KBaseRunner.CLUSTER, kbase_provider.get_kbase_job_flow)
 
