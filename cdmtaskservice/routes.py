@@ -59,6 +59,11 @@ def _ensure_admin(user: CTSUser, err_msg: str):
         raise UnauthorizedError(err_msg)
 
 
+def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
+    if not user.is_full_admin() and not user.is_external_executor():
+        raise UnauthorizedError(err_msg)
+
+
 class Root(BaseModel):
     """ General information about the service """
     service_name: Annotated[
@@ -560,7 +565,10 @@ async def get_job_admin(
     job_id: _ANN_JOB_ID,
     user: CTSUser=Depends(_AUTH),
 ) -> models.AdminJobDetails:
-    _ensure_admin(user, "Only service administrators can get jobs as an admin.")
+    _ensure_admin_or_executor(
+        user,
+        "Only service administrators and external job executors can get jobs as an admin."
+    )
     job_state = app_state.get_app_state(r).job_state
     return await job_state.get_job(job_id, user, as_admin=True)
 

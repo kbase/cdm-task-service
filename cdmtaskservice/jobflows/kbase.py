@@ -13,7 +13,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     require_string as _require_string,
 )
-from cdmtaskservice.condor.client import CondorClient
+from cdmtaskservice.condor.client import CondorClient, HTCondorWorkerEnvVars
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
     UnauthorizedError,
@@ -242,6 +242,7 @@ class KBaseFlowProvider:
         coman: CoroutineWrangler,
         service_root_url: str,
         condor_client_group: str | None = None,
+        env_vars: HTCondorWorkerEnvVars | None = None,
     ):
         """
         WARNING: this class is not thread safe.
@@ -262,6 +263,8 @@ class KBaseFlowProvider:
             job state.
         condor_client_group - the client group to submit jobs to, if any. This is a classad on
             a worker with the name CLIENTGROUP.
+        env_vars - environment variables where external executors should look up job information
+            on the HTcondor workers. Uses client defaults if not supplied.
         """
     
         kb = cls()
@@ -274,6 +277,7 @@ class KBaseFlowProvider:
         kb._coman = _not_falsy(coman, "coman")
         kb._service_root_url = _require_string(service_root_url, "service_root_url")
         kb._cligrp = condor_client_group
+        kb._env_vars = env_vars
         
         kb._logr = logging.getLogger(__name__)
         
@@ -349,7 +353,8 @@ class KBaseFlowProvider:
                 self._exe_url,
                 self._code_archive_url,
                 client_group=self._cligrp,
-                # TODO CONDOR add service root and s3 host / insecure/ log path
+                env_vars = self._env_vars,
+                # TODO CONDOR add s3 host / insecure/ log path
             )
             kbase = KBaseRunner(
                 condor, self._mongodao, self._s3config.client, self._kafka, self._coman

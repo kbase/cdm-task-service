@@ -40,7 +40,7 @@ services:
       - KBCTS_NERSC_REMOTE_CODE_DIR=/global/cfs/cdirs/kbase/cdm_task_service
       - KBCTS_JAWS_URL=https://jaws-api.jgi.doe.gov/api/v2
       # Don't commit your token to github please
-      - KBCTS_JAWS_TOKEN=tokengoeshere
+      - KBCTS_JAWS_TOKEN=dont_check_tokens_into_vcs_please
       - KBCTS_JAWS_GROUP=kbase
       # From ./docker_compose/htcondor/start_condor_and_gen_token.sh
       - KBCTS_HTC_INITIAL_DIR=/condor_workdir
@@ -124,6 +124,10 @@ services:
 
   htcondor-mini:
     image: htcondor/mini:24.11.2-el9
+    environment:
+      CTS_EXECUTOR_TOKEN: dont_check_tokens_into_vcs_please
+      CTS_EXECUTOR_S3_ACCESS_KEY: miniouser
+      CTS_EXECUTOR_S3_ACCESS_SECRET: miniopassword
     ports:
       - "9618:9618"
     volumes:

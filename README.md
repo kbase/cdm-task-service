@@ -112,6 +112,13 @@ to be mounted into the container, e.g.
   location.
 * A condor configuration file and password file if using `PASSWORD` authentication.
 
+Furthermore each HTCondor worker's environment must be configured with
+
+* a KBase token with an auth2 role indicating the user is a CTS external executor
+* S3 credentials
+
+See the HTCondor section of [cdmtaskservice_config.toml.jinja](cdmtaskservice_config.toml.jinja).
+
 ## Powered by
 
 <div>

@@ -13,6 +13,8 @@ from cdmtaskservice.exceptions import UnauthorizedError
 class CTSRole(str, Enum):
     """ A role for the service a user may possess. """
     
+    EXTERNAL_EXECUTOR = "external_executor"
+    
     FULL_ADMIN = "full_admin"
     # add roles as needed
 
@@ -43,6 +45,10 @@ class CTSUser:
         """ Returns true if the user is a service admin with full rights to everything. """
         return CTSRole.FULL_ADMIN in self.roles
 
+    def is_external_executor(self):
+        """ Returns true if the user is an external executor. """
+        return CTSRole.EXTERNAL_EXECUTOR in self.roles
+
 
 # Illegal user name in kbase and hopefully everywhere else
 SERVICE_USER = CTSUser(user="**** SERVICE ****")
@@ -57,6 +63,7 @@ class CTSAuth:
             service_admin_roles: set[str],
             is_kbase_staff_role: str,
             has_nersc_account_role: str,
+            external_executor_role: str,
     ):
         """
         Create the auth client.
@@ -68,6 +75,8 @@ class CTSAuth:
             member.
         has_nersc_account_role - a KBase auth role that designates that a user has a NERSC
             account.
+        external_executor_roel -a KBase auth role that designates the user is a external
+            job executor.
         """
         # In the future this mey need changes to support other auth sources...?
         self._kbauth = _not_falsy(kbaseauth, "kbaseauth")
@@ -75,6 +84,9 @@ class CTSAuth:
         self._admin_roles = _not_falsy(service_admin_roles, "service_admin_roles")
         self._kbstaff_role = require_string(is_kbase_staff_role, "is_kbase_staff_role")
         self._nersc_role = require_string(has_nersc_account_role, "has_nersc_account_role")
+        self._external_executor_role = require_string(
+            external_executor_role, "external_executor_role"
+        )
 
 
     async def is_valid_kbase_user(self, user: str, token: str) -> bool:
@@ -93,9 +105,14 @@ class CTSAuth:
         """ Get a CTS user given a KBase token. """
         # this will def need rethinking if we ever support more auth sources
         user = await self._kbauth.get_user(token)
+        roles = set()
+        if user.roles & self._admin_roles:
+            roles.add(CTSRole.FULL_ADMIN)
+        if self._external_executor_role in user.roles:
+            roles.add(CTSRole.EXTERNAL_EXECUTOR)
         user = CTSUser(
             user=user.user,
-            roles={CTSRole.FULL_ADMIN} if user.roles & self._admin_roles else {},
+            roles=roles,
             is_kbase_staff=self._kbstaff_role in user.roles,
             has_nersc_account=self._nersc_role in user.roles,
         )
