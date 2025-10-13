@@ -103,20 +103,14 @@ initialdir = "{{ KBCTS_HTC_INITIAL_DIR or "/condor_workdir" }}"
 # If omitted, the service will not distinguish between workers.
 clientgroup = "{{ KBCTS_HTC_CLIENT_GROUP or "" }}"
 
-# The environment variable on the HTCondor workers that will contain a KBase token for
+# The file path on the HTCondor workers that will contain a KBase token for
 # the job executor to use to contact the service. This token must have the external exectutor role
 # defined in the Authentication section above.
-token_env_var = "{{ KBCTS_HTC_TOKEN_ENV_VAR or "CTS_EXECUTOR_TOKEN" }}"
+token_path = "{{ KBCTS_HTC_TOKEN_PATH or "/cts/cts_token" }}"
 
-# The environment variable on the HTCondor workers that will contain the S3 access key
+# The file path on the HTCondor workers that will contain the S3 access secret
 # for the S3 system defined in the S3 section below.
-s3_access_key_env_var = "{{ KBCTS_HTC_S3_ACCESS_KEY_ENV_VAR or "CTS_EXECUTOR_S3_ACCESS_KEY" }}"
-
-# The environment variable on the HTCondor workers that will contain the S3 access secret
-# for the S3 system defined in the S3 section below.
-s3_access_secret_env_var = "{{
-     KBCTS_HTC_S3_ACCESS_SECRET_ENV_VAR or "CTS_EXECUTOR_S3_ACCESS_SECRET"
-}}"
+s3_access_secret_path = "{{ KBCTS_HTC_S3_ACCESS_SECRET_PATH or "/cts/s3_secret" }}"
 
 [ExternalExecution]
 

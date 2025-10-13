@@ -106,25 +106,20 @@ STATIC_SUB = {
 
 
 @dataclass(frozen=True)
-class HTCondorWorkerEnvVars:
-    """ Names of environment variables where external executors should look up information. """
+class HTCondorWorkerPaths:
+    """ Paths where external executors should look up secrets. """
     
     # TODO CODE check args aren't None / whitespace only. Not a lib class so YAGNI for now
     
-    token_env_var: str = "CTS_EXECUTOR_TOKEN"
+    token_path: str
     """
-    The environment variable on the condor worker containing a KBase token for use when
+    The path on the condor worker containing a KBase token for use when
     contacting the service.
     """
 
-    s3_access_key_env_var: str = "CTS_EXECUTOR_S3_ACCESS_KEY"
+    s3_access_secret_path: str
     """
-    The environment variable on the condor worker containing the s3 access key for the S3 instance.
-    """
-    
-    s3_access_secret_env_var: str = "CTS_EXECUTOR_S3_ACCESS_SECRET"
-    """
-    The environment variable on the condor worker containing the s3 access key for the S3 instance.
+    The path on the condor worker containing the s3 access secret for the S3 instance.
     """
 
 
@@ -140,8 +135,8 @@ class CondorClient:
         service_root_url: str,
         executable_url: str,
         code_archive_url: str,
+        paths: HTCondorWorkerPaths,
         client_group: str | None = None,
-        env_vars: HTCondorWorkerEnvVars = HTCondorWorkerEnvVars()
     ):
         """
         Create the client.
@@ -155,10 +150,9 @@ class CondorClient:
             Must end in a file name and have no query or fragment.
         code_archive_url - the url for the *.tgz file code archive to transfer to the condor worker
             for each job. Must end in a file name and have no query or fragment.
+        paths - the paths on the HTCondor workers should look for job secrets.
         client_group - the client group to submit jobs to, if any. This is a classad on
             a worker with the name CLIENTGROUP.
-        env_vars - the environment variables on the HTCondor workers should look for job
-            information.
         """
         self._schedd = _not_falsy(schedd, "schedd")
         self._initial_dir = _not_falsy(initial_dir, "initial_dir")
@@ -169,8 +163,8 @@ class CondorClient:
         self._exe_name = self._get_name_from_url(self._exe_url)
         self._code_archive_url = _require_string(code_archive_url, "code_archive_url")
         self._code_archive_name = self._get_name_from_url(self._code_archive_url)
+        self._paths = _not_falsy(paths, "paths")
         self._cligrp = client_group
-        self._env_vars = _not_falsy(env_vars, "env_vars")
         
     def _get_name_from_url(self, url: str) -> str:
         parsed = URL(url)
@@ -190,9 +184,8 @@ class CondorClient:
             "CONTAINER_NUMBER": "$(container_number)",
             "CODE_ARCHIVE": self._code_archive_name,
             "SERVICE_ROOT_URL": self._service_root_url,
-            "TOKEN_ENV_VAR": self._env_vars.token_env_var,
-            "S3_ACCESS_ENV_VAR": self._env_vars.s3_access_key_env_var,
-            "S3_SECRET_ENV_VAR": self._env_vars.s3_access_secret_env_var,
+            "TOKEN_PATH": self._paths.token_path,
+            "S3_SECRET_PATH": self._paths.s3_access_secret_path,
             # TODO CONDOR need minio url
         }
         environment = ""
