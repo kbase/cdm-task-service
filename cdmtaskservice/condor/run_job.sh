@@ -87,6 +87,8 @@ pip install --upgrade pip && pip install uv
 uv sync
 echo "Complete uv / deps install: $(date)"
 
+echo "Python version: $(uv run python --version)"
+
 export PYTHONPATH=.
 
-uv run python cdmtaskservice/externalexecution/executor.py
+uv run python cdmtaskservice/externalexecution/main.py
