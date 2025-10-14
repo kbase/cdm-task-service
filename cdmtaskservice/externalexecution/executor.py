@@ -5,12 +5,17 @@ The main CTS external executor class.
 import aiohttp
 import json
 import logging
+from pathlib import Path
 from typing import TextIO, Any
 
+from cdmtaskservice.exceptions import ChecksumMismatchError
 from cdmtaskservice.externalexecution.config import Config
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.input_file_locations import determine_file_locations
 from cdmtaskservice import models
+from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.s3.paths import S3Paths
+from cdmtaskservice.s3.remote import crc64nvme_b64
 from cdmtaskservice.version import VERSION
 
 
@@ -38,11 +43,19 @@ class Executor:
         await self._sess.close()
     
     async def execute(self):
-        """ Run the executor. """
+        """ Run the executor. Returns True for success, False for fail. """
         await self._log_service_ver()
+        # If we can't get the job, we presumably can't update the job either, so we just throw any
+        # exceptions.
         job = await self._get_job()
         # we assume here that the service has already error checked the job input
-        filelocs = self._get_files(job)
+        try:
+            await self._download_files(job)
+        except Exception as e:
+            self._logr.exception(f"Job failed: {e}")
+            # TODO EXECUTOR try to drain job state queue and update job state to error
+            return False
+        return True
     
     async def _check_resp(self, resp: aiohttp.ClientResponse, action: str) -> dict[str, Any]:
         try:
@@ -72,28 +85,54 @@ class Executor:
     async def _get_job(self) -> models.AdminJobDetails:
         # TODO RELIABILITY retries. Tenatcity might be useful
         url = f"{self._url}/admin/jobs/{self._cfg.job_id}"
-        # If we can't get the job, we presumably can't update the job either, so we just throw any
-        # exceptions.
         async with self._sess.get(url) as resp:
             jobjson = await self._check_resp(resp, "Failed to get job from the CDM Task Service")
         return models.AdminJobDetails.model_validate(jobjson)
 
-    def _get_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
-        files = set(job.job_input.get_files_per_container()[self._cfg.container_number - 1])
+    async def _download_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
+        s3objs = set(job.job_input.get_files_per_container()[self._cfg.container_number - 1])
         filelocs = determine_file_locations(job.job_input)
-        filelocs = {k: v for k, v in filelocs.items() if k in files}
+        filelocs = {k: v for k, v in filelocs.items() if k in s3objs}
+        s3paths = []
+        local_paths = []
+        root = Path(".") / "__INPUT__"
         filerecs = []
-        for i, (f, loc) in enumerate(filelocs.items(), start=1):
+        for i, (obj, loc) in enumerate(filelocs.items(), start=1):
+            s3paths.append(obj.file)
+            local_paths.append(root / loc)
             filerecs.append(f"""
-File #{i} CRC64NVME: {f.crc64nvme}
-S3 Path: {f.file}
+File #{i} CRC64NVME: {obj.crc64nvme}
+S3 Path: {obj.file}
 Local relative path: {loc}
 """
             )
         self._logr.info("Processing files:" + "===".join(filerecs))
-        return filelocs
+        self._s3cli = await S3Client.create(
+            self._cfg.s3_url,
+            self._cfg.s3_access_key,
+            self._cfg.s3_access_secret,
+            insecure_ssl=self._cfg.s3_insecure
+        )
+        # TODO PERFORMACE configure concurrency
+        await self._s3cli.download_objects_to_file(S3Paths(s3paths), local_paths)
+        for obj, loc in filelocs.items():
+            # Could parallelize. Probably not worth it
+            crc = crc64nvme_b64(root / loc)
+            if crc != obj.crc64nvme:
+                raise ChecksumMismatchError(
+                    f"The expected CRC64/NMVE checksum '{obj.crc64nvme}' for the path "
+                    + f"'{obj.file}' does not match the actual checksum '{crc}'"
+                )
+
 
 async def run_executor(stderr: TextIO):
+    """
+    Run the job executor. 
+    
+    stderr - a stderr stream.
+    
+    Returns True for success, False for failure.
+    """
     stderr.write(f"Executor version: {VERSION} githash: {GIT_COMMIT}\n")
     cfg = Config()
     stderr.write("Executor config:\n")
@@ -101,7 +140,7 @@ async def run_executor(stderr: TextIO):
         stderr.write(f"{k}: {v}\n")
     stderr.write("\n")
     async with Executor(cfg) as exe:
-        await exe.execute();
+        return await exe.execute();
 
 
 class RetryableExecutorError(Exception):

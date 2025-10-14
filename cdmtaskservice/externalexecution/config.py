@@ -49,16 +49,16 @@ class Config(BaseSettings):
         description="The S3 access key.",
         min_length=1,
     )]
-    s3_error_log_path: Annotated[str, Field(
-        validation_alias="S3_ERROR_LOG_PATH",
-        examples=["cts-bucket/logs"],
-        description="The S3 path, including the bucket, where error log files should be stored.",
-        min_length=1,
-    )]
     s3_access_secret: Annotated[str, Field(
         validation_alias="S3_SECRET",
         examples=["supersekrit"],
         description="The S3 access secret.",
+        min_length=1,
+    )]
+    s3_error_log_path: Annotated[str, Field(
+        validation_alias="S3_ERROR_LOG_PATH",
+        examples=["cts-bucket/logs"],
+        description="The S3 path, including the bucket, where error log files should be stored.",
         min_length=1,
     )]
     s3_insecure: Annotated[bool, Field(
