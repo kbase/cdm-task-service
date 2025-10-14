@@ -37,25 +37,36 @@ class Config(BaseSettings):
         description="A CDM task service token providing the external executor role.",
         min_length=1,
     )]
-    # TODO implement when downloading files
-    # s3_url: Annotated[str, Field(
-    #     validation_alias="S3_URL",
-    #     examples=["https://minio.kbase.us"],
-    #     description="The root URL of the S3 instance for storing data.",
-    #     min_length=1,
-    # )]
-    # s3_access_key: Annotated[str, Field(
-    #     validation_alias="S3_ACCESS",
-    #     examples=["my_minio_user"],
-    #     description="The S3 access key.",
-    #     min_length=1,
-    # )]
+    s3_url: Annotated[str, Field(
+        validation_alias="S3_URL",
+        examples=["https://minio.kbase.us"],
+        description="The root URL of the S3 instance for storing data.",
+        min_length=1,
+    )]
+    s3_access_key: Annotated[str, Field(
+        validation_alias="S3_ACCESS_KEY",
+        examples=["my_minio_user"],
+        description="The S3 access key.",
+        min_length=1,
+    )]
+    s3_error_log_path: Annotated[str, Field(
+        validation_alias="S3_ERROR_LOG_PATH",
+        examples=["cts-bucket/logs"],
+        description="The S3 path, including the bucket, where error log files should be stored.",
+        min_length=1,
+    )]
     s3_access_secret: Annotated[str, Field(
         validation_alias="S3_SECRET",
         examples=["supersekrit"],
         description="The S3 access secret.",
         min_length=1,
     )]
+    s3_insecure: Annotated[bool, Field(
+        validation_alias="S3_INSECURE",
+        description=
+            "Whether to skip checking the SSL certificate for the S3 instance, "
+            + "leaving the service open to MITM attacks.",
+    )] = False
     
     _SAFE_FIELDS = {
         "job_id",
@@ -63,6 +74,8 @@ class Config(BaseSettings):
         "cts_url",
         "s3_url",
         "s3_access_key",
+        "s3_error_log_path",
+        "s3_insecure",
     }
     
     def safe_dump(self) -> dict[str, Any]:

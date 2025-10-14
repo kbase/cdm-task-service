@@ -124,6 +124,9 @@ services:
 
   htcondor-mini:
     image: htcondor/mini:24.11.2-el9
+    extra_hosts:
+      # See https://stackoverflow.com/a/43541732/643675
+      - "host.docker.internal:host-gateway"
     environment:
       CTS_EXCECUTOR_TOKEN_FOR_FILE: dont_check_tokens_into_vcs_please
       # Note this will need to be replaced with the external minio secret

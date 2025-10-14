@@ -352,6 +352,7 @@ class KBaseFlowProvider:
                 self._service_root_url,
                 self._exe_url,
                 self._code_archive_url,
+                self._s3config,
                 self._paths,
                 client_group=self._cligrp,
                 # TODO CONDOR add s3 host / insecure/ log path
