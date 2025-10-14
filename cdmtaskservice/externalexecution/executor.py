@@ -3,19 +3,18 @@ The main CTS external executor class.
 """
 
 import aiohttp
-import asyncio
 import json
 import logging
-import sys
 from typing import TextIO, Any
 
 from cdmtaskservice.externalexecution.config import Config
 from cdmtaskservice.git_commit import GIT_COMMIT
+from cdmtaskservice.input_file_locations import determine_file_locations
 from cdmtaskservice import models
 from cdmtaskservice.version import VERSION
 
 
-logging.basicConfig()
+logging.basicConfig(level=logging.INFO)
 
 
 class Executor:
@@ -40,8 +39,10 @@ class Executor:
     
     async def execute(self):
         """ Run the executor. """
+        await self._log_service_ver()
         job = await self._get_job()
-        print(job.model_dump_json(indent=2))
+        # we assume here that the service has already error checked the job input
+        filelocs = self._get_files(job)
     
     async def _check_resp(self, resp: aiohttp.ClientResponse, action: str) -> dict[str, Any]:
         try:
@@ -63,6 +64,11 @@ class Executor:
             raise RetryableExecutorError(msg)
         return resjson
     
+    async def _log_service_ver(self):
+        async with self._sess.get(self._url) as resp:
+            root = await self._check_resp(resp, "Failed to get job from the CDM Task Service")
+        self._logr.info(f"CTS version: {root['version']}")
+    
     async def _get_job(self) -> models.AdminJobDetails:
         # TODO RELIABILITY retries. Tenatcity might be useful
         url = f"{self._url}/admin/jobs/{self._cfg.job_id}"
@@ -72,13 +78,28 @@ class Executor:
             jobjson = await self._check_resp(resp, "Failed to get job from the CDM Task Service")
         return models.AdminJobDetails.model_validate(jobjson)
 
+    def _get_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
+        files = set(job.job_input.get_files_per_container()[self._cfg.container_number - 1])
+        filelocs = determine_file_locations(job.job_input)
+        filelocs = {k: v for k, v in filelocs.items() if k in files}
+        filerecs = []
+        for i, (f, loc) in enumerate(filelocs.items(), start=1):
+            filerecs.append(f"""
+File #{i} CRC64NVME: {f.crc64nvme}
+S3 Path: {f.file}
+Local relative path: {loc}
+"""
+            )
+        self._logr.info("Processing files:" + "===".join(filerecs))
+        return filelocs
 
-async def run_executor(stdout: TextIO, stderr: TextIO):
-    stdout.write(f"Executor version: {VERSION} githash: {GIT_COMMIT}\n")
+async def run_executor(stderr: TextIO):
+    stderr.write(f"Executor version: {VERSION} githash: {GIT_COMMIT}\n")
     cfg = Config()
-    stdout.write("Executor config:\n")
+    stderr.write("Executor config:\n")
     for k, v in cfg.safe_dump().items():
-        stdout.write(f"{k}: {v}\n")
+        stderr.write(f"{k}: {v}\n")
+    stderr.write("\n")
     async with Executor(cfg) as exe:
         await exe.execute();
 
