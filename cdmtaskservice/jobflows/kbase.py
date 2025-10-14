@@ -14,6 +14,7 @@ from cdmtaskservice.arg_checkers import (
     require_string as _require_string,
 )
 from cdmtaskservice.condor.client import CondorClient, HTCondorWorkerPaths
+from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
     UnauthorizedError,
@@ -22,7 +23,6 @@ from cdmtaskservice.exceptions import (
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
-from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
@@ -357,7 +357,11 @@ class KBaseFlowProvider:
                 # TODO CONDOR add s3 host / insecure/ log path
             )
             kbase = KBaseRunner(
-                condor, self._mongodao, self._s3config.client, self._kafka, self._coman
+                condor,
+                self._mongodao,
+                self._s3config.get_internal_client(),
+                self._kafka,
+                self._coman
             )
             self._kbase = kbase
             self._last_fail_time = None

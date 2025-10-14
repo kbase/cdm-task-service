@@ -7,9 +7,6 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
-from cdmtaskservice import logfields
-from cdmtaskservice import models
-from cdmtaskservice import sites
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
@@ -17,6 +14,7 @@ from cdmtaskservice.callback_url_paths import (
     get_error_log_upload_complete_callback,
     get_refdata_download_complete_callback,
 )
+from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
     InvalidJobStateError,
@@ -28,12 +26,14 @@ from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
-from cdmtaskservice.jobflows.s3config import S3Config
+from cdmtaskservice import logfields
+from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
+from cdmtaskservice import sites
 from cdmtaskservice.update_state import (
     submitted_nersc_download,
     submitting_job,
@@ -93,8 +93,8 @@ class NERSCJAWSRunner(JobFlow):
         self._nman = _not_falsy(nersc_manager, "nersc_manager")
         self._jaws = _not_falsy(jaws_client, "jaws_client")
         self._mongo = _not_falsy(mongodao, "mongodao")
-        self._s3 = _not_falsy(s3config, "s3config").client
-        self._s3ext = s3config.external_client
+        self._s3 = _not_falsy(s3config, "s3config").get_internal_client()
+        self._s3ext = s3config.get_external_client()
         self._s3insecure = s3config.insecure
         self._s3logdir = s3config.error_log_path
         self._coman = _not_falsy(coro_manager, "coro_manager")

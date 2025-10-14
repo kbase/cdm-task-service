@@ -67,7 +67,7 @@ class Executor:
     async def _log_service_ver(self):
         async with self._sess.get(self._url) as resp:
             root = await self._check_resp(resp, "Failed to get job from the CDM Task Service")
-        self._logr.info(f"CTS version: {root['version']}")
+        self._logr.info(f"CTS version: {root['version']} githash: {root['git_hash']}")
     
     async def _get_job(self) -> models.AdminJobDetails:
         # TODO RELIABILITY retries. Tenatcity might be useful

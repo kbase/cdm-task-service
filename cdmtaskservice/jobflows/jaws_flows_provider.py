@@ -9,6 +9,7 @@ from pathlib import Path
 import time
 
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
+from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import UnavailableResourceError
 from cdmtaskservice.jaws.client import JAWSClient
@@ -17,7 +18,6 @@ from cdmtaskservice.jaws.sitemapper import get_jaws_site
 from cdmtaskservice.jobflows.flowmanager import JobFlowOrError
 from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
-from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.nersc.manager import NERSCManager
