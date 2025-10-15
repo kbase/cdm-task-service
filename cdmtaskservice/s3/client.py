@@ -4,12 +4,14 @@ An s3 client tailored for the needs of the CDM Task Service.
 Note the client is *not threadsafe* as the underlying aiobotocore session is not threadsafe.
 """
 
+import aiofiles
 import asyncio
 from aiobotocore.session import get_session
 from botocore.config import Config
 from botocore.exceptions import EndpointConnectionError, ClientError, HTTPClientError
 from botocore.parsers import ResponseParserError
 import logging
+from pathlib import Path
 from typing import Any, Self
 
 from cdmtaskservice.arg_checkers import (
@@ -142,7 +144,7 @@ class S3Client:
             raise S3ClientConnectError(f"s3 connect failed: {e}") from e
         except ResponseParserError as e:
             # TODO TEST logging
-            # This is currently untested as I currently don't know a way to test it reliably
+            # This is untested as I currently don't know a way to test it reliably
             # It used to be testable by GETing a text resource
             logging.getLogger(__name__).exception(f"Unable to parse response from S3:\n{e}\n")
             raise S3ClientConnectError(
@@ -161,7 +163,7 @@ class S3Client:
             code = e.response["Error"]["Code"]
             if code == "SignatureDoesNotMatch":
                 raise S3ClientConnectError("s3 access credentials are invalid")
-            if code == "404" or code == "NoSuchBucket":
+            if code == "404" or code == "NoSuchBucket" or code == "NoSuchKey":
                 if bucket:
                     raise S3BucketNotFoundError(
                         f"The bucket '{bucket}' was not found on the s3 system"
@@ -280,6 +282,40 @@ class S3Client:
             ))
         return ret
 
+    async def download_objects_to_file(
+        self,
+        # Not really sure about this. Might want to make a different data structure
+        s3paths: S3Paths,
+        local_paths: list[Path],
+        concurrency: int = 10
+    ) -> list[S3ObjectMeta]:
+        """
+        Download a set of paths to files.
+        
+        s3paths - the S3 paths to query.
+        local_paths - the local paths where the object should be downloaded, in the same order
+            as the S3 files. This implies the S3Paths must have been initialized with an ordered
+            sequence.
+        concurrency - the number of simultaneous connections to S3
+        """
+        _not_falsy(s3paths, "s3paths")
+        _not_falsy(local_paths, "local_paths")
+        _check_num(concurrency, "concurrency")
+        if len(s3paths) != len(local_paths):
+            raise ValueError("The number of local paths must equal the number of S3 paths")
+        funcs = []
+        for (buk, key, path), loc in zip(s3paths.split_paths(include_full_path=True), local_paths):
+            # bind the current value of the variables
+            async def download(client, buk=buk, key=key, loc=loc):
+                loc.parent.mkdir(parents=True, exist_ok=True)
+                obj = await client.get_object(Bucket=buk, Key=key)
+                async with obj["Body"] as stream, aiofiles.open(loc, "wb") as f:
+                    while chunk := await stream.content.read(1024 * 1024):  # 1 MiB chunks
+                        await f.write(chunk)
+            download.path = path
+            funcs.append(download)
+        await self._run_commands(funcs, concurrency)
+
     async def presign_get_urls(self, paths: S3Paths, expiration_sec: int = 3600) -> list[str]:
         """
         Presign urls to allow getting s3 paths. Does not confirm the path exists.
@@ -298,7 +334,6 @@ class S3Client:
                     ExpiresIn=expiration_sec
                 ))
         return results
-    
     
     async def presign_post_urls(
         self,

@@ -194,6 +194,7 @@ async def test_get_object_meta_multipart_and_insecure_ssl(minio):
         None,
     )
 
+
 @pytest.mark.asyncio
 async def test_get_object_meta_mix_w_crc64nvme(minio):
     await minio.clean()  # couldn't get this to work as a fixture
@@ -241,7 +242,7 @@ async def test_get_object_meta_fail_concurrency(minio):
     for c in [0, -1, -1000000]:
         await _get_object_meta_fail(
             cli, p, ValueError("concurrency must be >= 1"), concurrency=c)
-    
+
 
 @pytest.mark.asyncio
 async def test_get_object_meta_fail_no_object(minio):
@@ -302,6 +303,120 @@ async def test_get_object_meta_fail_concurrent_paths(minio):
 async def _get_object_meta_fail(s3c, paths, expected, concurrency=1, print_stacktrace=False):
     with pytest.raises(Exception) as got:
         await s3c.get_object_meta(paths, concurrency)
+    assert_exception_correct(got.value, expected, print_stacktrace)
+
+
+@pytest.mark.asyncio
+async def test_download_object(minio, tmp_path):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    await minio.upload_file("test-bucket//test_file", b"imsounique")
+    await minio.upload_file(
+        "test-bucket/big_test_file",
+        b"abcdefghij" * 600000,
+        2,  # 12MB total
+    )
+
+    s3c = await _client(minio)
+    await s3c.download_objects_to_file(
+        S3Paths(["test-bucket/test_file", "test-bucket/big_test_file"]),
+        [tmp_path / "somedir" / "tf1", tmp_path / "otherdir" / "tf2"]
+    )
+    with open(tmp_path / "somedir" / "tf1", mode="rb") as f:
+        assert f.read() == b"imsounique"
+    with open(tmp_path / "otherdir" / "tf2", mode="rb") as f:
+        assert f.read() == b"abcdefghij" * 600000 * 2
+
+
+@pytest.mark.asyncio
+async def test_download_object_to_file_fail_bad_paths(minio):
+    cli = await _client(minio)
+    lp = [Path("foo")]
+    s3p = S3Paths(["foo/bar"])
+    await _download_object_to_file_fail(cli, None, lp, ValueError("s3paths is required"))
+    await _download_object_to_file_fail(cli, s3p, None, ValueError("local_paths is required"))
+    await _download_object_to_file_fail(cli, s3p, [], ValueError("local_paths is required"))
+    await _download_object_to_file_fail(
+        cli, s3p, ["f", "t"], ValueError(
+            "The number of local paths must equal the number of S3 paths"
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_object_to_file_fail_concurrency(minio):
+    p = S3Paths(["foo/bar"])
+    lp = [Path("foo")]
+    cli = await _client(minio)
+    for c in [0, -1, -1000000]:
+        await _download_object_to_file_fail(
+            cli, p, lp, ValueError("concurrency must be >= 1"), concurrency=c)
+
+
+@pytest.mark.asyncio
+async def test_download_object_to_file_fail_no_object(minio, tmp_path):
+    await minio.clean()
+    await minio.create_bucket("fail-bucket")
+    await minio.upload_file("fail-bucket/foo/bar", b"foo")
+    
+    testset = {
+        "fake-bucket/foo/bar": "The path 'fake-bucket/foo/bar' was not found on the s3 system",
+        "fail-bucket/foo/baz": "The path 'fail-bucket/foo/baz' was not found on the s3 system",
+    }
+    cli = await _client(minio)
+    lp = [tmp_path / "foo"]
+    for k, v in testset.items():
+        await _download_object_to_file_fail(cli, S3Paths([k]), lp, S3PathNotFoundError(v))
+
+
+@pytest.mark.asyncio
+async def test_download_object_to_file_fail_unauthed(minio, minio_unauthed_user, tmp_path):
+    # Will probably want to refactor these tests so they can be generically be applied to
+    # any endpoint
+    await minio.clean()
+    await minio.create_bucket("fail-bucket")
+    await minio.upload_file("fail-bucket/foo/bar", b"foo")
+    
+    user, pwd = minio_unauthed_user
+    s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
+    await _download_object_to_file_fail(
+        s3c, S3Paths(["fail-bucket/foo/bar"]), [tmp_path / "foo"],
+        S3PathInaccessibleError(
+            "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_object_to_file_fail_concurrent_paths(minio, tmp_path):
+    # Since a taskgroup cancels all tasks after the first failure, check that we're throwing
+    # the right error and not a CancelledError or something
+    await minio.clean()
+    await minio.create_bucket("fail-bucket")
+    paths = []
+    filecount = 10
+    fails_on = random.randrange(filecount)
+    for i in range(filecount):
+        contents = str(10000 + i)  # keep the file size the same
+        await minio.upload_file(f"fail-bucket/f{contents}", contents.encode())
+        paths.append(f"fail-bucket/f{contents}" + ("fail" if i == fails_on else ""))
+    
+    for con in [1, 2, 5, 10]:
+        await _download_object_to_file_fail(
+            await _client(minio),
+            S3Paths(paths),
+            [tmp_path / "foo"] * 10,
+            S3PathNotFoundError(
+                f"The path 'fail-bucket/f1000{fails_on}fail' was not found on the s3 system"),
+            concurrency=con
+        )
+
+
+async def _download_object_to_file_fail(
+    s3c, paths, local_paths, expected, concurrency=1, print_stacktrace=False
+):
+    with pytest.raises(Exception) as got:
+        await s3c.download_objects_to_file(paths, local_paths, concurrency)
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
