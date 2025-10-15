@@ -15,7 +15,7 @@ dependencies = [
     "cacheout>=0.16.0",
     "docker-image-py>=0.1.13",
     "fastapi[standard]>=0.115.12",
-    "htcondor==24.11.2",
+    "htcondor==25.1.0",
     "jinja-cli>=1.2.2",
     "marisa-trie>=1.2.1",
     "motor>=3.7.1",
@@ -23,7 +23,7 @@ dependencies = [
     "requests>=2.32.3",
     "sfapi-client>=0.4.1",
     "uvicorn[standard]>=0.34.3",
-    "yarl==1.20.0",
+    "yarl==1.20.1",
 ]
 
 [dependency-groups]
