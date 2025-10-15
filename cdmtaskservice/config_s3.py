@@ -43,7 +43,11 @@ class S3Config(BaseModel):
     _s3_external_client: Optional[S3Client] = None
 
     async def initialize_clients(self):
-        """ Initialize the S3 clients. Calling this method more than once has no effect. """
+        """
+        Initialize the S3 clients. NOTE: this method is not safe for concurrent access.
+        
+        Calling this method more than once has no effect.
+        """
         if self._s3_client is None:
             self._s3_client = await S3Client.create(
                 self.internal_url,
