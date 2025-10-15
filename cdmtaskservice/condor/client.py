@@ -166,7 +166,7 @@ class CondorClient:
         self._exe_name = self._get_name_from_url(self._exe_url)
         self._code_archive_url = _require_string(code_archive_url, "code_archive_url")
         self._code_archive_name = self._get_name_from_url(self._code_archive_url)
-        self._s3config = _not_falsy(s3config, "s3onfig")
+        self._s3config = _not_falsy(s3config, "s3config")
         self._paths = _not_falsy(paths, "paths")
         self._cligrp = client_group
         
