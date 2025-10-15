@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import NamedTuple, Callable
 from yarl import URL
 
-
+from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import UnavailableResourceError
@@ -27,7 +27,6 @@ from cdmtaskservice.jobflows.jaws_flows_provider import JAWSFlowProvider
 from cdmtaskservice.jobflows.kbase import KBaseFlowProvider, KBaseRunner
 from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
-from cdmtaskservice.jobflows.s3config import S3Config
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.localfiles import get_condor_exe_url, get_code_archive_url
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -135,24 +134,11 @@ async def build_app(
     kafka_notifier = None
     try:
         logr.info("Initializing S3 client... ")
-        s3 = await S3Client.create(
-            cfg.s3_url, cfg.s3_access_key, cfg.s3_access_secret, insecure_ssl=cfg.s3_allow_insecure
-        )
-        s3_external = await S3Client.create(
-            cfg.s3_external_url,
-            cfg.s3_access_key,
-            cfg.s3_access_secret,
-            insecure_ssl=cfg.s3_allow_insecure,
-            skip_connection_check=not cfg.s3_verify_external_url
-        )
+        s3cfg = cfg.get_s3_config()
+        # ensure clients are working before we proceed
+        await s3cfg.initialize_clients()
         logr.info("Done")
-        await _check_paths(s3, logr, cfg)
-        s3config = S3Config(
-            client=s3,
-            external_client=s3_external,
-            error_log_path=cfg.container_s3_log_dir,
-            insecure=cfg.s3_allow_insecure
-        )
+        await _check_paths(s3cfg.get_internal_client(), logr, cfg)
         logr.info("Initializing MongoDB client...")
         mongocli = await get_mongo_client(cfg)
         logr.info("Done")
@@ -165,15 +151,15 @@ async def build_app(
         logr.info("Done")
         flowman = JobFlowManager(mongodao)
         jaws_job_flows = await _register_nersc_job_flows(
-            logr, cfg, flowman, mongodao, s3config, kafka_notifier, coman
+            logr, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
         )
-        _register_kbase_job_flow(cfg, flowman, mongodao, s3config, kafka_notifier, coman)
+        _register_kbase_job_flow(cfg, flowman, mongodao, s3cfg, kafka_notifier, coman)
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
-        refdata = Refdata(mongodao, s3, coman, flowman)
+        refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
         images = Images(mongodao, imginfo, refdata)
         job_state = JobState(  # this also has a lot of required args, yech
             mongodao,
-            s3,
+            s3cfg.get_internal_client(),
             images,
             kafka_notifier,
             refdata,

@@ -4,19 +4,19 @@ Manages running jobs at Lawrenium using the JAWS system.
 Note that data is still staged at NERSC and the job is started from NERSC.
 """
 
-from cdmtaskservice import models
-from cdmtaskservice import sites
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.callback_url_paths import get_refdata_download_complete_callback
+from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
-from cdmtaskservice.jobflows.s3config import S3Config
+from cdmtaskservice import models
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.s3.client import S3ObjectMeta
+from cdmtaskservice import sites
 from cdmtaskservice.update_state import submitted_refdata_download, refdata_complete
 
 

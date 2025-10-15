@@ -7,6 +7,7 @@ import tomllib
 from typing import BinaryIO, TextIO
 
 from cdmtaskservice.condor.client import HTCondorWorkerPaths
+from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.jaws.config import JAWSConfig
 from cdmtaskservice.nersc.paths import NERSCPaths
 
@@ -218,6 +219,18 @@ class CDMTaskServiceConfig:
                         name1 = "container_s3_log_dir" if is_log1 else "Allowed path"
                         name2 = "container_s3_log_dir" if is_log2 else "allowed path"
                         raise ValueError(f"{name1} '{p1}' is a prefix of {name2} '{p2}'")
+
+    def get_s3_config(self) -> S3Config:
+        """ Get the S3 configuration. """
+        return S3Config(
+            internal_url=self.s3_url,
+            external_url=self.s3_external_url,
+            access_key=self.s3_access_key,
+            access_secret=self.s3_access_secret,
+            error_log_path=self.container_s3_log_dir,
+            insecure=self.s3_allow_insecure,
+            verify_external_url=self.s3_verify_external_url,
+        )
 
     def get_nersc_paths(self) -> NERSCPaths:
         """
