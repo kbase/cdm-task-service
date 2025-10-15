@@ -17,6 +17,7 @@ from cdmtaskservice.arg_checkers import (
     require_string as _require_string,
     check_num as _check_num,
 )
+from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice import models
 
 
@@ -128,13 +129,14 @@ class CondorClient:
     The condor client.
     """
 
-    def __init__(
+    def __init__(  # This is getting too long
         self,
         schedd: htcondor2.Schedd,
         initial_dir: Path,
         service_root_url: str,
         executable_url: str,
         code_archive_url: str,
+        s3config: S3Config,
         paths: HTCondorWorkerPaths,
         client_group: str | None = None,
     ):
@@ -150,6 +152,7 @@ class CondorClient:
             Must end in a file name and have no query or fragment.
         code_archive_url - the url for the *.tgz file code archive to transfer to the condor worker
             for each job. Must end in a file name and have no query or fragment.
+        s3Config - the configuration for the S3 instance where files are stored.
         paths - the paths on the HTCondor workers should look for job secrets.
         client_group - the client group to submit jobs to, if any. This is a classad on
             a worker with the name CLIENTGROUP.
@@ -163,6 +166,7 @@ class CondorClient:
         self._exe_name = self._get_name_from_url(self._exe_url)
         self._code_archive_url = _require_string(code_archive_url, "code_archive_url")
         self._code_archive_name = self._get_name_from_url(self._code_archive_url)
+        self._s3config = _not_falsy(s3config, "s3config")
         self._paths = _not_falsy(paths, "paths")
         self._cligrp = client_group
         
@@ -185,9 +189,14 @@ class CondorClient:
             "CODE_ARCHIVE": self._code_archive_name,
             "SERVICE_ROOT_URL": self._service_root_url,
             "TOKEN_PATH": self._paths.token_path,
+            "S3_URL": self._s3config.internal_url,  # could add a toggle to use external if needed
+            "S3_ACCESS_KEY": self._s3config.access_key,
             "S3_SECRET_PATH": self._paths.s3_access_secret_path,
+            "S3_ERROR_LOG_PATH": self._s3config.error_log_path,
             # TODO CONDOR need minio url
         }
+        if self._s3config.insecure:
+            env["S3_INSECURE"] = "TRUE"
         environment = ""
         for key, val in env.items():
             environment += f"{key}={val} "
