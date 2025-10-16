@@ -22,53 +22,6 @@ echo "PATH=$PATH"
 echo "PWD=$PWD"
 
 ###
-# extract secrets into env vars
-###
-
-# Function to trim whitespace
-trim() {
-  echo "$1" | awk '{$1=$1;print}'
-}
-
-# could make the following a function...
-# Check if token file path is set
-if [ -z "$TOKEN_PATH" ]; then
-  echo "Error: TOKEN_PATH is not set." >&2
-  exit 1
-fi
-
-# Check for file existence and read token
-if [ ! -f "$TOKEN_PATH" ]; then
-  echo "Error: Token file '$TOKEN_PATH' does not exist." >&2
-  exit 1
-fi
-
-export TOKEN="$(trim "$(cat "$TOKEN_PATH")")"
-
-if [ -z "$TOKEN" ]; then
-  echo "Error: Token file '$TOKEN_PATH' is empty or only whitespace." >&2
-  exit 1
-fi
-
-# Do the same for the s3 secret
-if [ -z "$S3_SECRET_PATH" ]; then
-  echo "Error: S3_SECRET_PATH is not set." >&2
-  exit 1
-fi
-
-if [ ! -f "$S3_SECRET_PATH" ]; then
-  echo "Error: S3 secret file '$S3_SECRET_PATH' does not exist." >&2
-  exit 1
-fi
-
-export S3_SECRET="$(trim "$(cat "$S3_SECRET_PATH")")"
-
-if [ -z "$S3_SECRET" ]; then
-  echo "Error: S3 secret file '$S3_SECRET_PATH' is empty or only whitespace." >&2
-  exit 1
-fi
-
-###
 # For some reason setting transfer_output_files to the empty string isn't working. We touch
 # an empty file so that job output doesn't get transferred.
 ###

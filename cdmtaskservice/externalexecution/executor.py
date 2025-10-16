@@ -29,7 +29,9 @@ class Executor:
         """ Create the executor from the configuration. """
         self._cfg = cfg
         self._url = self._cfg.cts_url.rstrip("/")
-        self._sess = aiohttp.ClientSession(headers={"Authorization": f"Bearer {cfg.cts_token}"})
+        self._sess = aiohttp.ClientSession(
+            headers={"Authorization": f"Bearer {cfg.get_cts_token()}"}
+        )
         self._logr = logging.getLogger(__name__)
     
     async def __aenter__(self):
@@ -110,7 +112,7 @@ Local relative path: {loc}
         self._s3cli = await S3Client.create(
             self._cfg.s3_url,
             self._cfg.s3_access_key,
-            self._cfg.s3_access_secret,
+            self._cfg.get_s3_access_secret(),
             insecure_ssl=self._cfg.s3_insecure
         )
         # TODO PERFORMACE configure concurrency
