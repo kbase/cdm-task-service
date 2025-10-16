@@ -69,17 +69,20 @@ class JobFlowManager():
                 f"Job flow for cluster {cluster.value} is not registered"
             )
     
-    async def list_available_clusters(self) -> set[sites.Cluster]:
+    async def list_available_clusters(self) -> dict[sites.Cluster, str]:
         """
         List the clusters with available job flows in this manager.
         
-        Returns all available clusters, active or not.
+        Returns a dict of each cluster to either an error message if the cluster is not
+        available or None.
+        
+        Does not take whether the cluster is marked as active or not into consideration.
         """
         results = {}
         async with asyncio.TaskGroup() as tg:
             for cluster, func in self._flows.items():
                 results[cluster] = tg.create_task(func())
-        return {cl for cl, res in results.items() if res.result().jobflow}
+        return {cl: res.result().error for cl, res in results.items()}
 
     @alru_cache(maxsize=10, ttl=10)
     async def list_active_clusters(self) -> set[sites.Cluster]:
@@ -92,9 +95,11 @@ class JobFlowManager():
 
     async def list_usable_clusters(self) -> set[sites.Cluster]:
         """
-        Get a list of all usable sites, meaning they're availble and active.
+        Get a list of all usable sites, meaning they're available and active.
         """
-        return await self.list_active_clusters() & await self.list_available_clusters()
+        avail = await self.list_available_clusters()
+        avail = {cl for cl, err in avail.items() if err is None}
+        return await self.list_active_clusters() & avail
 
     async def set_site_active(self, cluster: sites.Cluster):
         """"

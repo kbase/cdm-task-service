@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 class Executor:
-    """ The executor. """
+    """ The executor. Note that the executor is not concurrency safe. """
     
     def __init__(self, cfg: Config):
         """ Create the executor from the configuration. """

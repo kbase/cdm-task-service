@@ -156,6 +156,9 @@ class Site(sites.ComputeSite):
         description="Whether the compute site has been set to active by a service admin."
     )]
     available: Annotated[bool, Field(description="Whether the compute site is available.")]
+    unavailable_reason: Annotated[str | None, Field(
+        description="The reason the site is unavailable."
+    )] = None
 
 
 class Sites(BaseModel):
@@ -175,11 +178,12 @@ async def get_sites(r: Request) -> Sites:
     jfm = app_state.get_app_state(r).jobflow_manager
     active = await jfm.list_active_clusters()
     avail = await jfm.list_available_clusters()
-    for cl, site in sites.CLUSTER_TO_SITE.items():
+    for cl, err in avail.items():
         ret.append(Site(
             active=cl in active,
-            available=cl in avail,
-            **site.model_dump()
+            available=not err,
+            unavailable_reason=err,
+            **sites.CLUSTER_TO_SITE[cl].model_dump()
         ))
     return Sites(sites=ret)
 
