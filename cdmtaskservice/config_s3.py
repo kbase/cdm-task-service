@@ -3,7 +3,6 @@ A configuration class for the service for S3 information, including clients.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
 
 from cdmtaskservice.s3.client import S3Client
 
@@ -36,11 +35,10 @@ class S3Config(BaseModel):
     
     verify_external_url: bool = True
     """ Whether to verify connectivity to the external S3 url at service startup. """
-    
 
     # Internal singletons
-    _s3_client: Optional[S3Client] = None
-    _s3_external_client: Optional[S3Client] = None
+    _s3_client: S3Client | None = None
+    _s3_external_client: S3Client | None = None
 
     async def initialize_clients(self):
         """
