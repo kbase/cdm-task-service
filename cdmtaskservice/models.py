@@ -25,6 +25,7 @@ from cdmtaskservice.arg_checkers import (
 from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathSyntaxError
 from cdmtaskservice import sites
+from cdmtaskservice.timestamp import utcdatetime
 
 
 # TODO TEST
@@ -1017,6 +1018,18 @@ class AdminJobDetails(Job):
             + "admins, potentially including more details."
     )] = None
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
+
+
+class ContainerUpdate(BaseModel):
+    
+    new_state: Annotated[JobState, Field(
+        examples=[JobState.JOB_SUBMITTED.value],
+        description="The new state for the container / subjob."
+    )]
+    time: Annotated[datetime.datetime, Field(
+        examples=[utcdatetime()],
+        description="The time the state transition occurred."
+    )]
 
 
 class ReferenceDataState(str, Enum):
