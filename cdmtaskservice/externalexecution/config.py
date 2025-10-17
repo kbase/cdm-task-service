@@ -89,6 +89,13 @@ class Config(BaseSettings):
             "Whether to skip checking the SSL certificate for the S3 instance, "
             + "leaving the service open to MITM attacks.",
     )] = False
+    job_update_timeout_sec: Annotated[int, Field(
+        validation_alias="JOB_UPDATE_TIMEOUT_SEC",
+        examples=[3600],
+        description="The timeout, in seconds, for when a job should stop trying to update "
+            + "job state in the CTS and fail..",
+        ge=60,
+    )]
     
     @model_validator(mode='after')
     def check_field_groups(self):
@@ -114,6 +121,7 @@ class Config(BaseSettings):
         "s3_access_secret_path",
         "s3_error_log_path",
         "s3_insecure",
+        "job_update_timeout_sec",
     }
     
     def safe_dump(self) -> dict[str, Any]:
