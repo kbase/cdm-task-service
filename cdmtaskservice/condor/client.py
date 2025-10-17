@@ -5,18 +5,14 @@ Task Service.
 
 import asyncio
 from classad2 import ClassAd, ExprTree
-from dataclasses import dataclass
 import htcondor2
 from pathlib import Path
 import posixpath
 from typing import Any
 from yarl import URL
 
-from cdmtaskservice.arg_checkers import (
-    not_falsy as _not_falsy,
-    require_string as _require_string,
-    check_num as _check_num,
-)
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, check_num as _check_num
+from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice import models
 
@@ -106,69 +102,28 @@ STATIC_SUB = {
 }
 
 
-@dataclass(frozen=True)
-class HTCondorWorkerPaths:
-    """ Paths where external executors should look up secrets. """
-    
-    # TODO CODE check args aren't None / whitespace only. Not a lib class so YAGNI for now
-    
-    token_path: str
-    """
-    The path on the condor worker containing a KBase token for use when
-    contacting the service.
-    """
-
-    s3_access_secret_path: str
-    """
-    The path on the condor worker containing the s3 access secret for the S3 instance.
-    """
-
-
 class CondorClient:
     """
     The condor client.
     """
 
-    def __init__(  # This is getting too long
-        self,
-        schedd: htcondor2.Schedd,
-        initial_dir: Path,
-        service_root_url: str,
-        executable_url: str,
-        code_archive_url: str,
-        s3config: S3Config,
-        paths: HTCondorWorkerPaths,
-        client_group: str | None = None,
-    ):
+    def __init__(self, schedd: htcondor2.Schedd, config: CondorClientConfig, s3config: S3Config):
         """
         Create the client.
         
         schedd: An htcondor Schedd instance, configured to submit jobs to the cluster.
-        initial_dir - where the job logs should be stored on the condor scheduler host.
-            The path must exist there and locally.
-        service_root_url - the URL of the service root, used by the remote job to get and update
-            job state.
-        executable_url - the url for the executable to run in the condor worker for each job.
-            Must end in a file name and have no query or fragment.
-        code_archive_url - the url for the *.tgz file code archive to transfer to the condor worker
-            for each job. Must end in a file name and have no query or fragment.
+        config - the configuration for the client.
         s3Config - the configuration for the S3 instance where files are stored.
-        paths - the paths on the HTCondor workers should look for job secrets.
-        client_group - the client group to submit jobs to, if any. This is a classad on
-            a worker with the name CLIENTGROUP.
         """
         self._schedd = _not_falsy(schedd, "schedd")
-        self._initial_dir = _not_falsy(initial_dir, "initial_dir")
+        self._config = _not_falsy(config, "config")
         # Why this has to exist locally is beyond me
-        self._initial_dir.mkdir(parents=True, exist_ok=True)
-        self._service_root_url = _require_string(service_root_url, "service_root_url")
-        self._exe_url = _require_string(executable_url, "executable_url")
+        Path(self._config.initial_dir).mkdir(parents=True, exist_ok=True)
+        self._exe_url = config.get_executable_url()
         self._exe_name = self._get_name_from_url(self._exe_url)
-        self._code_archive_url = _require_string(code_archive_url, "code_archive_url")
+        self._code_archive_url = config.get_code_archive_url()
         self._code_archive_name = self._get_name_from_url(self._code_archive_url)
         self._s3config = _not_falsy(s3config, "s3config")
-        self._paths = _not_falsy(paths, "paths")
-        self._cligrp = client_group
         
     def _get_name_from_url(self, url: str) -> str:
         parsed = URL(url)
@@ -187,13 +142,12 @@ class CondorClient:
             "JOB_ID": job.id,
             "CONTAINER_NUMBER": "$(container_number)",
             "CODE_ARCHIVE": self._code_archive_name,
-            "SERVICE_ROOT_URL": self._service_root_url,
-            "TOKEN_PATH": self._paths.token_path,
+            "SERVICE_ROOT_URL": self._config.service_root_url,
+            "TOKEN_PATH": self._config.token_path,
             "S3_URL": self._s3config.internal_url,  # could add a toggle to use external if needed
             "S3_ACCESS_KEY": self._s3config.access_key,
-            "S3_SECRET_PATH": self._paths.s3_access_secret_path,
+            "S3_SECRET_PATH": self._config.s3_access_secret_path,
             "S3_ERROR_LOG_PATH": self._s3config.error_log_path,
-            # TODO CONDOR need minio url
         }
         if self._s3config.insecure:
             env["S3_INSECURE"] = "TRUE"
@@ -211,7 +165,7 @@ class CondorClient:
             "shell": f"bash {self._exe_name}",
             # Has to exist locally and on the condor Schedd host
             # Which doesn't make any sense
-            "initialdir": str(self._initial_dir),
+            "initialdir": self._config.initial_dir,
             "transfer_input_files": f"{self._exe_url}, {self._code_archive_url}",
             "environment": self._get_environment(job),
             "output":  f"cts/{job.id}/cts-{job.id}-$(container_number).out",
@@ -232,9 +186,9 @@ class CondorClient:
             f"+{_AD_JOB_ID}": f'"{job.id}"',  # must be quoted
             f"+{_AD_CONTAINER_NUMBER}": "$(container_number)",
         }
-        if self._cligrp:
+        if self._config.client_group:
             # HTCondor will && this with its own requirements
-            subdict["requirements"] =  f'(CLIENTGROUP == "{self._cligrp}")'
+            subdict["requirements"] =  f'(CLIENTGROUP == "{self._config.client_group}")'
         sub = htcondor2.Submit(subdict | STATIC_SUB)
         itemdata = [
             {"container_number": str(i)}

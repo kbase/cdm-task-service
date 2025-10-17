@@ -6,7 +6,7 @@ A configuration parser for the CDM task service. The configuration is expected t
 import tomllib
 from typing import BinaryIO, TextIO
 
-from cdmtaskservice.condor.client import HTCondorWorkerPaths
+from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.jaws.config import JAWSConfig
 from cdmtaskservice.nersc.paths import NERSCPaths
@@ -249,11 +249,16 @@ class CDMTaskServiceConfig:
             url=self.jaws_url,
         )
         
-    def get_condor_paths(self) -> HTCondorWorkerPaths:
+    def get_condor_client_config(self) -> CondorClientConfig:
         """
-        Get information about environment variables on HTcondor workers for external executors.
+        Get the configuration items for the condor client.
         """
-        return HTCondorWorkerPaths(
+        return CondorClientConfig(
+            initial_dir=self.condor_initialdir,
+            service_root_url=self.service_root_url,
+            executable_url_override=self.condor_exe_url_override,
+            code_archive_url_override=self.code_archive_url_override,
+            client_group=self.condor_clientgroup,
             token_path=self.condor_token_path,
             s3_access_secret_path=self.condor_s3_access_secret_path,
         )
