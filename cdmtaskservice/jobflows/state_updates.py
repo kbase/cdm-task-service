@@ -2,6 +2,7 @@
 Helper class for performing job and refdata state updates for job flows.
 """
 
+import datetime
 import logging
 import traceback
 import uuid
@@ -96,19 +97,22 @@ class JobFlowStateUpdates:
                 user_err, admin_err, traceback=traceback, log_files_path=logpath
             ))
 
-    async def update_job_state(self, job_id: str, update: JobUpdate):
+    async def update_job_state(
+        self, job_id: str, update: JobUpdate, update_time: datetime.datetime = None
+    ):
         """
         Update the state of a job.
         
         job_id - the job to update.
         update - the update to apply.
+        update_time - the timestamp for the update
         """
         _require_string(job_id, "job_id")
         _not_falsy(update, "update")
         # TODO TEST will need to mock out uuid
         trans_id = str(uuid.uuid4())
         # TODO TEST will need a way to mock out timestamps
-        update_time = timestamp.utcdatetime()
+        update_time = update_time if update_time else timestamp.utcdatetime()
         async def cb():
             await self._mongo.job_update_sent(job_id, trans_id)
         await self._mongo.update_job_state(job_id, update, update_time, trans_id)

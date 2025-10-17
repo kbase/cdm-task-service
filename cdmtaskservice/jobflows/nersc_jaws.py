@@ -21,6 +21,7 @@ from cdmtaskservice.exceptions import (
     InvalidReferenceDataStateError,
     IllegalParameterError,
     UnauthorizedError,
+    UnsupportedOperationError,
 )
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
@@ -392,6 +393,14 @@ class NERSCJAWSRunner(JobFlow):
             err,
             f"Example container error: {data[0][1]}",
             logpath=os.path.join(self._s3logdir, job.id),
+        )
+
+    async def update_container_state(
+        self, job: models.AdminJobDetails, container_num: int, update: models.ContainerUpdate
+    ):
+        """ Thows an error as this method is unsupported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
     async def clean_job(self, job: models.AdminJobDetails, force: bool = False):

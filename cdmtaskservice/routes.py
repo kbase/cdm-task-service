@@ -59,6 +59,11 @@ def _ensure_admin(user: CTSUser, err_msg: str):
         raise UnauthorizedError(err_msg)
 
 
+def _ensure_executor(user: CTSUser, err_msg: str):
+    if not user.is_external_executor():
+        raise UnauthorizedError(err_msg)
+
+
 def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
     if not user.is_full_admin() and not user.is_external_executor():
         raise UnauthorizedError(err_msg)
@@ -954,6 +959,31 @@ async def _callback_handling(
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, SERVICE_USER, as_admin=True)
     return await appstate.jobflow_manager.get_flow(job.job_input.cluster), job
+
+
+@ROUTER_EXTERNAL_EXEC.put(
+    "/external_exec/{job_id}/container/{container_num}/update",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Update a container's state.",
+    description="Not for general use.\n\nUpdate a container / subjob's state.",
+)
+async def update_container(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    container_num: Annotated[int, FastPath(
+        openapi_examples={"container_num": {"value": 2}},
+        description="The container / subjob number.",
+        ge=1,
+    )],
+    update: models.ContainerUpdate,
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_executor(user, "Only external job executors can update container state.")
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
+    flow =  await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    await flow.update_container_state(job, container_num, update)
 
 
 @ROUTER_EXTERNAL_EXEC.get(
