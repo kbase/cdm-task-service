@@ -4,7 +4,6 @@ The KBase job flow implementation and provider. Runs jobs on the HTCondor system
 
 import htcondor2
 import logging
-from pathlib import Path
 import time
 from typing import Any
 
@@ -13,7 +12,8 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     require_string as _require_string,
 )
-from cdmtaskservice.condor.client import CondorClient, HTCondorWorkerPaths
+from cdmtaskservice.condor.client import CondorClient
+from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
@@ -220,7 +220,6 @@ class KBaseRunner(JobFlow):
                 f"Cannot update a container to state {update.new_state.value}"
         )
         update_func = self._SUBJOB_STATE_TO_UPDATE_FUNC[update.new_state]
-        # TODO TEST will need a way to mock out timestamps
         # Just throw the error, don't error out the job. If the caller thinks this is an error
         # they can try and set the error state.
         await self._mongo.update_subjob_state(job.id, container_num, update_func(), update.time)
@@ -279,51 +278,30 @@ class KBaseFlowProvider:
     @classmethod
     def create(
         cls,
-        condor_initial_dir: Path,
-        condor_executable_url: str,
-        condor_code_archive_url: str,
+        condor_config: CondorClientConfig,
         mongodao: MongoDAO,
         s3config: S3Config,
         kafka_notifier: KafkaNotifier,
         coman: CoroutineWrangler,
-        service_root_url: str,
-        paths: HTCondorWorkerPaths,
-        condor_client_group: str | None = None,
     ):
         """
         WARNING: this class is not thread safe.
         
         Create the flow provider.
-        
-        condor_initial_dir - where the job logs should be stored on the condor scheduler host.
-            The path must exist there and locally.
-        condor_executable_url - the url for the executable to run in the condor worker for
-            each job. Must end in a file name and have no query or fragment.
-        condor_code_archive_url - the url for the *.tgz file code archive to transfer to
-            the condor worker for each job. Must end in a file name and have no query or fragment.
+
+        condor_config - the configuration for the condor client.
         mongodao - the Mongo DAO.
         s3config - the S3 configuration.
         kafka_notifier - a kafka notifier.
         coman - a coroutine manager.
-        service_root_url - the URL of the service root, used by the remote job to get and update
-            job state.
-        paths - paths where external executors should look up job information
-            on the HTcondor workers.
-        condor_client_group - the client group to submit jobs to, if any. This is a classad on
-            a worker with the name CLIENTGROUP.
         """
     
         kb = cls()
-        kb._initial_dir = _not_falsy(condor_initial_dir, "condor_initial_dir")
-        kb._exe_url = _require_string(condor_executable_url, "condor_executable_url")
-        kb._code_archive_url = _require_string(condor_code_archive_url, "condor_code_archive_url")
+        kb._condor_config = _not_falsy(condor_config, "condor_config")
         kb._mongodao = _not_falsy(mongodao, "mongodao")
         kb._s3config = _not_falsy(s3config, "s3config")
         kb._kafka = _not_falsy(kafka_notifier, "kafka_notifier")
         kb._coman = _not_falsy(coman, "coman")
-        kb._service_root_url = _require_string(service_root_url, "service_root_url")
-        kb._paths = _not_falsy(paths, "paths")
-        kb._cligrp = condor_client_group
         
         kb._logr = logging.getLogger(__name__)
         
@@ -392,23 +370,13 @@ class KBaseFlowProvider:
             schedd_ad = collector.locate(htcondor2.DaemonTypes.Schedd)
             schedd = htcondor2.Schedd(schedd_ad)
             self._logr.info("Done")
-            condor = CondorClient(
-                schedd,
-                self._initial_dir,
-                self._service_root_url,
-                self._exe_url,
-                self._code_archive_url,
-                self._s3config,
-                self._paths,
-                client_group=self._cligrp,
-                # TODO CONDOR add s3 host / insecure/ log path
-            )
+            condor = CondorClient(schedd, self._condor_config, self._s3config)
             kbase = KBaseRunner(
                 condor,
                 self._mongodao,
                 self._s3config.get_internal_client(),
                 self._kafka,
-                self._coman
+                self._coman,
             )
             self._kbase = kbase
             self._last_fail_time = None

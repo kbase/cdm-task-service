@@ -141,7 +141,7 @@ class JAWSFlowProvider:
         self._closed = True
         await self._nersc_status_cli.close()
         if self._sfapi_client:
-            await self._flow_builds.sfapi_client.destroy()
+            await self._sfapi_client.destroy()
         if isinstance(self._build_state, _Dependencies):
             await self._build_state.jaws_client.close()
 
