@@ -3,9 +3,11 @@ The main CTS external executor class.
 """
 
 import aiohttp
+import asyncio
 import json
 import logging
 from pathlib import Path
+import time
 from typing import TextIO, Any
 
 from cdmtaskservice.exceptions import ChecksumMismatchError
@@ -17,6 +19,10 @@ from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.s3.remote import crc64nvme_b64
 from cdmtaskservice.version import VERSION
+from cdmtaskservice.timestamp import utcdatetime
+
+
+_EXP_BACKOFF_SEC = [5, 10, 30, 60, 120, 300, 600]
 
 
 logging.basicConfig(level=logging.INFO)
@@ -53,13 +59,17 @@ class Executor:
         # we assume here that the service has already error checked the job input
         try:
             await self._download_files(job)
+            await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
         except Exception as e:
             self._logr.exception(f"Job failed: {e}")
             # TODO EXECUTOR try to drain job state queue and update job state to error
             return False
         return True
     
-    async def _check_resp(self, resp: aiohttp.ClientResponse, action: str) -> dict[str, Any]:
+    async def _check_resp(self, resp: aiohttp.ClientResponse, action: str
+    ) -> dict[str, Any] | None:
+        if resp.status == 204:  # no content
+            return None
         try:
             resjson = await resp.json()
         except Exception:
@@ -90,6 +100,48 @@ class Executor:
         async with self._sess.get(url) as resp:
             jobjson = await self._check_resp(resp, "Failed to get job from the CDM Task Service")
         return models.AdminJobDetails.model_validate(jobjson)
+
+    async def _update_job_state_loop(self, job: models.AdminJobDetails, state: models.JobState):
+        # Considered making a queue so the job could continue while attempting to update
+        # but that seems like too much complexity for something that doesn't happen very often
+        # and may mean that S3 is down as well
+        start = time.monotonic()
+        backoff_counter = 0
+        while time.monotonic() - start < self._cfg.job_update_timeout_sec:
+            try:
+                await self._update_job_state(job, state)
+                return
+            except FatalExecutorError:
+                raise
+            except Exception as e:
+                err = e
+                backoff = self._get_backoff(backoff_counter)
+                # Will need to figure out what kinds of errors we get here  and add to immediate
+                # fail block
+                self._logr.exception(
+                    f"Failed updating job state to {state.value} at {utcdatetime().isoformat()}, "
+                    + f"trying again in {backoff} seconds: {e}"
+                )
+                backoff_counter += 1
+                await asyncio.sleep(backoff)
+        raise FatalExecutorError(
+            f"Timed out trying to update job state to {state.value} "
+            + f"after {time.monotonic() - start} seconds: {err}"
+        ) from err
+
+    def _get_backoff(self, counter):
+        if counter >= len(_EXP_BACKOFF_SEC):
+            return _EXP_BACKOFF_SEC[-1]
+        return _EXP_BACKOFF_SEC[counter]
+
+    async def _update_job_state(self, job: models.AdminJobDetails, state: models.JobState):
+        url = (
+            f"{self._url}/external_exec/{job.id}/container/{self._cfg.container_number}/update"
+        )
+        # TODO TEST need to mockout utcdatetime
+        data = {"new_state": state.value, "time": utcdatetime().isoformat()}
+        async with self._sess.put(url, json=data) as resp:
+            await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 
     async def _download_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
         s3objs = set(job.job_input.get_files_per_container()[self._cfg.container_number - 1])
