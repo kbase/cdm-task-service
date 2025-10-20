@@ -3,6 +3,7 @@ Configuration for the CTS HTCondor client.
 """
 
 from pydantic import BaseModel, Field
+from typing import Annotated
 from yarl import URL
 
 from cdmtaskservice.localfiles import get_condor_exe_url, get_code_archive_url
@@ -52,6 +53,12 @@ class CondorClientConfig(BaseModel):
     s3_access_secret_path: str
     """
     The path on the condor worker containing the s3 access secret for the S3 instance.
+    """
+    
+    job_update_timeout_sec: Annotated[int, Field(ge=60)]
+    """
+    The number of seconds to wait when trying to update the job state in the service before
+    failing.
     """
 
     def get_executable_url(self) -> str:

@@ -148,6 +148,7 @@ class CondorClient:
             "S3_ACCESS_KEY": self._s3config.access_key,
             "S3_SECRET_PATH": self._config.s3_access_secret_path,
             "S3_ERROR_LOG_PATH": self._s3config.error_log_path,
+            "JOB_UPDATE_TIMEOUT_SEC": self._config.job_update_timeout_sec
         }
         if self._s3config.insecure:
             env["S3_INSECURE"] = "TRUE"

@@ -65,6 +65,8 @@ class CDMTaskServiceConfig:
         KBase token for use when contacting the service.
     condor_s3_access_secret_path: str - the path on the condor worker containing
         the s3 access secret for the S3 instance.
+    external_executor_job_update_timeout_sec: int - the number of seconds to wait when trying
+        to update the job state in the service before failing.
     code_archive_path: str - the local path to the tgz code archive.
     code_archive_url_override: str | None - a url, if any, to use for downloading the 
         tgz code archive rather than the default location.
@@ -155,6 +157,9 @@ class CDMTaskServiceConfig:
         self.condor_token_path = _get_string_required(config, _SEC_HTCONDOR, "token_path")
         self.condor_s3_access_secret_path = _get_string_required(
             config, _SEC_HTCONDOR, "s3_access_secret_path"
+        )
+        self.external_executor_job_update_timeout_sec = _get_int_required(
+            config, _SEC_EXTERNAL_EXEC, "job_update_timeout_sec", minimum=60
         )
         self.code_archive_path = _get_string_required(config, _SEC_EXTERNAL_EXEC, "archive_path")
         self.code_archive_url_override = _get_string_optional(
@@ -261,6 +266,7 @@ class CDMTaskServiceConfig:
             client_group=self.condor_clientgroup,
             token_path=self.condor_token_path,
             s3_access_secret_path=self.condor_s3_access_secret_path,
+            job_update_timeout_sec=self.external_executor_job_update_timeout_sec,
         )
 
     def print_config(self, output: TextIO):
@@ -290,6 +296,8 @@ class CDMTaskServiceConfig:
             f"HTCondor client group: {self.condor_clientgroup}",
             f"HTCondor token path: {self.condor_token_path}",
             f"HTCondor S3 access secret path: {self.condor_s3_access_secret_path}",
+            "External executor job update timeout (sec): "
+                + str(self.external_executor_job_update_timeout_sec),
             f"Code archive path: {self.code_archive_path}",
             f"Code archive url override: {self.code_archive_url_override}",
             f"S3 URL: {self.s3_url}",
@@ -328,6 +336,16 @@ def _get_int_optional(config, section, key) -> int | None:
     if type(putative) != int:
         raise ValueError(
             f"Expected integer value for key {key} in section {section}, got {putative}")
+    return putative
+
+
+def _get_int_required(config, section, key, minimum: int = None) -> int:
+    putative = _get_int_optional(config, section, key)
+    if putative is None:
+        raise ValueError(f"Missing value for key {key} in section {section}")
+    if minimum is not None and putative < minimum:
+        raise ValueError(
+            f"Expected value >= {minimum} for key {key} in section {section}, got {putative}")
     return putative
 
 

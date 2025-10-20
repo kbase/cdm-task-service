@@ -114,6 +114,11 @@ s3_access_secret_path = "{{ KBCTS_HTC_S3_ACCESS_SECRET_PATH or "/cts/s3_secret" 
 
 [ExternalExecution]
 
+# The time in seconds after which an external executor should give up and fail rather than
+# continue to try and update a job's state in the service if the service can't be contacted.
+# The default is 6 hours and minimum 1 minute.
+job_update_timeout_sec = {{ KBCTS_EXTERNAL_JOB_UPDATE_TIMEOUT_SEC or 21600 }}
+
 # The local path, accessible to the server, to the external execution code tgz archive file.
 # If using the provided Dockerfile, this value is set there.
 archive_path = "{{ KBCTS_CODE_ARCHIVE_PATH }}"
