@@ -8,6 +8,7 @@ calling the build_app() method
 import asyncio
 import datetime
 from fastapi import FastAPI, Request
+from kbase.auth import AsyncKBaseAuthClient
 import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
@@ -20,7 +21,6 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import UnavailableResourceError
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
-from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.jaws_flows_provider import JAWSFlowProvider
 from cdmtaskservice.jobflows.kbase import KBaseFlowProvider, KBaseRunner
@@ -119,8 +119,9 @@ async def build_app(
     # check that the path is a valid path
     coman = CoroutineWrangler()
     logr.info("Connecting to KBase auth service... ")
+    kbauth = await AsyncKBaseAuthClient.create(cfg.auth_url)
     auth = CTSAuth(
-        await KBaseAuth.create(cfg.auth_url),
+        kbauth,
         set(cfg.auth_full_admin_roles),
         cfg.kbase_staff_role,
         cfg.has_nersc_account_role,
@@ -172,6 +173,7 @@ async def build_app(
         app.state._coroman = coman
         app.state._jaws_provider = jaws_job_flows
         app.state._kafka = kafka_notifier
+        app.state._kbauth = kbauth
         kc = KafkaChecker(mongodao, kafka_notifier)
         sfcliprov = _get_sfapi_client_provider(jaws_job_flows)
         app.state._cdmstate = AppState(
@@ -188,6 +190,7 @@ async def build_app(
         )
         await _check_unsent_kafka_messages(logr, cfg, kc)
     except:
+        await kbauth.close()
         if mongocli:
             mongocli.close()
         if jaws_job_flows:
@@ -284,6 +287,7 @@ async def destroy_app_state(app: FastAPI):
     """
     Destroy the application state, shutting down services and releasing resources.
     """
+    await app.state._kbauth.close()
     app.state._mongo.close()
     app.state._coroman.destroy()
     if app.state._jaws_provider:

@@ -300,6 +300,7 @@ dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "htcondor" },
     { name = "jinja-cli" },
+    { name = "kbase-auth-client" },
     { name = "marisa-trie" },
     { name = "motor" },
     { name = "python-json-logger" },
@@ -334,6 +335,7 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.12" },
     { name = "htcondor", specifier = "==24.11.2" },
     { name = "jinja-cli", specifier = ">=1.2.2" },
+    { name = "kbase-auth-client", specifier = "==0.1.1" },
     { name = "marisa-trie", specifier = ">=1.2.1" },
     { name = "motor", specifier = ">=3.7.1" },
     { name = "python-json-logger", specifier = ">=3.3.0" },
@@ -860,6 +862,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fd/ac/c62cbbe6cb1c20eda5e4ab3fea4ab44ac0e8faa48e4c9e58032c3605fb22/kafka_python-2.2.10.tar.gz", hash = "sha256:0411d2631719dae53a81716c8be8af13e47470123ba49914d7faba317379e85b", size = 347079, upload-time = "2025-05-22T21:24:11.14Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/1a/8422696068fc1d2172e9c48c57533b788aed5039daed68e63390ee2064ba/kafka_python-2.2.10-py2.py3-none-any.whl", hash = "sha256:cfca1af8d6277f31d135496587c64f1de0b4021cada8d6376589e8572484068c", size = 309345, upload-time = "2025-05-22T21:24:08.664Z" },
+]
+
+[[package]]
+name = "kbase-auth-client"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cacheout" },
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4b/85/f69c3ec300c249dca82953e6a13a379e715e3d1f6c99e275eecb8ea3902a/kbase_auth_client-0.1.1.tar.gz", hash = "sha256:f1b4a23455e7cf0df1db600654488066363dda481b7b4b874cc378e2e01acfa8", size = 37180, upload-time = "2025-10-21T16:14:09.841Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/db/bd8bb80e01563016e127daba5b2b7a61b94890c69cbdbbae2ee96455f2a6/kbase_auth_client-0.1.1-py3-none-any.whl", hash = "sha256:62567956313ae9dca14f036e99cc6a4ae5adc65f5cda1d67a562d502a713a463", size = 10560, upload-time = "2025-10-21T16:14:08.527Z" },
 ]
 
 [[package]]

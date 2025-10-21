@@ -3,6 +3,7 @@ Map errors from exception type to custom error type and HTTP status.
 """
 
 from fastapi import status
+from kbase.auth import InvalidTokenError, InvalidUserError
 from typing import NamedTuple
 
 from cdmtaskservice.errors import ErrorType
@@ -21,7 +22,6 @@ from cdmtaskservice.http_bearer import MissingTokenError
 from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
 from cdmtaskservice.jobflows.flowmanager import InactiveJobFlowError, UnavailableJobFlowError
-from cdmtaskservice import kb_auth
 from cdmtaskservice.mongo import (
     ImageTagExistsError,
     ImageDigestExistsError,
@@ -57,8 +57,8 @@ class ErrorMapping(NamedTuple):
 _ERR_MAP = {
     MissingTokenError: ErrorMapping(ErrorType.NO_TOKEN, _H401),
     InvalidAuthHeaderError: ErrorMapping(ErrorType.INVALID_AUTH_HEADER, _H401),
-    kb_auth.InvalidTokenError: ErrorMapping(ErrorType.INVALID_TOKEN, _H401),
-    kb_auth.InvalidUserError: ErrorMapping(ErrorType.INVALID_USERNAME, _H400),
+    InvalidTokenError: ErrorMapping(ErrorType.INVALID_TOKEN, _H401),
+    InvalidUserError: ErrorMapping(ErrorType.INVALID_USERNAME, _H400),
     InvalidUserError: ErrorMapping(ErrorType.INVALID_USERNAME, _H400),
     UnauthorizedError: ErrorMapping(ErrorType.UNAUTHORIZED, _H403),
     ClientLifeTimeError: ErrorMapping(ErrorType.CLIENT_LIFETIME, _H400),
