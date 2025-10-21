@@ -89,12 +89,12 @@ class Config(BaseSettings):
             "Whether to skip checking the SSL certificate for the S3 instance, "
             + "leaving the service open to MITM attacks.",
     )] = False
-    job_update_timeout_sec: Annotated[int, Field(
-        validation_alias="JOB_UPDATE_TIMEOUT_SEC",
-        examples=[3600],
-        description="The timeout, in seconds, for when a job should stop trying to update "
-            + "job state in the CTS and fail..",
-        ge=60,
+    job_update_timeout_min: Annotated[int, Field(
+        validation_alias="JOB_UPDATE_TIMEOUT_MIN",
+        examples=[360],
+        description="The timeout, in minutes, for when a job should stop trying to update "
+            + "job state in the CTS and fail.",
+        ge=1,
     )]
     
     @model_validator(mode='after')
