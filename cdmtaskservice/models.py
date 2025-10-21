@@ -841,11 +841,6 @@ class SubJob(_JobBase):
     sub_id: Annotated[int, Field(
         description="The ID of the subjob, identical to the container number."
     )]
-    # could make error and admin error classes, seems like overkill
-    error: Annotated[str | None, Field(
-        examples=["The front fell off"],
-        description="A description of the error that occurred."
-    )] = None
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
@@ -1030,6 +1025,15 @@ class ContainerUpdate(BaseModel):
         examples=[utcdatetime()],
         description="The time the state transition occurred."
     )]
+    admin_error: Annotated[str | None, Field(
+        examples=["The top fell off"],
+        description="The error that occurred for the container, suitable for displaying to a "
+            + "service admin.\n"
+            + "Ignored if the new state isn't the error state."
+    )] = None
+    traceback: Annotated[str | None, Field(
+        description="The error's traceback.Ignored if the new state isn't the error state."
+    )] = None
 
 
 class ReferenceDataState(str, Enum):

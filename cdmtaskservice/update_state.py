@@ -236,8 +236,8 @@ def submitted_nersc_error_processing(task_id: str) -> JobUpdate:
 
 
 def error(
-    user_error: str,
     admin_error: str,
+    user_error: str = None,
     traceback: str = None,
     log_files_path: str = None,
     cpu_hours: float = None,
@@ -245,18 +245,20 @@ def error(
     """
     Update a job's state to error.
     
-    user_error - an error message targeted towards a service user.
     admin_error - an error message targeted towards a service admin.
+    user_error - an error message targeted towards a service user. Leave as null to indicate there
+        is no error message available appropriate for a user.
     traceback - the error traceback.
     log_files_path - the path to any logs for the job.
     cpu_hours - the job cpu hours, if available.
     """ 
     flds = {
-        UpdateField.USER_ERROR: _require_string(user_error, "user_error"),
         UpdateField.ADMIN_ERROR: _require_string(admin_error, "admin_error"),
         UpdateField.TRACEBACK: traceback,
         UpdateField.LOG_PATH: log_files_path,
     }
+    if user_error is not None:
+        flds[UpdateField.USER_ERROR] = user_error
     if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
         flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
     return JobUpdate()._set_new_state(models.JobState.ERROR)._set_fields(flds)
