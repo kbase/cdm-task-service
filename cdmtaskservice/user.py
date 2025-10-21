@@ -4,9 +4,9 @@ Classes for dealing with CTS users.
 
 from dataclasses import dataclass, field
 from enum import Enum
+from kbase.auth import AsyncKBaseAuthClient
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string
-from cdmtaskservice.kb_auth import KBaseAuth
 from cdmtaskservice.exceptions import UnauthorizedError
 
 
@@ -59,7 +59,7 @@ class CTSAuth:
     
     def __init__(
             self,
-            kbaseauth: KBaseAuth,
+            kbaseauth: AsyncKBaseAuthClient,
             service_admin_roles: set[str],
             is_kbase_staff_role: str,
             has_nersc_account_role: str,
@@ -99,24 +99,28 @@ class CTSAuth:
         Throws an exception if the user name is illegally formatted.
         """
         # passthrough method
-        return await self._kbauth.is_valid_user(user, token)
+        return (await self._kbauth.validate_usernames(token, user))[user]
 
     async def get_kbase_user(self, token: str) -> CTSUser:
         """ Get a CTS user given a KBase token. """
         # this will def need rethinking if we ever support more auth sources
         user = await self._kbauth.get_user(token)
         roles = set()
-        if user.roles & self._admin_roles:
+        has_roles = set(user.customroles)
+        if has_roles & self._admin_roles:
             roles.add(CTSRole.FULL_ADMIN)
-        if self._external_executor_role in user.roles:
+        if self._external_executor_role in has_roles:
             roles.add(CTSRole.EXTERNAL_EXECUTOR)
-        user = CTSUser(
+        ctsuser = CTSUser(
             user=user.user,
             roles=roles,
-            is_kbase_staff=self._kbstaff_role in user.roles,
-            has_nersc_account=self._nersc_role in user.roles,
+            is_kbase_staff=self._kbstaff_role in has_roles,
+            has_nersc_account=self._nersc_role in has_roles,
         )
         # ensure admins have all roles necessary to use any part of the system
-        if user.is_full_admin() and (not user.is_kbase_staff or not user.has_nersc_account):
+        if (
+            ctsuser.is_full_admin()
+            and (not ctsuser.is_kbase_staff or not ctsuser.has_nersc_account)
+        ):
             raise UnauthorizedError("Service admins must be KBase staff and have NERSC accounts")
-        return user
+        return ctsuser
