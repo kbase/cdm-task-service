@@ -593,7 +593,6 @@ class MongoDAO:
         """
         Get a subjob given the job ID and the subjob ID.
         """
-        # May want a bulk method at some point that takes a range of IDs or returns all
         doc = await self._col_subjobs.find_one({
             models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
             models.FLD_SUBJOB_ID: _check_num(subjob_id, "subjob_id")
@@ -605,6 +604,19 @@ class MongoDAO:
             )
         doc = self._clean_doc(doc)
         return models.SubJob(**doc)
+
+    async def get_subjobs(self, job_id: str) -> list[models.SubJob]:
+        """
+        Get all subjobs for a job given the job ID.
+        """
+        docs = await self._col_subjobs.find(
+            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
+        ).sort(models.FLD_SUBJOB_ID, 1
+        ).to_list(length=None)  # Currently the API enforces a limit of 1000
+        sjs = [models.SubJob(**self._clean_doc(d)) for d in docs]
+        if not sjs:
+            raise NoSuchSubJobError(f"No sub jobs found for job ID '{job_id}'")
+        return sjs
 
     async def update_subjob_state(
         self,

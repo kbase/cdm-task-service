@@ -122,6 +122,21 @@ class KBaseRunner(JobFlow):
             ) for i in range(1, job_input.num_containers + 1)
         ])
 
+    async def get_subjobs(self, job_id: str, container_num: int = None
+    ) -> models.SubJob | list[models.SubJob]:
+        """
+        Get the subjobs for a job.
+        
+        job_id - the job's ID.
+        container_num - if provided, only return the single container / subjob.
+            Otherwise return a list of all containers.
+        """
+        _require_string(job_id, "job_id")
+        if container_num:
+            _check_num(container_num, "container_num")
+            return await self._mongo.get_subjob(job_id, container_num)
+        return await self._mongo.get_subjobs(job_id)
+
     async def get_job_external_runner_status(
         self,
         job: models.AdminJobDetails,
@@ -252,7 +267,6 @@ class KBaseRunner(JobFlow):
     ):
         # TODO KBASE_RUNNER handle completed state
         # TODO KBASE_RUNNER poll Condor jobs until complete, get cpu hours, add to job
-        # TODO KBASE_RUNNER add endpint to get subjob status for 1 or all subjobs
         # TODO KBASE_RUNNER push container exit code to sbujob in DB on container complete
         if parent_update.state == models.JobState.ERROR:
             # TODO KBASE_RUNNER pull container exit code from all containers, if any are
