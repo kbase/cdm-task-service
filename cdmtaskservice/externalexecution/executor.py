@@ -107,27 +107,28 @@ class Executor:
         # and may mean that S3 is down as well
         start = time.monotonic()
         backoff_counter = 0
-        while time.monotonic() - start < self._cfg.job_update_timeout_sec:
+        while True:
             try:
                 await self._update_job_state(job, state)
                 return
             except FatalExecutorError:
                 raise
             except Exception as e:
-                err = e
-                backoff = self._get_backoff(backoff_counter)
                 # Will need to figure out what kinds of errors we get here  and add to immediate
                 # fail block
+                backoff = self._get_backoff(backoff_counter)
+                if time.monotonic() - start + backoff >= self._cfg.job_update_timeout_min * 60:
+                    raise FatalExecutorError(
+                        f"Timed out trying to update job state to {state.value}. "
+                        + f"{time.monotonic() - start} sec elapsed, "
+                        + f"next wait period is {backoff} sec: {e}"
+                    ) from e
                 self._logr.exception(
                     f"Failed updating job state to {state.value} at {utcdatetime().isoformat()}, "
                     + f"trying again in {backoff} seconds: {e}"
                 )
                 backoff_counter += 1
                 await asyncio.sleep(backoff)
-        raise FatalExecutorError(
-            f"Timed out trying to update job state to {state.value} "
-            + f"after {time.monotonic() - start} seconds: {err}"
-        ) from err
 
     def _get_backoff(self, counter):
         if counter >= len(_EXP_BACKOFF_SEC):

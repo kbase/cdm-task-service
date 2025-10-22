@@ -55,9 +55,9 @@ class CondorClientConfig(BaseModel):
     The path on the condor worker containing the s3 access secret for the S3 instance.
     """
     
-    job_update_timeout_sec: Annotated[int, Field(ge=60)]
+    job_update_timeout_min: Annotated[int, Field(ge=1)]
     """
-    The number of seconds to wait when trying to update the job state in the service before
+    The number of minutes to wait when trying to update the job state in the service before
     failing.
     """
 
