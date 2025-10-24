@@ -159,6 +159,13 @@ class NERSCJAWSRunner(JobFlow):
                 + "and have a NERSC account"
             )
 
+    async def get_subjobs(self, job_id: str, container_num: int = None
+    ) -> models.SubJob | list[models.SubJob]:
+        """ Throws an error as this method is unsupported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+
     async def get_job_external_runner_status(
         self,
         job: models.AdminJobDetails,
@@ -398,7 +405,7 @@ class NERSCJAWSRunner(JobFlow):
     async def update_container_state(
         self, job: models.AdminJobDetails, container_num: int, update: models.ContainerUpdate
     ):
-        """ Thows an error as this method is unsupported. """
+        """ Throws an error as this method is unsupported. """
         raise UnsupportedOperationError(
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )

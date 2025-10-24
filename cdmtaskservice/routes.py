@@ -582,6 +582,66 @@ async def get_job_admin(
     return await job_state.get_job(job_id, user, as_admin=True)
 
 
+class SubJobs(BaseModel):
+    """ The subjobs / containers for a job. """
+    
+    subjobs: Annotated[list[models.SubJob], Field(description="The list of subjobs.")]
+
+
+@ROUTER_ADMIN.get(
+    "/jobs/{job_id}/container/",
+    response_model=SubJobs,
+    response_model_exclude_none=True,
+    summary="Get state for all containers",
+    description="Get the state for all of a job's containers. "
+        + "Only applicable for sites where container state is managed by the service"
+)
+async def get_job_containers(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    user: CTSUser=Depends(_AUTH),
+) -> SubJobs:
+    sjs = await _get_containers(r, job_id, user)
+    return SubJobs(subjobs=sjs)
+
+
+_ANN_CONTAINER_NUMBER = Annotated[int, FastPath(
+    openapi_examples={"container_num": {"value": 2}},
+    description="The container / subjob number.",
+    ge=1,
+)]
+
+
+@ROUTER_ADMIN.get(
+    "/jobs/{job_id}/container/{container_num}",
+    response_model=models.SubJob,
+    response_model_exclude_none=True,
+    summary="Get state for a container",
+    description="Get the state for a particular subjob / container. "
+        + "Only applicable for sites where container state is managed by the service"
+)
+async def get_job_container(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    container_num: _ANN_CONTAINER_NUMBER,
+    user: CTSUser=Depends(_AUTH),
+) -> models.SubJob:
+    return await _get_containers(r, job_id, user, container_num=container_num)
+
+
+async def _get_containers(
+    r: Request,
+    job_id: str,
+    user: CTSUser,
+    container_num: int | None = None,
+) -> models.SubJob | list[models.SubJob]:
+    _ensure_admin(user, "Only service administrators get container state.")
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    return await flow.get_subjobs(job.id, container_num=container_num)
+
+
 @ROUTER_ADMIN.get(
     "/jobs/{job_id}/runner_status",
     response_model=dict[str, Any],
@@ -971,11 +1031,7 @@ async def _callback_handling(
 async def update_container(
     r: Request,
     job_id: _ANN_JOB_ID,
-    container_num: Annotated[int, FastPath(
-        openapi_examples={"container_num": {"value": 2}},
-        description="The container / subjob number.",
-        ge=1,
-    )],
+    container_num: _ANN_CONTAINER_NUMBER,
     update: models.ContainerUpdate,
     user: CTSUser=Depends(_AUTH),
 ):
