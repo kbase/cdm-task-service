@@ -268,8 +268,8 @@ class NERSCJAWSRunner(JobFlow):
             await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
         elif res == jaws_client.JAWSResult.CANCELED:
             await self._updates.update_job_state(job.id, error(
-                "The job was unexpectedly canceled",
                 "JAWS reported the job as canceled",
+                user_error="The job was unexpectedly canceled",
                 cpu_hours=jaws_info["cpu_hours"],
             ))
             
@@ -277,8 +277,8 @@ class NERSCJAWSRunner(JobFlow):
             # there's no way to force a jaws system error that I'm aware of, will need to
             # test via unit tests
             await self._updates.update_job_state(job.id, error(
-                "An unexpected error occurred",
                 "JAWS failed to run the job - check the JAWS job logs",
+                user_error="An unexpected error occurred",
                 cpu_hours=jaws_info["cpu_hours"],
             ))
         else:  # should never happen

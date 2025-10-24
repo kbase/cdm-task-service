@@ -153,7 +153,7 @@ async def test_update_job(mondb):
     await mc.update_job_state("foo", submitting_job(), dt, "tid1")  # no fields
     await mc.update_job_state("foo", submitted_jaws_job("123"), dt, "tid2")  # array field
     await mc.update_job_state("foo", submitting_upload(1.2), dt2, "tid3")  # std field
-    await mc.update_job_state("foo", error("usererr", "adminerr"), dt2, "tid4")
+    await mc.update_job_state("foo", error("adminerr", user_error="usererr"), dt2, "tid4")
     got = await mc.get_job("foo", as_admin=True)
     
     # check expected job structure
@@ -339,13 +339,12 @@ async def test_update_subjob(mondb):
     dt2 = dt + datetime.timedelta(minutes=1)
     await mc.update_subjob_state("bar", 1, submitted_download(), dt)
     await mc.update_subjob_state("bar", 1, submitting_job(), dt)
-    await mc.update_subjob_state("bar", 1, error("usererr", "adminerr"), dt2)
+    await mc.update_subjob_state("bar", 1, error("adminerr"), dt2)
     got = await mc.get_subjob("bar", 1)
     
     # check expected job structure
     expected = _BASESUBJOB1.model_copy(deep=True)
     expected.state = models.JobState.ERROR
-    expected.error = "usererr"
     expected.admin_error = "adminerr"
     expected.transition_times.extend([
         models.JobStateTransition(state=models.JobState.DOWNLOAD_SUBMITTED, time=dt),

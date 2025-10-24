@@ -8,6 +8,7 @@ import json
 import logging
 from pathlib import Path
 import time
+import traceback
 from typing import TextIO, Any
 
 from cdmtaskservice.exceptions import ChecksumMismatchError
@@ -62,7 +63,7 @@ class Executor:
             await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
         except Exception as e:
             self._logr.exception(f"Job failed: {e}")
-            # TODO EXECUTOR try to drain job state queue and update job state to error
+            await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
             return False
         return True
     
@@ -101,7 +102,8 @@ class Executor:
             jobjson = await self._check_resp(resp, "Failed to get job from the CDM Task Service")
         return models.AdminJobDetails.model_validate(jobjson)
 
-    async def _update_job_state_loop(self, job: models.AdminJobDetails, state: models.JobState):
+    async def _update_job_state_loop(
+        self, job: models.AdminJobDetails, state: models.JobState, exception: Exception = None):
         # Considered making a queue so the job could continue while attempting to update
         # but that seems like too much complexity for something that doesn't happen very often
         # and may mean that S3 is down as well
@@ -109,7 +111,7 @@ class Executor:
         backoff_counter = 0
         while True:
             try:
-                await self._update_job_state(job, state)
+                await self._update_job_state(job, state, exception=exception)
                 return
             except FatalExecutorError:
                 raise
@@ -135,12 +137,17 @@ class Executor:
             return _EXP_BACKOFF_SEC[-1]
         return _EXP_BACKOFF_SEC[counter]
 
-    async def _update_job_state(self, job: models.AdminJobDetails, state: models.JobState):
+    async def _update_job_state(
+        self, job: models.AdminJobDetails, state: models.JobState, exception: Exception = None
+    ):
         url = (
             f"{self._url}/external_exec/{job.id}/container/{self._cfg.container_number}/update"
         )
         # TODO TEST need to mockout utcdatetime
         data = {"new_state": state.value, "time": utcdatetime().isoformat()}
+        if exception:
+            data["admin_error"] = str(exception)
+            data["traceback"] = traceback.format_exc()
         async with self._sess.put(url, json=data) as resp:
             await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 

@@ -30,9 +30,9 @@ from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
 from cdmtaskservice import sites
 from cdmtaskservice import subjobs
+from cdmtaskservice import update_state
 from cdmtaskservice.user import CTSUser
 from cdmtaskservice.timestamp import utcdatetime
-from cdmtaskservice.update_state import submitted_htcondor_download, submitting_job
 
 
 _RETRY_DELAY_SEC = 5 * 60  # configurable?
@@ -167,7 +167,9 @@ class KBaseRunner(JobFlow):
             # so we don't worry about it. If it starts occurring, could have the remote job wait
             # for the main job to transition to DOWNLOAD_SUBMITTED before submitting its
             # state transition request.
-            await self._updates.update_job_state(job.id, submitted_htcondor_download(cluster_id))
+            await self._updates.update_job_state(
+                job.id, update_state.submitted_htcondor_download(cluster_id)
+            )
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "starting condor run for")
 
@@ -196,7 +198,10 @@ class KBaseRunner(JobFlow):
         )
     
     _SUBJOB_STATE_TO_UPDATE_FUNC = {
-        models.JobState.JOB_SUBMITTING: submitting_job
+        models.JobState.JOB_SUBMITTING: lambda _: update_state.submitting_job(),
+        models.JobState.ERROR: lambda update: update_state.error(
+            update.admin_error, traceback=update.traceback
+        ),
     }
     
     async def update_container_state(
@@ -209,8 +214,6 @@ class KBaseRunner(JobFlow):
         container_num - the container / subjob number.
         update - the new state for the container.
         """
-        # TODO UPDATE_SUBJOB handle setting the job to an error state.
-        # TODO UPDATE_SUBJOB handle setting the job to a complete state.
         # TODO UPDATE_SUBJOB add other states.
         _not_falsy(job, "job")
         _check_num(container_num, "conteiner_num")
@@ -219,25 +222,47 @@ class KBaseRunner(JobFlow):
             raise UnsupportedOperationError(
                 f"Cannot update a container to state {update.new_state.value}"
         )
-        update_func = self._SUBJOB_STATE_TO_UPDATE_FUNC[update.new_state]
+        mongo_update = self._SUBJOB_STATE_TO_UPDATE_FUNC[update.new_state](update)
         # Just throw the error, don't error out the job. If the caller thinks this is an error
         # they can try and set the error state.
-        await self._mongo.update_subjob_state(job.id, container_num, update_func(), update.time)
+        await self._mongo.update_subjob_state(job.id, container_num, mongo_update, update.time)
         # If this fails the job is only stuck if parent_update is not None. It seems really
         # unlikely that the line above would succeed and this line fail, so we don't catch
         # errors here
         parent_update = await subjobs.get_job_update(self._mongo, job, update.new_state)
         if parent_update:
+            if parent_update.state.is_terminal():
+                # In order to get the final job info from Condor, need to return so the
+                # subjobs can exit
+                await self._coman.run_coroutine(self._update_terminal_job(job, parent_update))
+                return
             # May not be the same update func as the subjob
-            update_func = self._SUBJOB_STATE_TO_UPDATE_FUNC[parent_update.state]
+            mongo_update = self._SUBJOB_STATE_TO_UPDATE_FUNC[parent_update.state](update)
             # If this fails all the containers have transitioned to an equivalent state and
             # so the job is stuck, so we error out if possible.
             try:
                 await self._updates.update_job_state(
-                    job.id, update_func(), update_time=parent_update.time
+                    job.id, mongo_update, update_time=parent_update.time
                 )
             except Exception as e:
                 await self._updates.handle_exception(e, job.id, "updating job state")
+    
+    async def _update_terminal_job(
+        self, job: models.AdminJobDetails, parent_update: subjobs.JobUpdate
+    ):
+        # TODO KBASE_RUNNER handle completed state
+        # TODO KBASE_RUNNER poll Condor jobs until complete, get cpu hours, add to job
+        # TODO KBASE_RUNNER add endpint to get subjob status for 1 or all subjobs
+        # TODO KBASE_RUNNER push container exit code to sbujob in DB on container complete
+        if parent_update.state == models.JobState.ERROR:
+            # TODO KBASE_RUNNER pull container exit code from all containers, if any are
+            #     > 0 add a user error telling them to check the logs
+            # if we can't talk to mongo there's not much to do, so no error handling
+            await self._updates.save_error(
+                job.id,
+                "An unexpected error occurred",
+                "Check subjobs / containers for admin errors",  # maybe improve later
+            )
     
     async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
         """

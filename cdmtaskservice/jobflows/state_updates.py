@@ -94,7 +94,7 @@ class JobFlowStateUpdates:
             )
         else:
             await self.update_job_state(entity_id, error(
-                user_err, admin_err, traceback=traceback, log_files_path=logpath
+                admin_err, user_error=user_err, traceback=traceback, log_files_path=logpath
             ))
 
     async def update_job_state(
