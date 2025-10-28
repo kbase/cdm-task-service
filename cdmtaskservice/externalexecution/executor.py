@@ -13,6 +13,7 @@ from typing import TextIO, Any
 
 from cdmtaskservice.exceptions import ChecksumMismatchError
 from cdmtaskservice.externalexecution.config import Config
+from cdmtaskservice.externalexecution import container_runner
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.input_file_locations import determine_file_locations
 from cdmtaskservice import models
@@ -61,6 +62,7 @@ class Executor:
         try:
             await self._download_files(job)
             await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
+            await self._run_container(job)
         except Exception as e:
             self._logr.exception(f"Job failed: {e}")
             await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
@@ -186,6 +188,19 @@ Local relative path: {loc}
                     + f"'{obj.file}' does not match the actual checksum '{crc}'"
                 )
 
+    async def _run_container(self, job: models.AdminJobDetails):
+        log_prefix = f"container_log_{job.id}-{self._cfg.container_number}"
+        exit_code = await container_runner.run_container(
+            job.image.name_with_digest,
+            Path(".") / (log_prefix + ".out"),
+            Path(".") / (log_prefix + ".err"),
+            # TODO NOW in / out mount. Need to munge for docker in docker
+            # TODO NOW commands
+            # TODO NOW env
+            post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
+        )
+        print(f"Exit code: {exit_code}")
+        # TODO NOW push exit code to server w/ log upload or download_submitting
 
 async def run_executor(stderr: TextIO):
     """

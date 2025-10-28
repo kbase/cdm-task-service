@@ -123,7 +123,11 @@ services:
     #  - MONGO_INITDB_ROOT_PASSWORD=secret
 
   htcondor-mini:
-    image: htcondor/mini:24.11.2-el9
+    build:
+      context: .
+      dockerfile: ./docker_compose/htcondor/Dockerfile
+      args:
+        DOCKER_GID: 999  # replace with your host's docker group GID
     extra_hosts:
       # See https://stackoverflow.com/a/43541732/643675
       - "host.docker.internal:host-gateway"
@@ -139,5 +143,6 @@ services:
       - ./docker_compose/htcondor/start_condor_and_gen_token.sh:/opt/start_condor_and_gen_token.sh
       - ./docker_compose/htcondor/condor_config.local:/etc/condor/condor_config.local
       - condor-token:/etc/condor/tokens.d   # shared token directory
+      - /var/run/docker.sock:/var/run/docker.sock
     # for some reason the script is failing without the `sh`, not sure why
     command: sh /opt/start_condor_and_gen_token.sh

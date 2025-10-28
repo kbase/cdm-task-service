@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Add the submituser to the docker group
+usermod -aG docker submituser
+
 # Stage the cts token & s3 secret
 mkdir /cts
 echo $CTS_EXCECUTOR_TOKEN_FOR_FILE > /cts/cts_token
