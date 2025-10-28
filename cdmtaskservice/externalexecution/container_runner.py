@@ -4,9 +4,9 @@ Utility to run a container image.
 
 import docker
 from functools import lru_cache
+import logging
 from pathlib import Path
 import threading
-import traceback
 from typing import Awaitable
 
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
@@ -65,9 +65,10 @@ async def run_container(
     _require_string(image, "image")
     _not_falsy(stdout_path, "stdout_path")
     _not_falsy(stderr_path, "stderr_path")
+    logr = logging.getLogger(__name__)
 
     client = _get_client()
-    mounts = mounts if mounts else {}
+    mounts = mounts or {}
     volumes = {host: {"bind": container, "mode": "rw"} for host, container in mounts.items()}
 
     container = client.containers.run(
@@ -81,8 +82,9 @@ async def run_container(
     )
 
     try:
-        print(f"Container started: {container.short_id}")
-        await post_start_callback
+        logr.info(f"Container started: {container.short_id}")
+        if post_start_callback:
+            await post_start_callback
 
         _stream_logs(container, stdout_path, stderr_path)
 
@@ -92,5 +94,4 @@ async def run_container(
         try:
             container.remove(force=True)
         except docker.errors.APIError as e:
-            print(f"Cleanup failed: {e}")
-            print(traceback.format_exc())
+            logr.exception(f"Cleanup failed: {e}")
