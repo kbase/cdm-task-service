@@ -95,9 +95,6 @@ STATIC_SUB = {
     "on_exit_hold": "ExitCode =!= 0",
     "should_transfer_files": "yes",
     "when_to_transfer_output": "on_exit_or_evict",
-    # For some reason setting transfer_output_files to the empty string isn't working.
-    # We specify an empty file so that large job output doesn't get transferred.
-    "transfer_output_files": "__DUMMY_OUTPUT__",
     "getenv": "False",
 }
 
@@ -162,6 +159,7 @@ class CondorClient:
         # A lot of this is copied from
         # https://github.com/kbase/execution_engine2/blob/develop/lib/execution_engine2/utils/Condor.py
         mem = str(int(job.job_input.memory / (1024 * 1024)))  # Condor expects MiB
+        logprefix = f"container_log_{job.id}-$(container_number)"
         subdict = {
             "shell": f"bash {self._exe_name}",
             # Has to exist locally and on the condor Schedd host
@@ -174,6 +172,9 @@ class CondorClient:
             # Prefixing the log file with directories seems to make log creation unreliable.
             # Not sure why
             "log": f"cts-{job.id}-$(container_number).log",
+            "transfer_output_files": f"{logprefix}.out, {logprefix}.err",
+            "transfer_output_remaps": f"{logprefix}.out = cts/{job.id}/{logprefix}.out; "
+                + f"{logprefix}.err = cts/{job.id}/{logprefix}.err",
             "request_cpus": str(job.job_input.cpus),
             "request_memory": mem,
             # request_disk needed?
