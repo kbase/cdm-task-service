@@ -153,6 +153,14 @@ def submitting_job() -> JobUpdate:
     )
 
 
+def submitted_job() -> JobUpdate:
+    """ Update a job's state from submitting job to submitted job. """
+    return JobUpdate(
+        )._set_current_state(models.JobState.JOB_SUBMITTING
+        )._set_new_state(models.JobState.JOB_SUBMITTED
+    )
+
+
 def submitted_jaws_job(jaws_run_id: str) -> JobUpdate:
     """ Update a job's state from submitting job to submitted job and add the JAWS run ID. """
     return JobUpdate(
