@@ -104,7 +104,7 @@ initialdir = "{{ KBCTS_HTC_INITIAL_DIR or "/condor_workdir" }}"
 clientgroup = "{{ KBCTS_HTC_CLIENT_GROUP or "" }}"
 
 # The file path on the HTCondor workers that will contain a KBase token for
-# the job executor to use to contact the service. This token must have the external exectutor role
+# the job executor to use to contact the service. This token must have the external executor role
 # defined in the Authentication section above.
 token_path = "{{ KBCTS_HTC_TOKEN_PATH or "/cts/cts_token" }}"
 
@@ -118,6 +118,27 @@ s3_access_secret_path = "{{ KBCTS_HTC_S3_ACCESS_SECRET_PATH or "/cts/s3_secret" 
 # continue to try and update a job's state in the service if the service can't be contacted.
 # The default is 6 hours and minimum 1 minute.
 job_update_timeout_min = {{ KBCTS_EXTERNAL_JOB_UPDATE_TIMEOUT_MIN or 360 }}
+
+# A prefix override for the input and output data mount path for the job container.
+# This is not a mount string, although it looks like one. By default, the external job
+# executor mounts subdirectories in the current working directory into the job container
+# for input and output. If the external executor is running in a container itself and the
+# job container will be run as a sibling container, that will obviously fail. This argument
+# replaces the portion of the executor's current working directory in the argument prior
+# to the colon with the portion of the argument after the colon.
+# For example, if the working directory of the executor in HTCondor is
+# /var/lib/condor/execute/dir_1469 (and dir_1469 can change from run ro run but the remainder of
+# the path is static), and the directory on the host where data can be shared between
+# containers is /home/user1/condor_stuff, the the argument would be
+# /var/lib/condor/execute:/home/user1/condor_stuff
+# The host directory /home/user1/condor_stuff must be mounted into the condor container at
+# /var/lib/condor/execute, making all job files available for mounting into other containers.
+# The executor will then mount the appropriate directories into the job container, using
+# /home/user1/condor_stuff as the host mount prefix and appending the remainder of the appropriate
+# directories, e.g. dir_1469 and subdirectories.
+# Generally speaking, the argument is the reverse of the condor container mount string
+# /home/user1/condor_stuff:/var/lib/condor/execute
+mount_prefix_override = "{{ KBCTS_EXTERNAL_JOB_MOUNT_PREFIX_OVERRIDE or "" }}"
 
 # The local path, accessible to the server, to the external execution code tgz archive file.
 # If using the provided Dockerfile, this value is set there.

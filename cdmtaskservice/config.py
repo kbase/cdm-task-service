@@ -67,6 +67,8 @@ class CDMTaskServiceConfig:
         the s3 access secret for the S3 instance.
     external_executor_job_update_timeout_min: int - the number of minutes to wait when trying
         to update the job state in the service before failing.
+    external_executor_mount_prefix_override: str - a host container mount path prefix override
+        in the form <prefix of path to replace>:<path to replace prefix with>
     code_archive_path: str - the local path to the tgz code archive.
     code_archive_url_override: str | None - a url, if any, to use for downloading the 
         tgz code archive rather than the default location.
@@ -160,6 +162,9 @@ class CDMTaskServiceConfig:
         )
         self.external_executor_job_update_timeout_min = _get_int_required(
             config, _SEC_EXTERNAL_EXEC, "job_update_timeout_min", minimum=1
+        )
+        self.external_executor_mount_prefix_override = _get_string_optional(
+            config, _SEC_EXTERNAL_EXEC, "mount_prefix_override"
         )
         self.code_archive_path = _get_string_required(config, _SEC_EXTERNAL_EXEC, "archive_path")
         self.code_archive_url_override = _get_string_optional(
@@ -267,6 +272,7 @@ class CDMTaskServiceConfig:
             token_path=self.condor_token_path,
             s3_access_secret_path=self.condor_s3_access_secret_path,
             job_update_timeout_min=self.external_executor_job_update_timeout_min,
+            mount_prefix_override=self.external_executor_mount_prefix_override,
         )
 
     def print_config(self, output: TextIO):
@@ -298,6 +304,8 @@ class CDMTaskServiceConfig:
             f"HTCondor S3 access secret path: {self.condor_s3_access_secret_path}",
             "External executor job update timeout (min): "
                 + str(self.external_executor_job_update_timeout_min),
+            "External executor mount prefix override: " +
+                self.external_executor_mount_prefix_override,
             f"Code archive path: {self.code_archive_path}",
             f"Code archive url override: {self.code_archive_url_override}",
             f"S3 URL: {self.s3_url}",

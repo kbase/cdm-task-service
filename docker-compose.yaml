@@ -46,6 +46,7 @@ services:
       - KBCTS_HTC_INITIAL_DIR=/condor_workdir
       # From ./docker_compose/htcondor/condor_config.local
       - KBCTS_HTC_CLIENT_GROUP=test_cg
+      - KBCTS_EXTERNAL_JOB_MOUNT_PREFIX_OVERRIDE=/var/lib/condor/execute:<path to condor_share>/condor_share
       # Note that the host minio must be bound to 0.0.0.0:9002 or 172.17.0.1:9002 (the docker
       # bridge interface). The latter is safer but only works for bridge networks
       - KBCTS_S3_URL=http://host.docker.internal:9002
@@ -139,6 +140,7 @@ services:
     ports:
       - "9618:9618"
     volumes:
+      - <path to chondor_share>/condor_share:/var/lib/condor/execute
       - ./docker_compose/htcondor/submit_test_script:/opt/submit_test_script
       - ./docker_compose/htcondor/start_condor_and_gen_token.sh:/opt/start_condor_and_gen_token.sh
       - ./docker_compose/htcondor/condor_config.local:/etc/condor/condor_config.local

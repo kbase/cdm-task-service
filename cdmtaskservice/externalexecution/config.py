@@ -96,6 +96,12 @@ class Config(BaseSettings):
             + "job state in the CTS and fail.",
         ge=1,
     )]
+    mount_prefix_override: Annotated[str | None, Field(
+        validation_alias="MOUNT_PREFIX_OVERRIDE",
+        examples=["/var/lib/condor/execute:/home/user1/condor_stuff"],
+        description="A host container mount path prefix override in the form " +
+            "<prefix of path to replace>:<path to replace prefix with>",
+    )] = None
     
     @model_validator(mode='after')
     def check_field_groups(self):

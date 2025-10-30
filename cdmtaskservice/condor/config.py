@@ -60,6 +60,13 @@ class CondorClientConfig(BaseModel):
     The number of minutes to wait when trying to update the job state in the service before
     failing.
     """
+    
+    mount_prefix_override: str | None
+    """
+    A host container mount path prefix override in the form
+    <prefix of path to replace>:<path to replace prefix with>
+    """
+    # TODO CODE add validator for mount prefix here and in the other 18 config classes
 
     def get_executable_url(self) -> str:
         """
