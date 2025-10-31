@@ -192,7 +192,8 @@ class CondorClient:
         }
         if self._config.client_group:
             # HTCondor will && this with its own requirements
-            subdict["requirements"] =  f'(CLIENTGROUP == "{self._config.client_group}")'
+            # Regex so it can match workers with multiple client groups specified
+            subdict["requirements"] =  f'regexp("{self._config.client_group}",CLIENTGROUP)'
         sub = htcondor2.Submit(subdict | STATIC_SUB)
         itemdata = [
             {"container_number": str(i)}
