@@ -1,25 +1,50 @@
 #!/usr/bin/env bash
 set -x
 
+ENV_SOURCE_FILE="job_envs.source"
+
+EXPECTED_VARS=(
+    JOB_ID
+    CONTAINER_NUMBER
+    SERVICE_ROOT_URL
+    TOKEN_PATH
+    S3_URL
+    S3_ACCESS_KEY
+    S3_SECRET_PATH
+    S3_INSECURE
+    S3_ERROR_LOG_PATH
+    JOB_UPDATE_TIMEOUT_MIN
+    MOUNT_PREFIX_OVERRIDE
+    CODE_ARCHIVE
+)
+
 ###
-# list environment variables supplied from the client
+# Make a source-able environment file for debugging purposes and list env vars in the logs
 ###
-echo "JOB_ID=$JOB_ID"
-echo "CONTAINER_NUMBER=$CONTAINER_NUMBER"
-echo "SERVICE_ROOT_URL=$SERVICE_ROOT_URL"
-echo "TOKEN_PATH=$TOKEN_PATH"
-echo "S3_URL=$S3_URL"
-echo "S3_ACCESS_KEY=$S3_ACCESS_KEY"
-echo "S3_SECRET_PATH=$S3_SECRET_PATH"
-echo "S3_INSECURE=$S3_INSECURE"
-echo "S3_ERROR_LOG_PATH=$S3_ERROR_LOG_PATH"
-echo "JOB_UPDATE_TIMEOUT_MIN=$JOB_UPDATE_TIMEOUT_MIN"
-echo "MOUNT_PREFIX_OVERRIDE=$MOUNT_PREFIX_OVERRIDE"
-echo "CODE_ARCHIVE=$CODE_ARCHIVE"
+
+{
+  echo "# Environment snapshot from Condor job at $(date)"
+  echo "# To reproduce: source this file"
+  echo
+} > "$ENV_SOURCE_FILE"
+
+for var in "${EXPECTED_VARS[@]}"; do
+  # only dump if defined
+  if [[ -v "$var" ]]; then
+    value="${!var}"
+    echo "$var=$value"
+    safe_value=${value//\'/\'\\\'\'}
+    echo "export $var='$safe_value'" >> "$ENV_SOURCE_FILE"
+  fi
+done
+
+echo "export PYTHONPATH=." >> "$ENV_SOURCE_FILE"
+echo "Environment written to $ENV_SOURCE_FILE"
 
 ###
 # list other env vars
 ###
+echo
 echo "PATH=$PATH"
 echo "PWD=$PWD"
 
