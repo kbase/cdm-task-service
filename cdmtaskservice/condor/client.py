@@ -169,8 +169,8 @@ class CondorClient:
             "initialdir": self._config.initial_dir,
             "transfer_input_files": f"{self._exe_url}, {self._code_archive_url}",
             "environment": self._get_environment(job),
-            "output":  f"cts/{job.id}/cts-{job.id}-$(container_number).out",
-            "error": f"cts/{job.id}/cts-{job.id}-$(container_number).err",
+            "output":  f"cts-{job.id}-$(container_number).out",
+            "error": f"cts-{job.id}-$(container_number).err",
             # Prefixing the log file with directories seems to make log creation unreliable.
             # Not sure why
             "log": f"cts-{job.id}-$(container_number).log",

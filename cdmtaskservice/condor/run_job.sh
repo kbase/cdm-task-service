@@ -28,6 +28,8 @@ echo "PWD=$PWD"
 ###
 export PATH=$HOME/.local/bin:$PATH
 
+sleep 3600
+
 ###
 # Extract the archive, install deps, and run the executor
 ###
