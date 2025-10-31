@@ -153,8 +153,11 @@ class Executor:
         async with self._sess.put(url, json=data) as resp:
             await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 
+    def _get_files_for_container(self, job: models.AdminJobDetails) -> list[models.S3File]:
+        return job.job_input.get_files_per_container()[self._cfg.container_number - 1]
+
     async def _download_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
-        s3objs = set(job.job_input.get_files_per_container()[self._cfg.container_number - 1])
+        s3objs = set(self._get_files_for_container(job))
         filelocs = determine_file_locations(job.job_input)
         filelocs = {k: v for k, v in filelocs.items() if k in s3objs}
         s3paths = []
@@ -189,18 +192,43 @@ Local relative path: {loc}
                 )
 
     async def _run_container(self, job: models.AdminJobDetails):
+        mount_container = Path.cwd().expanduser().absolute()
+        mount_host = mount_container
+        if self._cfg.mount_prefix_override:
+            prefix, replace = self._cfg.mount_prefix_override.split(":")
+            relative = mount_host.relative_to(Path(prefix))
+            mount_host = Path(replace) / relative
+        input_ = mount_host / "__INPUT__"
+        output = mount_host / "__OUTPUT__"
+        # Needs to be global write since the job container user is unknown
+        (mount_container / "__OUTPUT__").mkdir(0x777, parents=True, exist_ok=True)
+        mounts = {
+            str(input_): job.job_input.params.input_mount_point,
+            str(output): job.job_input.params.output_mount_point,
+        }
         log_prefix = f"container_log_{job.id}-{self._cfg.container_number}"
+        files = set(self._get_files_for_container(job))
+        infiles = [job.job_input.params.input_mount_point + "/" + Path(f.file).name for f in files]
         exit_code = await container_runner.run_container(
             job.image.name_with_digest,
             Path(".") / (log_prefix + ".out"),
             Path(".") / (log_prefix + ".err"),
-            # TODO NOW in / out mount. Need to munge for docker in docker
-            # TODO NOW commands
+            mounts=mounts,
+            # TODO NOW real command, this is just for testing
+            command=[
+                "stats",
+                "--tabular",
+                "-o", job.job_input.params.output_mount_point + "/out.csv",
+                "-i",
+            ] + infiles,
             # TODO NOW env
             post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
         )
+        # TODO NOW remove below, push exit code to server w/ log upload or download_submitting
+        print("output:")
+        for f in (mount_container / "__OUTPUT__" ).iterdir():
+            print(f)
         print(f"Exit code: {exit_code}")
-        # TODO NOW push exit code to server w/ log upload or download_submitting
 
 async def run_executor(stderr: TextIO):
     """

@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# chown the mounted executedir to condor, otherwise the startd complains
+chown condor /var/lib/condor/execute
+
 # Add the submituser to the docker group
 usermod -aG docker submituser
 
