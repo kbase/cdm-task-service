@@ -305,7 +305,7 @@ class CDMTaskServiceConfig:
             "External executor job update timeout (min): "
                 + str(self.external_executor_job_update_timeout_min),
             "External executor mount prefix override: " +
-                self.external_executor_mount_prefix_override,
+                f"{self.external_executor_mount_prefix_override}",  # f string in case it's None
             f"Code archive path: {self.code_archive_path}",
             f"Code archive url override: {self.code_archive_url_override}",
             f"S3 URL: {self.s3_url}",
