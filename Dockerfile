@@ -1,4 +1,4 @@
-FROM python:3.12 AS build
+FROM python:3.14 AS build
 
 ENV CRANE_VER=v0.20.2
 
@@ -18,7 +18,7 @@ WORKDIR /git
 COPY .git /git
 RUN GITCOMMIT=$(git rev-parse HEAD) && echo "GIT_COMMIT=\"$GITCOMMIT\"" > /git/git_commit.py
 
-FROM python:3.12
+FROM python:3.14
 
 RUN apt update \
     && apt install -y tini \
