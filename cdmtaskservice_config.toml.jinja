@@ -83,17 +83,6 @@ group = "{{ KBCTS_JAWS_GROUP or "kbase" }}"
 
 [HTCondor]
 
-# The local path, accessible to the server, to the executable file to run on the HTCondor workers.
-# If using the provided Dockerfile, this value is set there.
-executable_path = "{{ KBCTS_HTC_EXE_PATH }}"
-
-# A URL that will override the default location for HTCondor to download the executable file
-# for the worker. By default this is constructed from the service root url (below) and a
-# default path.
-# If set, it becomes the user's responsibility to keep the executable file up to date with the
-# service.
-executable_url_override = "{{ KBCTS_HTC_EXE_URL_OVERRIDE or "" }}"
-
 # The initial job directory on the condor SCHEDD daemon host and locally. Equivalent to the
 # "initialdir" argument in a submit file or to Submit(). Must exist or be createable by the
 # service locally and must exist on the SCHEDD host.
@@ -111,6 +100,23 @@ token_path = "{{ KBCTS_HTC_TOKEN_PATH or "/cts/cts_token" }}"
 # The file path on the HTCondor workers that will contain the S3 access secret
 # for the S3 system defined in the S3 section below.
 s3_access_secret_path = "{{ KBCTS_HTC_S3_ACCESS_SECRET_PATH or "/cts/s3_secret" }}"
+
+# Additional elements to prepend to the $PATH variable in the HTCondor worker.
+additional_path = "{{ KBCTS_HTC_ADDL_PATH or ""}}"
+
+# A directory appropriate for cached data on the condor workers; for example the uv cache.
+cache_dir = "{{ KBCTS_HTC_CACHE_DIR or "/tmp"}}"
+
+# The local path, accessible to the server, to the executable file to run on the HTCondor workers.
+# If using the provided Dockerfile, this value is set there.
+executable_path = "{{ KBCTS_HTC_EXE_PATH }}"
+
+# A URL that will override the default location for HTCondor to download the executable file
+# for the worker. By default this is constructed from the service root url (below) and a
+# default path.
+# If set, it becomes the user's responsibility to keep the executable file up to date with the
+# service.
+executable_url_override = "{{ KBCTS_HTC_EXE_URL_OVERRIDE or "" }}"
 
 [ExternalExecution]
 

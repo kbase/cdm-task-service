@@ -56,15 +56,17 @@ class CDMTaskServiceConfig:
     jaws_url: str - the URL of the JAWS Central service.
     jaws_token: str - the JAWS token used to run jobs.
     jaws_group: str - the JAWS group used to run jobs.
-    condor_exe_path: str - the local path to the HTCondor worker executable.
-    condor_exe_url_override: str | None - a url, if any, to use for downloading the HTCondor
-        executable rather than the default location.
     condor_initialdir: str - the path to use as the condor initialdir.
     condor_clientgroup: str | None - the clientgroup to use for condor submission, if any.
     condor_token_path: str - the path on the condor worker containing a
         KBase token for use when contacting the service.
     condor_s3_access_secret_path: str - the path on the condor worker containing
         the s3 access secret for the S3 instance.
+    condor_addl_path: str | None - additional path elements to prepend to the condor worker $PATH.
+    condor_cache_dir: str - A directory appropriate for cached data, for example the uv cache.
+    condor_exe_path: str - the local path to the HTCondor worker executable.
+    condor_exe_url_override: str | None - a url, if any, to use for downloading the HTCondor
+        executable rather than the default location.
     external_executor_job_update_timeout_min: int - the number of minutes to wait when trying
         to update the job state in the service before failing.
     external_executor_mount_prefix_override: str - a host container mount path prefix override
@@ -150,15 +152,17 @@ class CDMTaskServiceConfig:
         self.jaws_url = _get_string_required(config, _SEC_JAWS, "url")
         self.jaws_token = _get_string_required(config, _SEC_JAWS, "token")
         self.jaws_group = _get_string_required(config, _SEC_JAWS, "group")
-        self.condor_exe_path = _get_string_required(config, _SEC_HTCONDOR, "executable_path")
-        self.condor_exe_url_override = _get_string_optional(
-            config, _SEC_HTCONDOR, "executable_url_override"
-        )
         self.condor_initialdir = _get_string_required(config, _SEC_HTCONDOR, "initialdir")
         self.condor_clientgroup = _get_string_optional(config, _SEC_HTCONDOR, "clientgroup")
         self.condor_token_path = _get_string_required(config, _SEC_HTCONDOR, "token_path")
         self.condor_s3_access_secret_path = _get_string_required(
             config, _SEC_HTCONDOR, "s3_access_secret_path"
+        )
+        self.condor_addl_path = _get_string_optional(config, _SEC_HTCONDOR, "additional_path")
+        self.condor_cache_dir = _get_string_required(config, _SEC_HTCONDOR, "cache_dir")
+        self.condor_exe_path = _get_string_required(config, _SEC_HTCONDOR, "executable_path")
+        self.condor_exe_url_override = _get_string_optional(
+            config, _SEC_HTCONDOR, "executable_url_override"
         )
         self.external_executor_job_update_timeout_min = _get_int_required(
             config, _SEC_EXTERNAL_EXEC, "job_update_timeout_min", minimum=1
@@ -273,6 +277,8 @@ class CDMTaskServiceConfig:
             s3_access_secret_path=self.condor_s3_access_secret_path,
             job_update_timeout_min=self.external_executor_job_update_timeout_min,
             mount_prefix_override=self.external_executor_mount_prefix_override,
+            additional_path=self.condor_addl_path,
+            cache_dir=self.condor_cache_dir,
         )
 
     def print_config(self, output: TextIO):
@@ -296,12 +302,14 @@ class CDMTaskServiceConfig:
             f"JAWS Central URL: {self.jaws_url}",
             "JAWS token: REDACTED FOR THE NATIONAL SECURITY OF GONDWANALAND",
             f"JAWS group: {self.jaws_group}",
-            f"HTCondor exe path: {self.condor_exe_path}",
-            f"HTCondor exe url override: {self.condor_exe_url_override}",
             f"HTCondor initialdir: {self.condor_initialdir}",
             f"HTCondor client group: {self.condor_clientgroup}",
             f"HTCondor token path: {self.condor_token_path}",
             f"HTCondor S3 access secret path: {self.condor_s3_access_secret_path}",
+            f"HTCondor additional $PATH elements: {self.condor_addl_path}",
+            f"HTCondor cache dir: {self.condor_cache_dir}",
+            f"HTCondor exe path: {self.condor_exe_path}",
+            f"HTCondor exe url override: {self.condor_exe_url_override}",
             "External executor job update timeout (min): "
                 + str(self.external_executor_job_update_timeout_min),
             "External executor mount prefix override: " +
