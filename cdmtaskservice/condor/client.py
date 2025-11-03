@@ -139,6 +139,7 @@ class CondorClient:
             "JOB_ID": job.id,
             "CONTAINER_NUMBER": "$(container_number)",
             "CODE_ARCHIVE": self._code_archive_name,
+            "GLOBAL_CACHE_DIR": self._config.cache_dir,
             "SERVICE_ROOT_URL": self._config.service_root_url,
             "TOKEN_PATH": self._config.token_path,
             "S3_URL": self._s3config.internal_url,  # could add a toggle to use external if needed
@@ -149,6 +150,8 @@ class CondorClient:
         }
         if self._config.mount_prefix_override:
             env["MOUNT_PREFIX_OVERRIDE"] = self._config.mount_prefix_override
+        if self._config.additional_path:
+            env["ADDITIONAL_PATH"] = self._config.additional_path
         if self._s3config.insecure:
             env["S3_INSECURE"] = "TRUE"
         environment = ""
@@ -170,7 +173,7 @@ class CondorClient:
             "transfer_input_files": f"{self._exe_url}, {self._code_archive_url}",
             "environment": self._get_environment(job),
             # Prefixing the log files with directories seems to make log creation unreliable
-            # and / or fail depending on the condor version.Not sure why
+            # and / or fail depending on the condor version. Not sure why
             "output":  f"cts-{job.id}-$(container_number).out",
             "error": f"cts-{job.id}-$(container_number).err",
             "log": f"cts-{job.id}-$(container_number).log",

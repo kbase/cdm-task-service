@@ -15,8 +15,17 @@ EXPECTED_VARS=(
     S3_ERROR_LOG_PATH
     JOB_UPDATE_TIMEOUT_MIN
     MOUNT_PREFIX_OVERRIDE
+    ADDITIONAL_PATH
+    GLOBAL_CACHE_DIR
     CODE_ARCHIVE
 )
+
+###
+# list initial env vars
+###
+echo "Initial \$PATH=$PATH"
+echo "\$PWD=$PWD"
+echo "whoami=$(whoami)"
 
 ###
 # Make a source-able environment file for debugging purposes and list env vars in the logs
@@ -33,25 +42,22 @@ for var in "${EXPECTED_VARS[@]}"; do
   if [[ -v "$var" ]]; then
     value="${!var}"
     echo "$var=$value"
+    # escape single quotes safely for inclusion in shell file
     safe_value=${value//\'/\'\\\'\'}
     echo "export $var='$safe_value'" >> "$ENV_SOURCE_FILE"
   fi
 done
 
+if [[ -n "${ADDITIONAL_PATH:-}" ]]; then
+  safe_addl_path=${ADDITIONAL_PATH//\'/\'\\\'\'}
+  echo "export PATH='$safe_addl_path':\$PATH" >> "$ENV_SOURCE_FILE"
+  export PATH="$safe_addl_path:$PATH"
+fi
+
 echo "export PYTHONPATH=." >> "$ENV_SOURCE_FILE"
 echo "Environment written to $ENV_SOURCE_FILE"
 
-###
-# list other env vars
-###
-echo
-echo "PATH=$PATH"
-echo "PWD=$PWD"
-
-###
-# Put pip and uv on the path, since they're installed for the user only
-###
-export PATH=$HOME/.local/bin:$PATH
+echo "updated \$PATH=$PATH"
 
 ###
 # Extract the archive, install deps, and run the executor
@@ -59,9 +65,14 @@ export PATH=$HOME/.local/bin:$PATH
 tar -xf $CODE_ARCHIVE
 
 echo "Start uv / deps install: $(date)"
-pip install --upgrade pip && pip install uv
+# Don't use a cache dir for pip - pip caches don't appear to be completely concurrency safe
+pip install --no-cache-dir uv
 
 # TODO CONDOR separate uv deps into external_exec & service deps
+# UV caches are concurrency safe: https://docs.astral.sh/uv/concepts/cache/#cache-safety
+mkdir -p $GLOBAL_CACHE_DIR/uv_cache
+export UV_CACHE_DIR=$GLOBAL_CACHE_DIR/uv_cache
+export XDG_DATA_HOME=$GLOBAL_CACHE_DIR/uv_data
 uv sync
 echo "Complete uv / deps install: $(date)"
 

@@ -67,6 +67,16 @@ class CondorClientConfig(BaseModel):
     <prefix of path to replace>:<path to replace prefix with>
     """
     # TODO CODE add validator for mount prefix here and in the other 18 config classes
+    
+    additional_path: str | None
+    """
+    Additional path elements to prepend to the condor worker $PATH.
+    """
+    
+    cache_dir: str
+    """
+    A directory appropriate for caching cross-job data such as uv dependencies.
+    """
 
     def get_executable_url(self) -> str:
         """
