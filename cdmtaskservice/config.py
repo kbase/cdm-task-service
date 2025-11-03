@@ -158,6 +158,7 @@ class CDMTaskServiceConfig:
         self.condor_s3_access_secret_path = _get_string_required(
             config, _SEC_HTCONDOR, "s3_access_secret_path"
         )
+        # TODO SECURITY validate safe path 
         self.condor_addl_path = _get_string_optional(config, _SEC_HTCONDOR, "additional_path")
         self.condor_cache_dir = _get_string_required(config, _SEC_HTCONDOR, "cache_dir")
         self.condor_exe_path = _get_string_required(config, _SEC_HTCONDOR, "executable_path")
