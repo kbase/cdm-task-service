@@ -209,6 +209,7 @@ Local relative path: {loc}
         log_prefix = f"container_log_{job.id}-{self._cfg.container_number}"
         files = set(self._get_files_for_container(job))
         infiles = [job.job_input.params.input_mount_point + "/" + Path(f.file).name for f in files]
+        self._logr(f"Starting image {job.image.name_with_digest}")
         exit_code = await container_runner.run_container(
             job.image.name_with_digest,
             Path(".") / (log_prefix + ".out"),

@@ -15,6 +15,7 @@ from fastapi import (
     Path as FastPath
 )
 from fastapi.responses import FileResponse
+from kbase.auth import InvalidUserError
 from pathlib import Path
 from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
 from typing import Annotated, Any
@@ -31,7 +32,7 @@ from cdmtaskservice.callback_url_paths import (
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
 )
-from cdmtaskservice.exceptions import UnauthorizedError, InvalidUserError
+from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.jobflows.flowmanager import JobFlow
