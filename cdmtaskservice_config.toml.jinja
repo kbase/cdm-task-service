@@ -107,6 +107,11 @@ additional_path = "{{ KBCTS_HTC_ADDL_PATH or ""}}"
 # A directory appropriate for cached data on the condor workers; for example the uv cache.
 cache_dir = "{{ KBCTS_HTC_CACHE_DIR or "/tmp"}}"
 
+# Whether to use the external S3 URL when contacting S3 from the Condor workers as opposed to
+# the standard URL (see the S3 section below). "True", case insensitive, will cause the external
+# url to be used. Anything else will cause the standard URL to be used.
+use_S3_external_url = "{{ KBCTS_HTC_USE_S3_EXTERNAL_URL or "false" }}"
+
 # The local path, accessible to the server, to the executable file to run on the HTCondor workers.
 # If using the provided Dockerfile, this value is set there.
 executable_path = "{{ KBCTS_HTC_EXE_PATH }}"
@@ -183,8 +188,8 @@ allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
 [MongoDB]
 
 # The connection parameters for MongoDB. User and password are optional. Retry writes
-# sets the Mongo DB retrywrites parameter on only if the value of the key is the exact string
-# "true". See https://www.mongodb.com/docs/manual/core/retryable-writes/
+# sets the Mongo DB retrywrites parameter on only if the value of the key is the
+# case-insensitive string "true". See https://www.mongodb.com/docs/manual/core/retryable-writes/
 
 mongo_host = "{{ KBCTS_MONGO_HOST or "mongodb://localhost:27017" }}"
 mongo_db = "{{ KBCTS_MONGO_DB or "cdmtaskservice" }}"
