@@ -77,6 +77,11 @@ class CondorClientConfig(BaseModel):
     """
     A directory appropriate for caching cross-job data such as uv dependencies.
     """
+    
+    use_S3_external_url: bool = False
+    """
+    Whether to use the external S3 URL vs. the standard URL.
+    """
 
     def get_executable_url(self) -> str:
         """

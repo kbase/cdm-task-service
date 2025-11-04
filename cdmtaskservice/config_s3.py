@@ -40,6 +40,10 @@ class S3Config(BaseModel):
     _s3_client: S3Client | None = None
     _s3_external_client: S3Client | None = None
 
+    def get_url(self, external: bool = False):
+        """ Get the S3 internal url, or the external url if external is true. """
+        return self.external_url if external else self.internal_url
+
     async def initialize_clients(self):
         """
         Initialize the S3 clients. NOTE: this method is not safe for concurrent access.

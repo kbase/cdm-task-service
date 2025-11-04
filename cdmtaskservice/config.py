@@ -64,6 +64,8 @@ class CDMTaskServiceConfig:
         the s3 access secret for the S3 instance.
     condor_addl_path: str | None - additional path elements to prepend to the condor worker $PATH.
     condor_cache_dir: str - A directory appropriate for cached data, for example the uv cache.
+    condor_use_s3_external_url: bool - whether to use the external vs. standard S3 url when
+       running jobs on HTCondor.
     condor_exe_path: str - the local path to the HTCondor worker executable.
     condor_exe_url_override: str | None - a url, if any, to use for downloading the HTCondor
         executable rather than the default location.
@@ -85,8 +87,8 @@ class CDMTaskServiceConfig:
     mongo_host: str - the MongoDB host.
     mongo_db: str - the MongoDB database.
     mongo_user: str | None - the MongoDB user name.
-    mongo_user: str | None - the MongoDB password.
-    mongo_user: bool - whether to set the MongoDB retry writes parameter on.
+    mongo_pwd: str | None - the MongoDB password.
+    mongo_retrywrites: bool - whether to set the MongoDB retry writes parameter on.
     allowed_s3_paths: list[str] - the list of paths where users are allowed to read and write
         files.
     container_s3_log_dir: str - where to store container logs in S3.
@@ -161,6 +163,9 @@ class CDMTaskServiceConfig:
         # TODO SECURITY validate safe path 
         self.condor_addl_path = _get_string_optional(config, _SEC_HTCONDOR, "additional_path")
         self.condor_cache_dir = _get_string_required(config, _SEC_HTCONDOR, "cache_dir")
+        self.condor_use_s3_external_url = _get_string_optional(
+            config, _SEC_HTCONDOR, "use_S3_external_url"
+        ).lower() == "true"
         self.condor_exe_path = _get_string_required(config, _SEC_HTCONDOR, "executable_path")
         self.condor_exe_url_override = _get_string_optional(
             config, _SEC_HTCONDOR, "executable_url_override"
@@ -189,7 +194,8 @@ class CDMTaskServiceConfig:
         self.mongo_user = _get_string_optional(config, _SEC_MONGODB, "mongo_user")
         self.mongo_pwd = _get_string_optional(config, _SEC_MONGODB, "mongo_pwd")
         self.mongo_retrywrites = _get_string_optional(
-            config, _SEC_MONGODB, "mongo_retrywrites") == "true"
+            config, _SEC_MONGODB, "mongo_retrywrites"
+        ).lower() == "true"
         if bool(self.mongo_user) != bool(self.mongo_pwd):
             raise ValueError("Either both or neither of the mongo user and password must "
                              + "be provided")
@@ -280,6 +286,7 @@ class CDMTaskServiceConfig:
             mount_prefix_override=self.external_executor_mount_prefix_override,
             additional_path=self.condor_addl_path,
             cache_dir=self.condor_cache_dir,
+            use_S3_external_url=self.condor_use_s3_external_url,
         )
 
     def print_config(self, output: TextIO):
@@ -309,6 +316,7 @@ class CDMTaskServiceConfig:
             f"HTCondor S3 access secret path: {self.condor_s3_access_secret_path}",
             f"HTCondor additional $PATH elements: {self.condor_addl_path}",
             f"HTCondor cache dir: {self.condor_cache_dir}",
+            f"HTCondor use external S3 URL: {self.condor_use_s3_external_url}",
             f"HTCondor exe path: {self.condor_exe_path}",
             f"HTCondor exe url override: {self.condor_exe_url_override}",
             "External executor job update timeout (min): "

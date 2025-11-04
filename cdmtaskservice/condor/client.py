@@ -142,7 +142,7 @@ class CondorClient:
             "GLOBAL_CACHE_DIR": self._config.cache_dir,
             "SERVICE_ROOT_URL": self._config.service_root_url,
             "TOKEN_PATH": self._config.token_path,
-            "S3_URL": self._s3config.internal_url,  # could add a toggle to use external if needed
+            "S3_URL": self._s3config.get_url(self._config.use_S3_external_url),
             "S3_ACCESS_KEY": self._s3config.access_key,
             "S3_SECRET_PATH": self._config.s3_access_secret_path,
             "S3_ERROR_LOG_PATH": self._s3config.error_log_path,
