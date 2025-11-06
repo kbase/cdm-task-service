@@ -265,19 +265,18 @@ class NERSCJAWSRunner(JobFlow):
         res = jaws_client.result(jaws_info)
         if res == jaws_client.JAWSResult.SUCCESS:
             await self._updates.update_job_state(
-                job.id, submitting_upload(cpu_hours=jaws_info["cpu_hours"])
+                job.id, submitting_upload()
             )
             await self._coman.run_coroutine(self._upload_files(job, jaws_info))
         elif res == jaws_client.JAWSResult.FAILED:
             await self._updates.update_job_state(
-                job.id, submitting_error_processing(cpu_hours=jaws_info["cpu_hours"])
+                job.id, submitting_error_processing()
             )
             await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
         elif res == jaws_client.JAWSResult.CANCELED:
             await self._updates.update_job_state(job.id, error(
                 "JAWS reported the job as canceled",
                 user_error="The job was unexpectedly canceled",
-                cpu_hours=jaws_info["cpu_hours"],
             ))
             
         elif res == jaws_client.JAWSResult.SYSTEM_ERROR:
@@ -286,7 +285,6 @@ class NERSCJAWSRunner(JobFlow):
             await self._updates.update_job_state(job.id, error(
                 "JAWS failed to run the job - check the JAWS job logs",
                 user_error="An unexpected error occurred",
-                cpu_hours=jaws_info["cpu_hours"],
             ))
         else:  # should never happen
             raise ValueError(f"unexpected JAWS result: {res}")
