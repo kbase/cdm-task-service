@@ -178,8 +178,6 @@ class CondorClient:
             "error": f"cts-{job.id}-$(container_number).err",
             "log": f"cts-{job.id}-$(container_number).log",
             "transfer_output_files": f"{logprefix}.out, {logprefix}.err",
-            "transfer_output_remaps": f"{logprefix}.out = cts/{job.id}/{logprefix}.out; "
-                + f"{logprefix}.err = cts/{job.id}/{logprefix}.err",
             "request_cpus": str(job.job_input.cpus),
             "request_memory": mem,
             # request_disk needed?
