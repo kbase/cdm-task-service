@@ -2,9 +2,8 @@
 A builder of Workflow Definition Language documents for the purposes of running CTS jobs with JAWS.
 '''
 
-# TODO TEST automated tests
 # TODO TEST parse output with miniwdl or something for syntax checking
-# TODO TEST manually test with JAWS
+# TODO TEST write manual test for testing with JAWS
 
 import os
 from pathlib import Path
@@ -12,6 +11,7 @@ import math
 import shlex
 from typing import NamedTuple, Any
 
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.models import (
     Job,
     S3FileWithDataID,
@@ -40,7 +40,7 @@ def generate_wdl(
     job: Job,
     file_mapping: dict[S3FileWithDataID, Path],
     manifest_file_list: list[Path] = None,
-    relative_refdata_path: Path = None
+    relative_refdata_path: Path = None,
 ) -> JawsInput:
     """
     Generate input for a JAWS run in the form of a WDL file and input.json file contents.
@@ -62,21 +62,23 @@ def generate_wdl(
     # If the manifest file name / path changes that'll break the JAWS cache, need to think
     # about that
     # How often will jobs run with identical manifest files though? Maybe MD5 based caching?
+    _not_falsy(job, "job")
+    _not_falsy(file_mapping, "file_mapping")
     if relative_refdata_path and not job.get_refdata_mount_point():
         raise ValueError(
             "If a refdata path is supplied, a mount point for the job must be supplied"
         )
     if not job.job_input.inputs_are_S3File():
-        raise ValueError("input files must be S3 files with the E-tag")
-    job_files = job.job_input.get_files_per_container()
+        raise ValueError("input files must be S3 files with a checksum")
     param = job.job_input.params.get_file_parameter()
     if param and param.type is ParameterType.MANIFEST_FILE and (
         not manifest_file_list or job.job_input.num_containers != len(manifest_file_list)
     ):
         raise ValueError(
-            "If a manifest file is specified in the job parameters manifest_file_list "
+            "If a manifest file is specified in the job parameters, manifest_file_list "
             + "is required and its length must match the number of containers for the job"
         )
+    job_files = job.job_input.get_files_per_container()
     workflow_name = job.image.name.translate(_IMAGE_TRANS_CHARS)
     file_to_rel_path = determine_file_locations(job.job_input)
     input_files = []
@@ -250,7 +252,7 @@ def _process_environment(
     if job.job_input.params.environment:
         for envkey, enval in job.job_input.params.environment.items():
             enval = _process_parameter(
-                enval, job, container_num, files, file_to_rel_path, manifest
+                enval, job, container_num, files, file_to_rel_path, manifest, no_flag=True
             )
             env.append(f'{envkey}={enval}')
     return env
@@ -264,17 +266,19 @@ def _process_parameter(
     file_to_rel_path: dict[S3FileWithDataID, Path],
     manifest: Path | None,
     as_list: bool = False,
+    no_flag: bool = False,
 ) -> str | list[str]:
     if isinstance(param, Parameter):
+        flag = None if no_flag else param.get_flag()
         match param.type:
             case ParameterType.INPUT_FILES:
                 param = _join_files(
-                    files, param.input_files_format, job, file_to_rel_path, param.get_flag()
+                    files, param.input_files_format, job, file_to_rel_path, flag
                 )
             case ParameterType.MANIFEST_FILE:  # implies manifest file is not None
-                param = _handle_manifest(job, manifest, param.get_flag())
+                param = _handle_manifest(job, manifest, flag)
             case ParameterType.CONTAINTER_NUMBER:
-                param = _handle_container_num(param, container_num)
+                param = _handle_container_num(param, container_num, flag)
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
@@ -283,12 +287,11 @@ def _process_parameter(
     return [param] if as_list and not isinstance(param, list) else param
 
 
-def _handle_container_num(p: Parameter, container_num: int) -> str | list[str]:
+def _handle_container_num(p: Parameter, container_num: int, flag: str | None) -> str | list[str]:
     # similar to the function below
     pre = p.container_num_prefix if p.container_num_prefix else ""
     suf = p.container_num_suffix if p.container_num_suffix else ""
     cn = f"{pre}{container_num}{suf}"
-    flag = p.get_flag()
     if flag:
         if flag.endswith("="):
             # TODO TEST not sure if this will work

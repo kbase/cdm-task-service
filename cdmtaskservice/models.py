@@ -416,7 +416,7 @@ class Parameters(BaseModel):
                 if p.input_files_format is InputFilesFormat.SPACE_SEPARATED_LIST:
                     raise ValueError(
                         f"{loc} may not have {InputFilesFormat.SPACE_SEPARATED_LIST.value} "
-                        + f" set as a {ParameterType.INPUT_FILES.value} type"
+                        + f"set as a {ParameterType.INPUT_FILES.value} type"
                     )
             if param is not None:
                 raise ValueError(
