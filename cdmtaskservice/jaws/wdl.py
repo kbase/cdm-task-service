@@ -283,7 +283,7 @@ def _process_parameter(
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
     else:
-        shlex.quote(param)
+        param = shlex.quote(param)
     return [param] if as_list and not isinstance(param, list) else param
 
 
