@@ -64,14 +64,14 @@ _BASEJOB = models.AdminJobDetails(
 
 _BASESUBJOB1 = models.SubJob(
     id="bar",
-    sub_id=1,
+    sub_id=0,
     state=models.JobState.CREATED,
     transition_times=[models.JobStateTransition(state=models.JobState.CREATED,time=_SAFE_TIME)]
 )
 _BASESUBJOB2 = _BASESUBJOB1.model_copy(deep=True)
-_BASESUBJOB2.sub_id = 2
+_BASESUBJOB2.sub_id = 1
 _BASESUBJOB3 = _BASESUBJOB1.model_copy(deep=True)
-_BASESUBJOB3.sub_id = 3
+_BASESUBJOB3.sub_id = 2
 
 
 @pytest.mark.asyncio
@@ -269,9 +269,9 @@ async def test_subjob_basic_roundtrip(mondb):
     sjs = [_BASESUBJOB1, _BASESUBJOB2, _BASESUBJOB3]
     await mc.initialize_subjobs(sjs)
     
-    for i in range(1, 4):
+    for i in range(3):
         sj = await mc.get_subjob("bar", i)
-        assert sj == sjs[i - 1]
+        assert sj == sjs[i]
     
     sjs_got = await mc.get_subjobs("bar")
     assert sjs_got == sjs 
@@ -297,12 +297,12 @@ async def test_initialize_subjobs_fail_duplicate_ids(mondb):
     # for now just throw a mongo error, this indicates a programming issue
     mc = await MongoDAO.create(mondb)
     bsj2 = _BASESUBJOB2.model_copy(deep=True)
-    bsj2.sub_id = 1
+    bsj2.sub_id = 0
     
     sjs = [_BASESUBJOB1, bsj2, _BASESUBJOB3]
     err = (
         "E11000 duplicate key error collection: testing.subjobs index: id_1_sub_id_1 dup key: "
-        + "{ id: \"bar\", sub_id: 1"
+        + "{ id: \"bar\", sub_id: 0"
     )
     with pytest.raises(BulkWriteError, match=err):
         await mc.initialize_subjobs(sjs)
@@ -313,18 +313,18 @@ async def test_get_subjob_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB2])
     
-    await get_subjob_fail(mc, None, 2, ValueError("job_id is required"))
-    await get_subjob_fail(mc, "   \t   ", 2, ValueError("job_id is required"))
+    await get_subjob_fail(mc, None, 1, ValueError("job_id is required"))
+    await get_subjob_fail(mc, "   \t   ", 1, ValueError("job_id is required"))
     await get_subjob_fail(mc, "bar", None, ValueError("subjob_id is required"))
-    await get_subjob_fail(mc, "bar", -1, ValueError("subjob_id must be >= 1"))
-    await get_subjob_fail(mc, "foo", 2, NoSuchSubJobError(
-        "No sub job with job ID 'foo' and sub job ID 2 exists"
+    await get_subjob_fail(mc, "bar", -1, ValueError("subjob_id must be >= 0"))
+    await get_subjob_fail(mc, "foo", 1, NoSuchSubJobError(
+        "No sub job with job ID 'foo' and sub job ID 1 exists"
     ))
-    await get_subjob_fail(mc, "bar", 1, NoSuchSubJobError(
-        "No sub job with job ID 'bar' and sub job ID 1 exists"
+    await get_subjob_fail(mc, "bar", 0, NoSuchSubJobError(
+        "No sub job with job ID 'bar' and sub job ID 0 exists"
     ))
-    await get_subjob_fail(mc, "bar", 3, NoSuchSubJobError(
-        "No sub job with job ID 'bar' and sub job ID 3 exists"
+    await get_subjob_fail(mc, "bar", 2, NoSuchSubJobError(
+        "No sub job with job ID 'bar' and sub job ID 2 exists"
     ))
 
 
@@ -355,10 +355,10 @@ async def test_update_subjob(mondb):
 
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
     dt2 = dt + datetime.timedelta(minutes=1)
-    await mc.update_subjob_state("bar", 1, submitted_download(), dt)
-    await mc.update_subjob_state("bar", 1, submitting_job(), dt)
-    await mc.update_subjob_state("bar", 1, error("adminerr"), dt2)
-    got = await mc.get_subjob("bar", 1)
+    await mc.update_subjob_state("bar", 0, submitted_download(), dt)
+    await mc.update_subjob_state("bar", 0, submitting_job(), dt)
+    await mc.update_subjob_state("bar", 0, error("adminerr"), dt2)
+    got = await mc.get_subjob("bar", 0)
     
     # check expected job structure
     expected = _BASESUBJOB1.model_copy(deep=True)
@@ -379,20 +379,20 @@ async def test_update_subjob_fail(mondb):
     
     u = submitted_download()
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
-    await fail_update_subjob(mc, None, 1, u, dt, ValueError("job_id is required"))
-    await fail_update_subjob(mc, "   \t  ", 1, u, dt, ValueError("job_id is required"))
+    await fail_update_subjob(mc, None, 0, u, dt, ValueError("job_id is required"))
+    await fail_update_subjob(mc, "   \t  ", 0, u, dt, ValueError("job_id is required"))
     await fail_update_subjob(mc, "bar", None, u, dt, ValueError("subjob_id is required"))
-    await fail_update_subjob(mc, "bar", 0, u, dt, ValueError("subjob_id must be >= 1"))
-    await fail_update_subjob(mc, "bar", 1, None, dt, ValueError("update is required"))
-    await fail_update_subjob(mc, "bar", 1, u, None, ValueError("time is required"))
-    await fail_update_subjob(mc, "foo", 1, u, dt, NoSuchSubJobError(
-        "No job with ID 'foo' and subjob ID 1 in state created exists"
+    await fail_update_subjob(mc, "bar", -1, u, dt, ValueError("subjob_id must be >= 0"))
+    await fail_update_subjob(mc, "bar", 0, None, dt, ValueError("update is required"))
+    await fail_update_subjob(mc, "bar", 0, u, None, ValueError("time is required"))
+    await fail_update_subjob(mc, "foo", 0, u, dt, NoSuchSubJobError(
+        "No job with ID 'foo' and subjob ID 0 in state created exists"
     ))
-    await fail_update_subjob(mc, "bar", 2, u, dt, NoSuchSubJobError(
-        "No job with ID 'bar' and subjob ID 2 in state created exists"
+    await fail_update_subjob(mc, "bar", 1, u, dt, NoSuchSubJobError(
+        "No job with ID 'bar' and subjob ID 1 in state created exists"
     ))
-    await fail_update_subjob(mc, "bar", 1, submitting_upload(), dt, NoSuchSubJobError(
-        "No job with ID 'bar' and subjob ID 1 in state job_submitted exists"
+    await fail_update_subjob(mc, "bar", 0, submitting_upload(), dt, NoSuchSubJobError(
+        "No job with ID 'bar' and subjob ID 0 in state job_submitted exists"
     ))
 
 
@@ -409,13 +409,13 @@ async def test_subjob_hidden_fields(mondb):
     await mc.initialize_subjobs([_BASESUBJOB1])
 
     # check that the internal fields are set correctly
-    job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 1})
+    job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 0})
     check_trans_retry_fields(job)
 
     # check that updating subjob state sets internal fields
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
-    await mc.update_subjob_state("bar", 1, submitted_download(), dt)
-    got = await mc.get_subjob("bar", 1)
+    await mc.update_subjob_state("bar", 0, submitted_download(), dt)
+    got = await mc.get_subjob("bar", 0)
     
     # check expected job structure
     expected = _BASESUBJOB1.model_copy(deep=True)
@@ -426,7 +426,7 @@ async def test_subjob_hidden_fields(mondb):
     assert got == expected
     
     # check that the internal fields are set correctly
-    job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 1})
+    job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 0})
     check_trans_retry_fields(job)
 
 
@@ -448,23 +448,23 @@ async def test_have_subjobs_reached_state(mondb):
     assert await mc.have_subjobs_reached_state("bar", c, ds) == {c: (3, _SAFE_TIME), ds: (0, None)}
     
     dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
-    await mc.update_subjob_state("bar", 1, submitted_download(), dt1)
+    await mc.update_subjob_state("bar", 0, submitted_download(), dt1)
     assert await mc.have_subjobs_reached_state("bar", c) == {c: (3, _SAFE_TIME)}
     assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (1, dt1)}
     assert await mc.have_subjobs_reached_state("bar", c, ds) == {c: (3, _SAFE_TIME), ds: (1, dt1)}
     
     dt2 = dt1 + datetime.timedelta(minutes=1)
-    await mc.update_subjob_state("bar", 2, submitted_download(), dt2)
+    await mc.update_subjob_state("bar", 1, submitted_download(), dt2)
     assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (2, dt2)}
     assert await mc.have_subjobs_reached_state("bar", c, ds) == {c: (3, _SAFE_TIME), ds: (2, dt2)}
     
     dt3 = dt1 + datetime.timedelta(seconds=1)
-    await mc.update_subjob_state("bar", 3, submitted_download(), dt3)
+    await mc.update_subjob_state("bar", 2, submitted_download(), dt3)
     assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (3, dt2)}
     assert await mc.have_subjobs_reached_state("bar", c, ds) == {c: (3, _SAFE_TIME), ds: (3, dt2)}
     
     dt4 = dt1 + datetime.timedelta(hours=1)
-    await mc.update_subjob_state("bar", 3, submitting_job(), dt4)
+    await mc.update_subjob_state("bar", 2, submitting_job(), dt4)
     assert await mc.have_subjobs_reached_state("bar", ds) == {ds: (3, dt2)}
     assert await mc.have_subjobs_reached_state("bar", js) == {js: (1, dt4)}
     assert await mc.have_subjobs_reached_state("bar", *list(models.JobState)) == {
