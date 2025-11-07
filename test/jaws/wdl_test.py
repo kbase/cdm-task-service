@@ -1,5 +1,3 @@
-# TODO TEST add tests
-
 import datetime
 import inspect
 from pathlib import Path
