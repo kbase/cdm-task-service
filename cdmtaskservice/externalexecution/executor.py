@@ -154,7 +154,7 @@ class Executor:
             await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 
     def _get_files_for_container(self, job: models.AdminJobDetails) -> list[models.S3File]:
-        return job.job_input.get_files_per_container()[self._cfg.container_number - 1]
+        return job.job_input.get_files_per_container()[self._cfg.container_number]
 
     async def _download_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
         s3objs = set(self._get_files_for_container(job))
@@ -162,7 +162,7 @@ class Executor:
         filelocs = {k: v for k, v in filelocs.items() if k in s3objs}
         s3paths = []
         local_paths = []
-        root = Path(".") / "__INPUT__"
+        root = Path(".") / "__input__"
         filerecs = []
         for i, (obj, loc) in enumerate(filelocs.items(), start=1):
             s3paths.append(obj.file)
@@ -198,15 +198,15 @@ Local relative path: {loc}
             prefix, replace = self._cfg.mount_prefix_override.split(":")
             relative = mount_host.relative_to(Path(prefix))
             mount_host = Path(replace) / relative
-        input_ = mount_host / "__INPUT__"
-        output = mount_host / "__OUTPUT__"
+        input_ = mount_host / "__input__"
+        output = mount_host / "__output__"
         # Needs to be global write since the job container user is unknown
-        (mount_container / "__OUTPUT__").mkdir(0x777, parents=True, exist_ok=True)
+        (mount_container / "__output__").mkdir(0x777, parents=True, exist_ok=True)
         mounts = {
             str(input_): job.job_input.params.input_mount_point,
             str(output): job.job_input.params.output_mount_point,
         }
-        log_prefix = f"container_log_{job.id}-{self._cfg.container_number}"
+        log_prefix = f"cts-{job.id}-{self._cfg.container_number}-container"
         files = set(self._get_files_for_container(job))
         infiles = [job.job_input.params.input_mount_point + "/" + Path(f.file).name for f in files]
         self._logr.info(f"Starting image {job.image.name_with_digest}")
@@ -227,7 +227,7 @@ Local relative path: {loc}
         )
         # TODO NOW remove below, push exit code to server w/ log upload or download_submitting
         print("output:")
-        for f in (mount_container / "__OUTPUT__" ).iterdir():
+        for f in (mount_container / "__output__" ).iterdir():
             print(f)
         print(f"Exit code: {exit_code}")
 

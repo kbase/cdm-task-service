@@ -373,8 +373,8 @@ class MongoDAO:
         query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
         if update.current_state:
             query[models.FLD_COMMON_STATE] = update.current_state.value
-        if subjob_id != None:
-            query[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id")
+        if subjob_id is not None:
+            query[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
         transition = {
             models.FLD_COMMON_STATE_TRANSITION_STATE: update.new_state.value,
             models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
@@ -397,7 +397,7 @@ class MongoDAO:
         )
         if not res.matched_count:
             cs = f"in state {update.current_state.value} " if update.current_state else ""
-            if subjob_id:
+            if subjob_id is not None:
                 raise NoSuchSubJobError(
                     f"No job with ID '{job_id}' and subjob ID {subjob_id} {cs}exists"
                 )
@@ -595,7 +595,7 @@ class MongoDAO:
         """
         doc = await self._col_subjobs.find_one({
             models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
-            models.FLD_SUBJOB_ID: _check_num(subjob_id, "subjob_id")
+            models.FLD_SUBJOB_ID: _check_num(subjob_id, "subjob_id", minimum=0)
         })
         # if subjob_id isn't an integer, will throw an error. Could add a precheck later
         if not doc:
@@ -639,7 +639,7 @@ class MongoDAO:
             update,
             time,
             # if not an int, error will occur. Could add a more stringent check later
-            subjob_id=_check_num(subjob_id, "subjob_id")
+            subjob_id=_check_num(subjob_id, "subjob_id", minimum=0)
         )
 
     async def have_subjobs_reached_state(self, job_id: str, *states: models.JobState
