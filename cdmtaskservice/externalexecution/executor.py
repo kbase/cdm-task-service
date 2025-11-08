@@ -11,11 +11,11 @@ import time
 import traceback
 from typing import TextIO, Any
 
+from cdmtaskservice.argument_generator import ArgumentGenerator
 from cdmtaskservice.exceptions import ChecksumMismatchError
 from cdmtaskservice.externalexecution.config import Config
 from cdmtaskservice.externalexecution import container_runner
 from cdmtaskservice.git_commit import GIT_COMMIT
-from cdmtaskservice.input_file_locations import determine_file_locations
 from cdmtaskservice import models
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
@@ -41,6 +41,7 @@ class Executor:
             headers={"Authorization": f"Bearer {cfg.get_cts_token()}"}
         )
         self._logr = logging.getLogger(__name__)
+        self._args = None
     
     async def __aenter__(self):
         return self
@@ -60,6 +61,7 @@ class Executor:
         job = await self._get_job()
         # we assume here that the service has already error checked the job input
         try:
+            self._args = ArgumentGenerator(job).get_container_arguments(self._cfg.container_number)
             await self._download_files(job)
             await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
             await self._run_container(job)
@@ -153,18 +155,12 @@ class Executor:
         async with self._sess.put(url, json=data) as resp:
             await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 
-    def _get_files_for_container(self, job: models.AdminJobDetails) -> list[models.S3File]:
-        return job.job_input.get_files_per_container()[self._cfg.container_number]
-
     async def _download_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
-        s3objs = set(self._get_files_for_container(job))
-        filelocs = determine_file_locations(job.job_input)
-        filelocs = {k: v for k, v in filelocs.items() if k in s3objs}
         s3paths = []
         local_paths = []
         root = Path(".") / "__input__"
         filerecs = []
-        for i, (obj, loc) in enumerate(filelocs.items(), start=1):
+        for i, (obj, loc) in enumerate(self._args.files.items(), start=1):
             s3paths.append(obj.file)
             local_paths.append(root / loc)
             filerecs.append(f"""
@@ -182,7 +178,7 @@ Local relative path: {loc}
         )
         # TODO PERFORMACE configure concurrency
         await self._s3cli.download_objects_to_file(S3Paths(s3paths), local_paths)
-        for obj, loc in filelocs.items():
+        for obj, loc in self._args.files.items():
             # Could parallelize. Probably not worth it
             crc = crc64nvme_b64(root / loc)
             if crc != obj.crc64nvme:
@@ -207,22 +203,14 @@ Local relative path: {loc}
             str(output): job.job_input.params.output_mount_point,
         }
         log_prefix = f"cts-{job.id}-{self._cfg.container_number}-container"
-        files = set(self._get_files_for_container(job))
-        infiles = [job.job_input.params.input_mount_point + "/" + Path(f.file).name for f in files]
         self._logr.info(f"Starting image {job.image.name_with_digest}")
         exit_code = await container_runner.run_container(
             job.image.name_with_digest,
             Path(".") / (log_prefix + ".out"),
             Path(".") / (log_prefix + ".err"),
             mounts=mounts,
-            # TODO NOW real command, this is just for testing
-            command=[
-                "stats",
-                "--tabular",
-                "-o", job.job_input.params.output_mount_point + "/out.csv",
-                "-i",
-            ] + infiles,
-            # TODO NOW env
+            command=self._args.args,
+            env=self._args.env,
             post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
         )
         # TODO NOW remove below, push exit code to server w/ log upload or download_submitting
