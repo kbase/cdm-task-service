@@ -46,8 +46,9 @@ class ArgumentGenerator:
         
         job - the job for which arguments will be generated.
         manifest_file_list - required if the job specifies manifest files. A list of file paths
-        where the manifest will be present in the container, in container order,
-        one per container.
+            where the manifest will be present in the container, in container order,
+            one per container. The path segments may only contain alphanumerics, period,
+            hyphen, and the underscore.
         """
         # If the kbase site ever supports manifest files this will need more thought as it
         # will be run in a context where only one manifest file exists vs. a list

@@ -41,10 +41,10 @@ def generate_wdl(
     job_input - the input for the job.
     file_mapping - a mapping of the input S3 files to their paths at the JAWS site.
         These can be absolute paths or relative to the location of the WDL file. The JAWS
-        site path segments may only contain alphanumerics, period, hyphen,and the underscore 
+        site path segments may only contain alphanumerics, period, hyphen, and the underscore 
     manifest_file_list - A list of manifest paths at the JAWS site.
         These can be absolute paths or relative to the location of the WDL file.
-        The path segments may only contain alphanumerics, period, hyphen,and the underscore.
+        The path segments may only contain alphanumerics, period, hyphen, and the underscore.
         Required if manifest files are specified in the job input.
         The manifest files will be mounted directly into the input mount point for the job,
         regardless of the path, and so must not collide with any other files in the input root.

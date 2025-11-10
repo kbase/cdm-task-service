@@ -73,7 +73,7 @@ async def run_container(
 
     container = client.containers.run(
         image=image,
-        command=command,
+        entrypoint=command,
         environment=env,
         volumes=volumes,
         detach=True,
