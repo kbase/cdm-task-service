@@ -119,7 +119,7 @@ class KBaseRunner(JobFlow):
                         time=update_time
                     ),
                 ]
-            ) for i in range(1, job_input.num_containers + 1)
+            ) for i in range(job_input.num_containers)
         ])
 
     async def get_subjobs(self, job_id: str, container_num: int = None
@@ -132,15 +132,15 @@ class KBaseRunner(JobFlow):
             Otherwise return a list of all containers.
         """
         _require_string(job_id, "job_id")
-        if container_num:
-            _check_num(container_num, "container_num")
+        if container_num is not None:
+            _check_num(container_num, "container_num", minimum=0)
             return await self._mongo.get_subjob(job_id, container_num)
         return await self._mongo.get_subjobs(job_id)
 
     async def get_job_external_runner_status(
         self,
         job: models.AdminJobDetails,
-        container_number: int = 1
+        container_number: int = 0
     ) -> dict[str, Any]:
         """
         Get details from the external job runner (HTCondor in this case) about the job.
@@ -151,11 +151,12 @@ class KBaseRunner(JobFlow):
         # allow getting details from earlier runs? Seems unnecessary
         if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
-        _check_num(container_number, "container_number")
-        if container_number > job.job_input.num_containers:
+        _check_num(container_number, "container_number", minimum=0)
+        if container_number >= job.job_input.num_containers:
             raise ValueError(
                 f"Provided container number {container_number} is larger than "
-                + f"the number of containers for the job: {job.job_input.num_containers}")
+                + "the number of containers for the job when indexed from 0: "
+                + f"{job.job_input.num_containers}")
         if not job.htcondor_details or not job.htcondor_details.cluster_id:
             return {}  # job not submitted yet
         # if cluster_id exists, there's a cluster ID in it
@@ -232,7 +233,7 @@ class KBaseRunner(JobFlow):
         """
         # TODO UPDATE_SUBJOB add other states.
         _not_falsy(job, "job")
-        _check_num(container_num, "conteiner_num")
+        _check_num(container_num, "conteiner_num", minimum=0)
         _not_falsy(update, "update")
         if update.new_state not in self._SUBJOB_STATE_TO_UPDATE_FUNC:
             raise UnsupportedOperationError(

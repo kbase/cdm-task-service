@@ -164,7 +164,7 @@ class CondorClient:
         # A lot of this is copied from
         # https://github.com/kbase/execution_engine2/blob/develop/lib/execution_engine2/utils/Condor.py
         mem = str(int(job.job_input.memory / (1024 * 1024)))  # Condor expects MiB
-        logprefix = f"container_log_{job.id}-$(container_number)"
+        logprefix = f"cts-{job.id}-$(container_number)-container"
         subdict = {
             "shell": f"bash {self._exe_name}",
             # Has to exist locally and on the condor Schedd host
@@ -198,7 +198,7 @@ class CondorClient:
         sub = htcondor2.Submit(subdict | STATIC_SUB)
         itemdata = [
             {"container_number": str(i)}
-            for i in range(1, job.job_input.num_containers + 1)
+            for i in range(job.job_input.num_containers)
         ]
         return sub, itemdata
 
@@ -230,11 +230,11 @@ class CondorClient:
         """
         Get the HTCondor status for a specific container for a job, specified by the job's
         HTCondor ClusterID.
-        The container_number in practice is the HTCondor ProcId + 1.
+        The container_number in practice is the same as the HTCondor ProcId.
         A subset of the job ClassAd fields are returned.
         """
         _check_num(cluster_id, "cluster_id")
-        _check_num(container_number, "container_number")
+        _check_num(container_number, "container_number", minimum=0)
         constraint = f"ClusterId == {cluster_id} && {_AD_CONTAINER_NUMBER} == {container_number}"
         job_ads = await asyncio.to_thread(  # Don't block the event loop
             self._schedd.query,

@@ -24,7 +24,7 @@ class Config(BaseSettings):
         validation_alias="CONTAINER_NUMBER",
         examples=[1],
         description="The container number within the job",
-        ge=1,
+        ge=0,
     )]
     cts_url: Annotated[str, Field(
         validation_alias="SERVICE_ROOT_URL",

@@ -125,7 +125,7 @@ class WhoAmI(BaseModel):
     """ Information about the user. """
     user: Annotated[str, Field(examples=["kbasehelp"], description="The user's username.")]
     roles: Annotated[list[CTSRole], Field(
-        example=[[CTSRole.FULL_ADMIN]], description="The users's roles for the service."
+        examples=[[CTSRole.FULL_ADMIN]], description="The users's roles for the service."
     )]
     allowed_paths: Annotated[list[AllowedPath], Field(
         examples=[AllowedPath(path="cts/io", perm=PathPermission.WRITE)],
@@ -609,7 +609,7 @@ async def get_job_containers(
 _ANN_CONTAINER_NUMBER = Annotated[int, FastPath(
     openapi_examples={"container_num": {"value": 2}},
     description="The container / subjob number.",
-    ge=1,
+    ge=0,
 )]
 
 
@@ -660,8 +660,8 @@ async def get_job_runner_status(
         openapi_examples={"container_number": {"value": 12}},
         description="The number of the container to query. If the containers are tracked "
             + "by the external runner rather than this service, this parameter is ignored.",
-        ge=1
-    )] = 1, 
+        ge=0
+    )] = 0,
     user: CTSUser=Depends(_AUTH),
 ) -> dict[str, Any]:
     _ensure_admin(user, "Only service administrators can get job runner status.")
