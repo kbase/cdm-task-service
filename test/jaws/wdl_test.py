@@ -1,16 +1,23 @@
 import datetime
 import inspect
 from pathlib import Path
+import pytest
+import re
 
 from cdmtaskservice.jaws import wdl
 from cdmtaskservice import models
 from cdmtaskservice import sites
-import pytest
 
 
 # Note that a lot of stuff in the wdl code is shell quoted, but the Job model
 # really locks down string inputs, so it's impossible to pass anything that needs quoting
-# other than the image entrypoint
+# other than the image entrypoint and input files
+
+
+BADCHARS = [
+    "*", ";", ":", "&", "|", "\n", ">", "<", "`", "(", ")", "$", "'", '"', "#", "{", "}",
+    "[", "]", "?", "~", "!"
+]
 
 _T1 = datetime.datetime(2025, 3, 31, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
 
@@ -176,7 +183,7 @@ def test_wdl_resources_and_io_mounts():
     ji = _JOB_BASIC.job_input.model_copy(update={
         "params": p,
         "cpus": 256,
-        "runtime": datetime.timedelta(hours=12),
+        "runtime": datetime.timedelta(hours=11, minutes=59, seconds=1),  # test rounding up
         "memory": 1_000_000_000_006,
     })
     job = _JOB_BASIC.model_copy(update={"job_input": ji})
@@ -194,7 +201,7 @@ def test_wdl_resources_and_io_mounts():
 def test_wdl_entrypoint_quoted():
     # also tests a longer entrypoint
     mapping = {models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar")}
-    im = _JOB_BASIC.image.model_copy(update={"entrypoint": ["prog;ram", "sub*command"]})
+    im = _JOB_BASIC.image.model_copy(update={"entrypoint": ["prog;ram", "sub*com'mand"]})
     job = _JOB_BASIC.model_copy(update={"image": im})
     jawsinput = wdl.generate_wdl(job, mapping)
     expwdl = load_test_data("basic.wdl")
@@ -202,7 +209,7 @@ def test_wdl_entrypoint_quoted():
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["file1"]],
         "some_image.environment_list": [[]],
-        "some_image.cmdline_list": [["'prog;ram'", "'sub*command'"]]
+        "some_image.cmdline_list": [["'prog;ram'", '\'sub*com\'"\'"\'mand\'',]]
     }
     assert jawsinput.wdl == expwdl
 
@@ -227,16 +234,19 @@ def test_wdl_manifest_files():
         "num_containers": 2,
     })
     job = _JOB_BASIC.model_copy(update={"job_input": ji})
-    jawsinput = wdl.generate_wdl(job, mapping, manifest_file_list=[Path("m1"), Path("m2")])
+    # test absolute and relative paths and allowed special chars
+    jawsinput = wdl.generate_wdl(
+        job, mapping, manifest_file_list=[Path("m.-_1"), Path("/a.-_bs/m2")]
+    )
     expwdl = load_test_data("basic_with_manifest.wdl")
     assert jawsinput.input_json == {
         "some_image.input_files_list": [["foo/bar2"], ["foo/bar"]],
         "some_image.file_locs_list": [["file1"], ["file2"]],
         "some_image.environment_list": [[], []],
         "some_image.cmdline_list": [
-            ["main_command", "/input_files/m1"], ["main_command", "/input_files/m2"]
+            ["main_command", "/input_files/m.-_1"], ["main_command", "/input_files/m2"]
         ],
-        "some_image.manifest_list": ["m1", "m2"],
+        "some_image.manifest_list": ["m.-_1", "/a.-_bs/m2"],
     }
     assert jawsinput.wdl == expwdl
 
@@ -252,14 +262,14 @@ def test_wdl_manifest_file_with_std_flag():
     ])
     ji = _JOB_BASIC.job_input.model_copy(update={"params": p})
     job = _JOB_BASIC.model_copy(update={"job_input": ji})
-    jawsinput = wdl.generate_wdl(job, mapping, manifest_file_list=[Path("manipedi")])
+    jawsinput = wdl.generate_wdl(job, mapping, manifest_file_list=[Path("relative/manipedi")])
     expwdl = load_test_data("basic_with_manifest.wdl")
     assert jawsinput.input_json == {
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["file1"]],
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [["main_command", "-m", "/input_files/manipedi"]],
-        "some_image.manifest_list": ["manipedi"],
+        "some_image.manifest_list": ["relative/manipedi"],
     }
     assert jawsinput.wdl == expwdl
 
@@ -368,6 +378,39 @@ def test_wdl_args_space_sep_list_and_container_number():
     assert jawsinput.wdl == expwdl
 
 
+def test_wdl_args_space_sep_list_quoted():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/fi*le1"): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/fil]e2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(args=[
+            "im_an_argument",
+            models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.SPACE_SEPARATED_LIST,
+            ),
+        ],
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file="bucket/fi*le1"),
+            models.S3FileWithDataID(file="bucket/fil]e2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [["'fi*le1'", "'fil]e2'"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [[
+            "main_command", "im_an_argument", "'/input_files/fi*le1'", "'/input_files/fil]e2'",
+        ]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
 def test_wdl_args_space_sep_list_and_container_number_with_std_flag():
     mapping = {
         models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar"),
@@ -409,6 +452,41 @@ def test_wdl_args_space_sep_list_and_container_number_with_std_flag():
             "main_command", "im_an_argument",
             "--input", "/input_files/file1", "/input_files/file2",
             "--cn1", "0", "-c", "pref/0/suff"
+        ]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
+def test_wdl_args_space_sep_list_with_std_flag_quoted():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/$file1"): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/fi&le2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(args=[
+            "im_an_argument",
+            models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.SPACE_SEPARATED_LIST,
+                flag="--input",
+            ),
+        ],
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file="bucket/$file1"),
+            models.S3FileWithDataID(file="bucket/fi&le2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [["'$file1'", "'fi&le2'"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [[
+            "main_command", "im_an_argument",
+            "--input", "'/input_files/$file1'", "'/input_files/fi&le2'",
         ]]
     }
     assert jawsinput.wdl == expwdl
@@ -460,6 +538,41 @@ def test_wdl_args_space_sep_list_and_container_number_with_equal_flag():
     assert jawsinput.wdl == expwdl
 
 
+def test_wdl_args_space_sep_list_with_equal_flag_quoted():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/f!ile1"): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/file(2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(args=[
+            "im_an_argument",
+            models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.SPACE_SEPARATED_LIST,
+                flag="--input=",
+            ),
+        ],
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file="bucket/f!ile1"),
+            models.S3FileWithDataID(file="bucket/file(2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [["'f!ile1'", "'file(2'"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [[
+            "main_command", "im_an_argument",
+            "'--input=/input_files/f!ile1'", "'/input_files/file(2'",
+        ]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
 def test_wdl_args_comma_sep_list():
     mapping = {
         models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar"),
@@ -488,6 +601,39 @@ def test_wdl_args_comma_sep_list():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "/input_files/file1,/input_files/file2",
+        ]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
+def test_wdl_args_comma_sep_list_quoted():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/f[ile1"): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/file2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(args=[
+            "im_an_argument",
+            models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.COMMA_SEPARATED_LIST,
+            ),
+        ],
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file="bucket/f[ile1"),
+            models.S3FileWithDataID(file="bucket/file2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [["'f[ile1'", "file2"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [[
+            "main_command", "im_an_argument", "'/input_files/f[ile1,/input_files/file2'",
         ]]
     }
     assert jawsinput.wdl == expwdl
@@ -527,6 +673,40 @@ def test_wdl_args_comma_sep_list_with_std_flag():
     assert jawsinput.wdl == expwdl
 
 
+def test_wdl_args_comma_sep_list_with_std_flag_quoted():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/fi<le2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(args=[
+            "im_an_argument",
+            models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.COMMA_SEPARATED_LIST,
+                flag="-i"
+            ),
+        ],
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file="bucket/file1"),
+            models.S3FileWithDataID(file="bucket/fi<le2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [["file1", "'fi<le2'"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [[
+            "main_command", "im_an_argument", "-i", "'/input_files/file1,/input_files/fi<le2'",
+        ]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
 def test_wdl_args_comma_sep_list_with_equals_flag():
     mapping = {
         models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar"),
@@ -556,6 +736,40 @@ def test_wdl_args_comma_sep_list_with_equals_flag():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "-input=/input_files/file1,/input_files/file2",
+        ]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
+def test_wdl_args_comma_sep_list_with_equals_flag_quoted():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/f|ile1"): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/file2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(args=[
+            "im_an_argument",
+            models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.COMMA_SEPARATED_LIST,
+                flag="-input="
+            ),
+        ],
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file="bucket/f|ile1"),
+            models.S3FileWithDataID(file="bucket/file2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [["'f|ile1'", "file2"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [[
+            "main_command", "im_an_argument", "'-input=/input_files/f|ile1,/input_files/file2'",
         ]]
     }
     assert jawsinput.wdl == expwdl
@@ -596,6 +810,41 @@ def test_wdl_args_repeated_param_with_std_flag():
     assert jawsinput.wdl == expwdl
 
 
+def test_wdl_args_repeated_param_with_std_flag_quoted():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/fil{e2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(args=[
+            "im_an_argument",
+            models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.REPEAT_PARAMETER,
+                flag="-i"
+            ),
+        ],
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file="bucket/file1"),
+            models.S3FileWithDataID(file="bucket/fil{e2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [["file1", "'fil{e2'"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [[
+            "main_command", "im_an_argument",
+            "-i", "/input_files/file1", "-i", "'/input_files/fil{e2'",
+        ]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
 def test_wdl_args_repeated_param_with_equal_flag():
     mapping = {
         models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar"),
@@ -631,6 +880,41 @@ def test_wdl_args_repeated_param_with_equal_flag():
     assert jawsinput.wdl == expwdl
 
 
+def test_wdl_args_repeated_param_with_equal_flag_quoted():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/#file1"): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/file2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(args=[
+            "im_an_argument",
+            models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.REPEAT_PARAMETER,
+                flag="--infiles="
+            ),
+        ],
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file="bucket/#file1"),
+            models.S3FileWithDataID(file="bucket/file2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [["'#file1'", "file2"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [[
+            "main_command", "im_an_argument",
+            "'--infiles=/input_files/#file1'", "--infiles=/input_files/file2",
+        ]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
 def test_wdl_env_comma_sep_list():
     mapping = {
         models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar"),
@@ -658,6 +942,38 @@ def test_wdl_env_comma_sep_list():
         "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
         "some_image.file_locs_list": [["file1", "file2"]],
         "some_image.environment_list": [["INFILES=/input_files/file1,/input_files/file2"]],
+        "some_image.cmdline_list": [["main_command", "im_an_argument"]]
+    }
+    assert jawsinput.wdl == expwdl
+
+
+def test_wdl_env_comma_sep_list_quoted():
+    mapping = {
+        models.S3FileWithDataID(file='bucket/fil"e1'): Path("foo/bar"),
+        models.S3FileWithDataID(file="bucket/file2"): Path("foo/bar2"),
+    }
+    p = models.Parameters(
+        args=["im_an_argument"],
+        environment={
+            "INFILES": models.ParameterWithFlag(
+                type=models.ParameterType.INPUT_FILES,
+                input_files_format=models.InputFilesFormat.COMMA_SEPARATED_LIST,
+            ),
+        }
+    )
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [
+            models.S3FileWithDataID(file='bucket/fil"e1'),
+            models.S3FileWithDataID(file="bucket/file2"),
+        ],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
+        "some_image.file_locs_list": [['\'fil"e1\'', "file2"]],
+        "some_image.environment_list": [['INFILES=\'/input_files/fil"e1,/input_files/file2\'',]],
         "some_image.cmdline_list": [["main_command", "im_an_argument"]]
     }
     assert jawsinput.wdl == expwdl
@@ -744,13 +1060,26 @@ def test_wdl_fail_manifest_files():
         "If a manifest file is specified in the job parameters, manifest_file_list "
         + "is required and its length must match the number of containers for the job"
     ))
+    for char in BADCHARS:
+        err = re.escape(f"Disallowed manifest path: b{char}ar")
+        _wdl_fail(job, fm, [Path(f"b{char}ar")], None, ValueError(err))
+        _wdl_fail(job, fm, [Path(f"b{char}ar/foo")], None, ValueError(err))
 
 
-def test_wdl_fail_missing_file_mapping():
+def test_wdl_fail_file_mapping():
     fm = {models.S3FileWithDataID(file="bucket/file2"): Path("foo/bar")}
     _wdl_fail(_JOB_BASIC, fm, None, None, ValueError(
         "file_mapping missing file='bucket/file1' crc64nvme=None data_id=None"
     ))
+    for char in BADCHARS:
+        err = re.escape(
+            "Disallowed local path for S3 object file='bucket/file2' crc64nvme=None data_id=None: "
+            + f"fo{char}o"
+        )
+        fm = {models.S3FileWithDataID(file="bucket/file2"): Path(f"fo{char}o")}
+        _wdl_fail(_JOB_BASIC, fm, None, None, ValueError(err))
+        fm = {models.S3FileWithDataID(file="bucket/file2"): Path(f"fo{char}o/bar")}
+        _wdl_fail(_JOB_BASIC, fm, None, None, ValueError(err))
 
 
 def _wdl_fail(

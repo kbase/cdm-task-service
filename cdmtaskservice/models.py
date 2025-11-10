@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
     StringConstraints,
 )
+import re
 from typing import Annotated, Self
 
 from cdmtaskservice.arg_checkers import (
@@ -81,7 +82,9 @@ CRC64NVME_B64ENC_LENGTH=12
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
 # POSIX fully portable filenames
+PATH_REGEX = r"^/?(?:[\w.-]+/)*[\w.-]+/?$"
 ABSOLUTE_PATH_REGEX = r"^/(?:[\w.-]+/)*[\w.-]+/?$"
+PATH_REGEX_COMPILED = re.compile(PATH_REGEX)
 
 
 def _validate_bucket_name(bucket: str, index: int = None) -> str:

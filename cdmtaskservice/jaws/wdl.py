@@ -18,6 +18,7 @@ from cdmtaskservice.models import (
     Parameter,
     ParameterType,
     InputFilesFormat,
+    PATH_REGEX_COMPILED,
 )
 from cdmtaskservice.input_file_locations import determine_file_locations
 from cdmtaskservice.jaws.constants import OUTPUT_FILES, OUTPUT_DIR, STDOUTS, STDERRS
@@ -47,9 +48,11 @@ def generate_wdl(
     
     job_input - the input for the job.
     file_mapping - a mapping of the input S3 files to their paths at the JAWS site.
-        These can be absolute paths or relative to the location of the WDL file.
+        These can be absolute paths or relative to the location of the WDL file. The JAWS
+        site path segments may only contain alphanumerics, period, hyphen,and the underscore 
     manifest_file_list - A list of manifest paths at the JAWS site.
         These can be absolute paths or relative to the location of the WDL file.
+        The path segments may only contain alphanumerics, period, hyphen,and the underscore.
         Required if manifest files are specified in the job input.
         The manifest files will be mounted directly into the input mount point for the job,
         regardless of the path, and so must not collide with any other files in the input root.
@@ -79,6 +82,13 @@ def generate_wdl(
             + "is required and its length must match the number of containers for the job"
         )
     job_files = job.job_input.get_files_per_container()
+    if manifest_file_list:
+        for m in manifest_file_list:
+            if not PATH_REGEX_COMPILED.fullmatch(str(m)):
+                raise ValueError(f"Disallowed manifest path: {m}")
+    for s3o, localpath in file_mapping.items():
+        if not PATH_REGEX_COMPILED.fullmatch(str(localpath)):
+            raise ValueError(f"Disallowed local path for S3 object {s3o}: {localpath}")
     workflow_name = job.image.name.translate(_IMAGE_TRANS_CHARS)
     file_to_rel_path = determine_file_locations(job.job_input)
     input_files = []
@@ -92,7 +102,7 @@ def generate_wdl(
         for f in files:
             if f not in file_mapping:
                 raise ValueError(f"file_mapping missing {f}")
-            ins.append(str(file_mapping[f]))
+            ins.append(shlex.quote(str(file_mapping[f])))
             rels.append(shlex.quote(str(file_to_rel_path[f])))
         input_files.append(ins)
         relpaths.append(rels)
@@ -294,7 +304,8 @@ def _handle_container_num(p: Parameter, container_num: int, flag: str | None) ->
     cn = f"{pre}{container_num}{suf}"
     if flag:
         if flag.endswith("="):
-            # TODO TEST not sure if this will work
+            # not sure if this will work, but since Job flags are shell safe it's
+            # impossible to test
             param = shlex.quote(flag) + cn
         else:
             param = [shlex.quote(flag), cn]
@@ -305,7 +316,7 @@ def _handle_container_num(p: Parameter, container_num: int, flag: str | None) ->
 
 def _handle_manifest(job: Job, manifest: Path, flag: str | None) -> str | list[str]:
     pth = os.path.join(job.job_input.params.input_mount_point, manifest.name)
-    # This is the same as the command separated list case below... not sure if using a common fn
+    # This is the same as the comma separated list case below... not sure if using a common fn
     # makes sense
     if flag:
         if flag.endswith("="):
