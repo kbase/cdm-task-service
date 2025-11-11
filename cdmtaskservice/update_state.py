@@ -43,6 +43,9 @@ class UpdateField(StrEnum):
     OUTPUT_FILE_COUNT = auto()
     """ The number of output file paths. """
     
+    EXIT_CODE = auto()
+    """ The exit code of the job container / subjob. """
+    
     USER_ERROR = auto()
     """ Error information about a process targeted at a user. """
     
@@ -215,7 +218,7 @@ def complete(output_file_paths: list[models.S3File]) -> JobUpdate:
 ####################
 
 
-def submitting_error_processing(cpu_hours: float = None) -> JobUpdate:
+def submitting_error_processing(cpu_hours: float | None = None) -> JobUpdate:
     """
     Update a job's state from job submitted to error processing submitting and add cpu hours,
     if available.
@@ -227,6 +230,29 @@ def submitting_error_processing(cpu_hours: float = None) -> JobUpdate:
             {
                 UpdateField.CPU_HOURS: _check_num(cpu_hours, "cpu_hours", minimum=0)
             } if cpu_hours is not None else {}
+    )
+
+
+def submitting_error_processing_with_exit_code(exit_code: int) -> JobUpdate:
+    """
+    Update a container's state from job submitted to error processing submitting and set the
+    exit code.
+    """
+    return JobUpdate(
+        )._set_current_state(models.JobState.JOB_SUBMITTED
+        )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTING
+        )._set_fields({UpdateField.EXIT_CODE: _check_num(exit_code, "exit_code", minimum=0)}
+    )
+
+
+def submitted_error_processing() -> JobUpdate:
+    """
+    Update a job or containers's state from error processing submitting to
+    error processing submitted.
+    """
+    return JobUpdate(
+        )._set_current_state(models.JobState.ERROR_PROCESSING_SUBMITTING
+        )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTED
     )
 
 
