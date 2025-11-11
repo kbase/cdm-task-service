@@ -1,7 +1,7 @@
 
 from bson.son import SON
 import datetime
-from pymongo.errors import BulkWriteError
+from pymongo.errors import BulkWriteError, DuplicateKeyError
 import pytest
 from typing import Coroutine, Callable, Any
 
@@ -78,13 +78,13 @@ _BASESUBJOB3.sub_id = 2
 async def test_indexes(mongo, mondb):
     await MongoDAO.create(mondb)
     cols = mongo.client[MONGO_TEST_DB].list_collection_names()
-    assert set(cols) == {"jobs", "refdata", "images", "sites", "subjobs"}
-    jobindex = mongo.client[MONGO_TEST_DB]["jobs"].index_information()
+    assert set(cols) == {"jobs", "refdata", "images", "sites", "subjobs", "exitcodes"}
     siteindex = mongo.client[MONGO_TEST_DB]["sites"].index_information()
     assert siteindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "site_1": {"v": 2, "key": [("site", 1)], "unique": True}
     }
+    jobindex = mongo.client[MONGO_TEST_DB]["jobs"].index_information()
     assert jobindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
@@ -109,6 +109,11 @@ async def test_indexes(mongo, mondb):
             'key': [('id', 1), ('transition_times.state', 1), ('transition_times._retry', 1)],
             'v': 2
         }
+    }
+    ecindex = mongo.client[MONGO_TEST_DB]["exitcodes"].index_information()
+    assert ecindex == {
+        "_id_": {"v": 2, "key": [("_id", 1)]},
+        'id_1': {'key': [('id', 1)], 'unique': True, 'v': 2},
     }
     refindex = mongo.client[MONGO_TEST_DB]["refdata"].index_information()
     assert refindex == {
@@ -140,6 +145,48 @@ async def test_job_basic_roundtrip(mondb):
 
     got = await mc.get_job("foo", as_admin=True)
     assert got == _BASEJOB
+
+
+@pytest.mark.asyncio
+async def test_exit_codes_for_standard_job_roundtrip(mondb):
+    mc = await MongoDAO.create(mondb)
+    
+    await mc.save_exit_codes_for_standard_job("foo", [1, 2, 3, 0])
+    await mc.save_exit_codes_for_standard_job("bar", [0])
+    
+    assert await mc.get_exit_codes_for_standard_job("foo") == [1, 2, 3, 0]
+    assert await mc.get_exit_codes_for_standard_job("bar") == [0]
+    assert await mc.get_exit_codes_for_standard_job("baz") is None
+
+
+@pytest.mark.asyncio
+async def test_exit_codes_for_standard_job_upsert(mondb):
+    mc = await MongoDAO.create(mondb)
+    
+    await mc.save_exit_codes_for_standard_job("foo", [1, 2, 3, 0])
+    assert await mc.get_exit_codes_for_standard_job("foo") == [1, 2, 3, 0]
+    
+    await mc.save_exit_codes_for_standard_job("foo", [0])
+    assert await mc.get_exit_codes_for_standard_job("foo") == [0]
+
+
+@pytest.mark.asyncio
+async def test_save_exit_codes_for_standard_job_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    
+    await save_exit_codes_for_standard_job_fail(mc, None, [0], ValueError("job_id is required"))
+    await save_exit_codes_for_standard_job_fail(mc, "  \t   ", [0], ValueError(
+        "job_id is required"
+    ))
+    await save_exit_codes_for_standard_job_fail(mc, "f", None, ValueError(
+        "exit_codes is required"
+    ))
+    await save_exit_codes_for_standard_job_fail(mc, "f", [], ValueError("exit_codes is required"))
+    
+
+async def save_exit_codes_for_standard_job_fail(mc, job_id, exit_codes, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.save_exit_codes_for_standard_job(job_id, exit_codes)
 
 
 @pytest.mark.asyncio
@@ -346,6 +393,35 @@ async def test_get_subjobs_fail(mondb):
 async def get_subjobs_fail(mc, job_id, expected):
     with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
         await mc.get_subjobs(job_id)
+
+
+@pytest.mark.asyncio
+async def test_get_exit_codes_for_subjobs(mondb):
+    mc = await MongoDAO.create(mondb)
+    sj1 = _BASESUBJOB1.model_copy()
+    sj1.exit_code = 3
+    sj2 = _BASESUBJOB2.model_copy()
+    sj2.exit_code = 0
+    await mc.initialize_subjobs([_BASESUBJOB3, sj1, sj2])
+    
+    assert await mc.get_exit_codes_for_subjobs("bar") == [3, 0, None]
+
+
+@pytest.mark.asyncio
+async def test_get_exit_codes_for_subjobs_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB2])
+    
+    await get_exit_codes_for_subjobs_fail(mc, None, ValueError("job_id is required"))
+    await get_exit_codes_for_subjobs_fail(mc, "   \t   ", ValueError("job_id is required"))
+    await get_exit_codes_for_subjobs_fail(mc, "foo", NoSuchSubJobError(
+        "No sub jobs found for job ID 'foo'"
+    ))
+
+
+async def get_exit_codes_for_subjobs_fail(mc, job_id, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.get_exit_codes_for_subjobs(job_id)
 
 
 @pytest.mark.asyncio
