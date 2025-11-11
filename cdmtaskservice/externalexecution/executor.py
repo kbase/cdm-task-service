@@ -64,7 +64,16 @@ class Executor:
             self._args = ArgumentGenerator(job).get_container_arguments(self._cfg.container_number)
             await self._download_files(job)
             await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
-            await self._run_container(job)
+            exit_code = await self._run_container(job)
+            if exit_code > 0:
+                await self._update_job_state_loop(
+                    job, models.JobState.ERROR_PROCESSING_SUBMITTING, exit_code=exit_code
+                )
+                # Nothing to do prior to updating state again
+                await self._update_job_state_loop(job, models.JobState.ERROR_PROCESSING_SUBMITTED)
+                # TODO NEXT upload logs and complete job in error state
+            else:
+                print("Job completed successfully, TODO NEXT upload data w/ crcs")
         except Exception as e:
             self._logr.exception(f"Job failed: {e}")
             await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
@@ -96,7 +105,7 @@ class Executor:
     
     async def _log_service_ver(self):
         async with self._sess.get(self._url) as resp:
-            root = await self._check_resp(resp, "Failed to get job from the CDM Task Service")
+            root = await self._check_resp(resp, "Failed to contact CDM Task Service")
         self._logr.info(f"CTS version: {root['version']} githash: {root['git_hash']}")
     
     async def _get_job(self) -> models.AdminJobDetails:
@@ -107,7 +116,12 @@ class Executor:
         return models.AdminJobDetails.model_validate(jobjson)
 
     async def _update_job_state_loop(
-        self, job: models.AdminJobDetails, state: models.JobState, exception: Exception = None):
+        self,
+        job: models.AdminJobDetails,
+        state: models.JobState,
+        exit_code: int = None,
+        exception: Exception = None
+    ):
         # Considered making a queue so the job could continue while attempting to update
         # but that seems like too much complexity for something that doesn't happen very often
         # and may mean that S3 is down as well
@@ -115,7 +129,7 @@ class Executor:
         backoff_counter = 0
         while True:
             try:
-                await self._update_job_state(job, state, exception=exception)
+                await self._update_job_state(job, state, exit_code=exit_code, exception=exception)
                 return
             except FatalExecutorError:
                 raise
@@ -142,7 +156,11 @@ class Executor:
         return _EXP_BACKOFF_SEC[counter]
 
     async def _update_job_state(
-        self, job: models.AdminJobDetails, state: models.JobState, exception: Exception = None
+        self,
+        job: models.AdminJobDetails,
+        state: models.JobState,
+        exit_code: int = None,
+        exception: Exception = None
     ):
         url = (
             f"{self._url}/external_exec/{job.id}/container/{self._cfg.container_number}/update"
@@ -152,6 +170,8 @@ class Executor:
         if exception:
             data["admin_error"] = str(exception)
             data["traceback"] = traceback.format_exc()
+        if exit_code is not None:
+            data['exit_code'] = exit_code
         async with self._sess.put(url, json=data) as resp:
             await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 
@@ -187,7 +207,7 @@ Local relative path: {loc}
                     + f"'{obj.file}' does not match the actual checksum '{crc}'"
                 )
 
-    async def _run_container(self, job: models.AdminJobDetails):
+    async def _run_container(self, job: models.AdminJobDetails) -> int:
         mount_container = Path.cwd().expanduser().absolute()
         mount_host = mount_container
         if self._cfg.mount_prefix_override:
@@ -213,11 +233,12 @@ Local relative path: {loc}
             env=self._args.env,
             post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
         )
-        # TODO NOW remove below, push exit code to server w/ log upload or download_submitting
+        # TODO NEXT remove below
         print("output:")
         for f in (mount_container / "__output__" ).iterdir():
             print(f)
-        print(f"Exit code: {exit_code}")
+        return exit_code
+
 
 async def run_executor(stderr: TextIO):
     """

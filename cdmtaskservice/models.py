@@ -60,6 +60,7 @@ FLD_JOB_OUTPUTS = "outputs"
 FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
 FLD_JOB_LOGPATH = "logpath"
 FLD_SUBJOB_ID = "sub_id"
+FLD_SUBJOB_EXIT_CODE = "exit_code"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
@@ -844,6 +845,10 @@ class SubJob(_JobBase):
     sub_id: Annotated[int, Field(
         description="The ID of the subjob, identical to the container number."
     )]
+    exit_code: Annotated[int | None, Field(
+        examples=[0, 255],
+        description="The container exit code, if available."
+    )] = None
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
@@ -1028,6 +1033,11 @@ class ContainerUpdate(BaseModel):
         examples=[utcdatetime()],
         description="The time the state transition occurred."
     )]
+    exit_code: Annotated[int | None, Field(
+        examples=[0, 255],
+        description="The container exit code. Ignored if the new state isn't "
+            + "error processing submitting or upload submitting."
+    )] = None
     admin_error: Annotated[str | None, Field(
         examples=["The top fell off"],
         description="The error that occurred for the container, suitable for displaying to a "
