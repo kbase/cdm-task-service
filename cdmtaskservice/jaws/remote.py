@@ -88,15 +88,13 @@ def _get_relative_file_path(file: str) -> str:
     return _require_string(file, "file").split(f"/{constants.OUTPUT_DIR}/")[-1]
 
 
-def get_filenames_for_container(container_num: int) -> tuple[str, str, str]:
+def get_filenames_for_container(container_num: int) -> tuple[str, str]:
     """
-    Given a container number, get the return code, stdout, and stderr filenames in that order
-    as a tuple.
+    Given a container number, get the stdout and stderr filenames in that order as a tuple.
     """
     if container_num < 0:
         raise ValueError("container_num must be >= 0")
     return (
-        f"container-{container_num}-rc.txt",
         f"container-{container_num}-stdout.txt",
         f"container-{container_num}-stderr.txt",
     )
@@ -135,16 +133,14 @@ def parse_errors_json(errors_json: io.BytesIO, logpath: Path) -> list[tuple[int,
         cid = c["shardIndex"]
         if cid in id2rc:
             raise ValueError(f"Duplicate shardIndex: {cid}")
-        rc = c.get("returnCode")
+        rc = c.get("returnCode")  # no rc if container didn't run
         # never seen a structure other than this, may need changes
         err = c["failures"][0]["message"]
         id2rc[cid] = (rc, err)
         # TODO ERRORHANDLING if the docker image string is invalid, there's no stdout or err logs
         #                    and no return code. Make this more flexible and tell the server
         #                    what's available.
-        rcf, sof, sef = get_filenames_for_container(cid)
-        with open(logpath / rcf, "w") as f:
-            f.write(f"{rc if rc is not None else 'container_did_not_run'}\n")
+        sof, sef = get_filenames_for_container(cid)
         with open(logpath / sof, "w") as f:
             f.write(c["stdoutContents"])
         with open(logpath / sef, "w") as f:

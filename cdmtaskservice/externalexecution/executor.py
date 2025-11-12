@@ -64,7 +64,7 @@ class Executor:
             self._args = ArgumentGenerator(job).get_container_arguments(self._cfg.container_number)
             await self._download_files(job)
             await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
-            exit_code = await self._run_container(job)
+            exit_code = await self._run_container(job)  # updates to JOB_SUBMITTED
             if exit_code > 0:
                 await self._update_job_state_loop(
                     job, models.JobState.ERROR_PROCESSING_SUBMITTING, exit_code=exit_code
