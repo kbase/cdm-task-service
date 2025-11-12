@@ -307,6 +307,32 @@ async def get_job(
     return await job_state.get_job(job_id, user)
 
 
+class ExitCodes(BaseModel):
+    """ The response to a request for job container exit codes. """
+    exit_codes: Annotated[list[int | None], Field(
+        examples=[[0, 2, 0, None, 0, 255]],
+        description="The exit codes for a job indexed by container number."
+    )]
+
+
+@ROUTER_JOBS.get(
+    "/{job_id}/exit_codes",
+    response_model=ExitCodes,
+    summary="Get a job's exit codes",
+    description="Get the container exit codes for a job. "
+        + "Only the submitting user may view the exit codes."
+)
+async def get_job_exit_codes(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    user: CTSUser=Depends(_AUTH),
+) -> ExitCodes:
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    return ExitCodes(exit_codes=await flow.get_exit_codes(job))
+
+
 _ANN_IMAGE_ID = Annotated[str, FastPath(
     openapi_examples={"image with digest": {
         "value": "ghcr.io/kbase/collections:checkm2_0.1.6"
@@ -408,7 +434,9 @@ async def get_refdata_by_id(
 async def get_refdata_by_path(
     r: Request,
     s3_path: Annotated[str, FastPath(
-        openapi_examples={"refdata path": {"value": "refdata-bucket/checkm2/checkm2_refdata-2.4.tgz"}},
+        openapi_examples={"refdata path": {
+            "value": "refdata-bucket/checkm2/checkm2_refdata-2.4.tgz"
+        }},
         description="The S3 path to the reference data, starting with the bucket. "
             + "Please note that spaces are valid S3 object characters, so be careful about "
             + "trailing spaces in the input.",
@@ -581,6 +609,24 @@ async def get_job_admin(
     )
     job_state = app_state.get_app_state(r).job_state
     return await job_state.get_job(job_id, user, as_admin=True)
+
+
+@ROUTER_ADMIN.get(
+    "/jobs/{job_id}/exit_codes",
+    response_model=ExitCodes,
+    summary="Get any job's exit codes",
+    description="Get the container exit codes for any job, regardless of ownership."
+)
+async def get_job_exit_codes_admin(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    user: CTSUser=Depends(_AUTH),
+) -> ExitCodes:
+    _ensure_admin(user, "Only service administrators can view other users' job details.")
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    return ExitCodes(exit_codes=await flow.get_exit_codes(job))
 
 
 class SubJobs(BaseModel):
