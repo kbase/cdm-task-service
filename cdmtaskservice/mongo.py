@@ -58,6 +58,7 @@ class MongoDAO:
         self._col_images = self._db.images
         self._col_jobs = self._db.jobs
         self._col_subjobs = self._db.subjobs
+        self._col_exitcodes = self._db.exitcodes
         self._col_refdata = self._db.refdata
         self._setup_field_mappings()
         
@@ -122,6 +123,10 @@ class MongoDAO:
                 (statefield, ASCENDING),
                 (retryfield, ASCENDING)
             ]),
+        ])
+        await self._col_exitcodes.create_indexes([
+            # Ensure there's no duplicate exit code entries for a job
+            IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
         ])
         await self._col_refdata.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
@@ -574,6 +579,35 @@ class MongoDAO:
             await processor(self._doc_to_job(d, as_admin=True))
         return count
 
+    async def save_exit_codes_for_standard_job(self, job_id: str, exit_codes: list[int]):
+        """
+        Save container exit codes for a job where container state is managed by an
+        external service like JAWS.
+        
+        Repeated calls for the same job ID will overwrite the exit codes.
+        
+        job_id - the ID of the job.
+        exit_codes - a list of integer exit codes indexed by the container number - e.g. the
+        exit codes should match with the log files for the container.
+        """
+        await self._col_exitcodes.update_one(
+            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")},
+            {"$set": {"exit_codes": _not_falsy(exit_codes, "exit_codes")}},
+            upsert=True,
+        )
+
+    async def get_exit_codes_for_standard_job(self, job_id: str) -> list[int] | None:
+        """
+        Get the container exit codes for a job where container state is managed by an external
+        service like JAWS.
+        
+        Returns None if the exit codes have not yet been saved.
+        """
+        doc = await self._col_exitcodes.find_one({
+            models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
+        })
+        return doc["exit_codes"] if doc else None
+
     async def initialize_subjobs(self, subjobs: Iterable[models.SubJob]):
         """
         Initialize a set of subjobs for a job. The caller is expected to create the subjob
@@ -618,6 +652,21 @@ class MongoDAO:
         if not sjs:
             raise NoSuchSubJobError(f"No sub jobs found for job ID '{job_id}'")
         return sjs
+
+    async def get_exit_codes_for_subjobs(self, job_id: str) -> list[int | None]:
+        """
+        Get the exit codes for subjobs for a job managed by this service. If a container
+        does not yet have an exit code, None wil be in its place.
+        """
+        docs = await self._col_subjobs.find(
+            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")},
+            {models.FLD_SUBJOB_EXIT_CODE: 1}
+        ).sort(models.FLD_SUBJOB_ID, 1
+        ).to_list(length=None)  # Currently the API enforces a limit of 1000
+        exit_codes = [d.get(models.FLD_SUBJOB_EXIT_CODE) for d in docs]
+        if not exit_codes:
+            raise NoSuchSubJobError(f"No sub jobs found for job ID '{job_id}'")
+        return exit_codes
 
     async def update_subjob_state(
         self,
