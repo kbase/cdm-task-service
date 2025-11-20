@@ -235,7 +235,6 @@ class NERSCManager:
         logr = logging.getLogger(__name__)
         cli = self._client_provider()
         perlmutter = await cli.compute(Machine.perlmutter)
-        dt = await cli.compute(_DT_TARGET)
         async with asyncio.TaskGroup() as tg:
             for mod in _CTS_DEPENDENCIES:
                 target = self._nersc_code_path
@@ -260,31 +259,15 @@ class NERSCManager:
                 ),
                 chmod = "600"
             ))
-            pm_scratch = tg.create_task(perlmutter.run("echo $SCRATCH"))
+            pm_scratch = tg.create_task(self._set_up_perlmutter_scratch(cli))
             dtn_scratch = tg.create_task(self._set_up_dtn_scratch(cli))
             if _PIP_DEPENDENCIES:
-                deps = " ".join(
-                    # may need to do something else if module doesn't have __version__
-                    [f"{mod.__name__}=={mod.__version__}" for mod in _PIP_DEPENDENCIES])
-                logr.info(f"Installing pip modules @ NERSC: {deps}")
-                command = (
-                    f"{_DT_WORKAROUND}; "
-                    + f"{_PYTHON_LOAD_HACK}; "
-                    + f"module load python; "
-                    # Unlikely, but this could cause problems if multiple versions
-                    # of the server are running at once. Don't worry about it for now 
-                    + f"pip install {deps}"  # adding notapackage causes a failure
-                )
-                tg.create_task(dt.run(command))
+                tg.create_task(self._install_pip_dependencies(cli))
         self._dtn_scratch = dtn_scratch.result()
-        self._perlmutter_scratch = Path(pm_scratch.result().strip())
+        self._perlmutter_scratch = pm_scratch.result()
         self._nersc_dtn_file_cache_path = self._make_cache_path(nersc_paths.jaws_staging_dir_dtns)
         self._nersc_perlmutter_file_cache_path = self._make_cache_path(
             nersc_paths.jaws_staging_dir_perlmutter)
-        logr.info("NERSC DTN scratch path", extra={logfields.FILE: self._dtn_scratch})
-        logr.info(
-            "NERSC perlmutter scratch path", extra={logfields.FILE: self._perlmutter_scratch}
-        )
         logr.info(
             "NERSC DTN JAWS staging cache path",
             extra={logfields.FILE: self._nersc_dtn_file_cache_path}
@@ -306,12 +289,42 @@ class NERSCManager:
             / "cache"
         )
     
+    async def _install_pip_dependencies(self, client: AsyncClient):
+        logr = logging.getLogger(__name__)
+        deps = " ".join(
+            # may need to do something else if module doesn't have __version__
+            [f"{mod.__name__}=={mod.__version__}" for mod in _PIP_DEPENDENCIES])
+        logr.info(f"Installing pip modules at NERSC: {deps}")
+        command = (
+            f"{_DT_WORKAROUND}; "
+            + f"{_PYTHON_LOAD_HACK}; "
+            + f"module load python; "
+            # Unlikely, but this could cause problems if multiple versions
+            # of the server are running at once. Don't worry about it for now 
+            + f"pip install {deps}"  # adding notapackage causes a failure
+        )
+        dt = await client.compute(_DT_TARGET)
+        await dt.run(command)
+        logr.info(f"Installed pip modules at NERSC")
+    
+    
+    async def _set_up_perlmutter_scratch(self, client: AsyncClient) -> Path:
+        logr = logging.getLogger(__name__)
+        logr.info("Getting Perlmutter scratch path from NERSC")
+        perlmutter = await client.compute(Machine.perlmutter)
+        scratch = (await perlmutter.run("echo $SCRATCH")).strip()
+        logr.info("NERSC perlmutter scratch path", extra={logfields.FILE: scratch})
+        return Path(scratch)
+    
     async def _set_up_dtn_scratch(self, client: AsyncClient) -> Path:
+        logr = logging.getLogger(__name__)
+        logr.info("Getting DTN scratch path from NERSC")
         dt = await client.compute(_DT_TARGET)
         scratch = await dt.run(f"{_DT_WORKAROUND}; echo $SCRATCH")
         scratch = scratch.strip()
-        if not scratch:
+        if not scratch:  # have had issues here previously
             raise ValueError("Unable to determine $SCRATCH variable for NERSC dtns")
+        logr.info("NERSC DTN scratch path", extra={logfields.FILE: scratch})
         return Path(scratch)
     
     def _get_job_scratch(self, job_id, perlmutter=False) -> Path:
