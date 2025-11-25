@@ -15,6 +15,7 @@ from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string 
 # NOTE - importing the constants directly will cause the NERSC manager's dependency resolution
 # code to break, since they're just literal imports and don't point back to their parent module 
 from cdmtaskservice.jaws import constants
+from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 
 
 OUTPUTS_JSON_FILE = "outputs.json"
@@ -86,18 +87,6 @@ def _get_relative_file_path(file: str) -> str:
     e.g. the file that was written from the container's perspective.
     """
     return _require_string(file, "file").split(f"/{constants.OUTPUT_DIR}/")[-1]
-
-
-def get_filenames_for_container(container_num: int) -> tuple[str, str]:
-    """
-    Given a container number, get the stdout and stderr filenames in that order as a tuple.
-    """
-    if container_num < 0:
-        raise ValueError("container_num must be >= 0")
-    return (
-        f"container-{container_num}-stdout.txt",
-        f"container-{container_num}-stderr.txt",
-    )
 
 
 def parse_errors_json(errors_json: io.BytesIO, logpath: Path) -> list[tuple[int, str | None]]:

@@ -16,6 +16,7 @@ from cdmtaskservice.exceptions import ChecksumMismatchError
 from cdmtaskservice.externalexecution.config import Config
 from cdmtaskservice.externalexecution import container_runner
 from cdmtaskservice.git_commit import GIT_COMMIT
+from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 from cdmtaskservice import models
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
@@ -66,12 +67,7 @@ class Executor:
             await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
             exit_code = await self._run_container(job)  # updates to JOB_SUBMITTED
             if exit_code > 0:
-                await self._update_job_state_loop(
-                    job, models.JobState.ERROR_PROCESSING_SUBMITTING, exit_code=exit_code
-                )
-                # Nothing to do prior to updating state again
-                await self._update_job_state_loop(job, models.JobState.ERROR_PROCESSING_SUBMITTED)
-                # TODO NEXT upload logs and complete job in error state
+                await self._process_error_state(job, exit_code)
             else:
                 print("Job completed successfully, TODO NEXT upload data w/ crcs")
         except Exception as e:
@@ -120,6 +116,7 @@ class Executor:
         job: models.AdminJobDetails,
         state: models.JobState,
         exit_code: int = None,
+        admin_error: str = None,
         exception: Exception = None
     ):
         # Considered making a queue so the job could continue while attempting to update
@@ -129,7 +126,9 @@ class Executor:
         backoff_counter = 0
         while True:
             try:
-                await self._update_job_state(job, state, exit_code=exit_code, exception=exception)
+                await self._update_job_state(
+                    job, state, exit_code=exit_code, admin_error=admin_error, exception=exception
+                )
                 return
             except FatalExecutorError:
                 raise
@@ -160,6 +159,7 @@ class Executor:
         job: models.AdminJobDetails,
         state: models.JobState,
         exit_code: int = None,
+        admin_error: str = None,
         exception: Exception = None
     ):
         url = (
@@ -170,6 +170,8 @@ class Executor:
         if exception:
             data["admin_error"] = str(exception)
             data["traceback"] = traceback.format_exc()
+        elif admin_error:
+            data["admin_error"] = admin_error
         if exit_code is not None:
             data['exit_code'] = exit_code
         async with self._sess.put(url, json=data) as resp:
@@ -207,6 +209,9 @@ Local relative path: {loc}
                     + f"'{obj.file}' does not match the actual checksum '{crc}'"
                 )
 
+    def _get_log_prefix(self, job: models.AdminJobDetails):
+        return f"cts-{job.id}-{self._cfg.container_number}-container"
+
     async def _run_container(self, job: models.AdminJobDetails) -> int:
         mount_container = Path.cwd().expanduser().absolute()
         mount_host = mount_container
@@ -222,12 +227,11 @@ Local relative path: {loc}
             str(input_): job.job_input.params.input_mount_point,
             str(output): job.job_input.params.output_mount_point,
         }
-        log_prefix = f"cts-{job.id}-{self._cfg.container_number}-container"
         self._logr.info(f"Starting image {job.image.name_with_digest}")
         exit_code = await container_runner.run_container(
             job.image.name_with_digest,
-            Path(".") / (log_prefix + ".out"),
-            Path(".") / (log_prefix + ".err"),
+            Path(".") / (self._get_log_prefix(job) + ".out"),
+            Path(".") / (self._get_log_prefix(job) + ".err"),
             mounts=mounts,
             command=self._args.args,
             env=self._args.env,
@@ -238,6 +242,30 @@ Local relative path: {loc}
         for f in (mount_container / "__output__" ).iterdir():
             print(f)
         return exit_code
+
+    async def _process_error_state(self, job: models. AdminJobDetails, exit_code: int):
+        await self._update_job_state_loop(
+            job, models.JobState.ERROR_PROCESSING_SUBMITTING, exit_code=exit_code
+        )
+        # Nothing to do prior to updating state again
+        await self._update_job_state_loop(job, models.JobState.ERROR_PROCESSING_SUBMITTED)
+        stdout = Path(".") / (self._get_log_prefix(job) + ".out")
+        stderr = Path(".") / (self._get_log_prefix(job) + ".err")
+        outcrc = crc64nvme_b64(stdout)
+        errcrc = crc64nvme_b64(stderr)
+        s3outpath, s3errpath = get_filenames_for_container(self._cfg.container_number)
+        # TODO PERF config / set concurrency
+        await self._s3cli.upload_objects_from_file(
+            S3Paths([
+                f"{self._cfg.s3_error_log_path}/{s3outpath}",
+                f"{self._cfg.s3_error_log_path}/{s3errpath}",
+            ]),
+            [stdout, stderr],
+            [outcrc, errcrc]
+        )
+        await self._update_job_state_loop(
+            job, models.JobState.ERROR, admin_error=f"Container exit code: {exit_code}"
+        )
 
 
 async def run_executor(stderr: TextIO):
