@@ -6,11 +6,14 @@ Note the client is *not threadsafe* as the underlying aiobotocore session is not
 
 import aiofiles
 import asyncio
+from awscrt import checksums as awschecksums
 from aiobotocore.session import get_session
+import base64
 from botocore.config import Config
 from botocore.exceptions import EndpointConnectionError, ClientError, HTTPClientError
 from botocore.parsers import ResponseParserError
 import logging
+import math
 from pathlib import Path
 from typing import Any, Self
 
@@ -26,6 +29,10 @@ _WRITE_TEST_FILENAME = (
     "cdm_task_service_write_test_with_random_stuff_to_avoid_conflicts_"
     + "jiaepjitgaihaiahgaqaijaeopatiaafaiezxvbmnxq"
 )
+_MULTIPART_THRESHOLD = 8 * 1024 * 1024
+_MULTIPART_DEFAULT_PART_SIZE = 8 * 1024 * 1024  # S3 minimum is 5MiB
+_MULTIPART_MAXIMUM_SIZE = 5 * 1024 * 1024 * 1024  # S3 limit
+_MULTIPART_MAXIMUM_PARTS = 10000  # S3 limit
 
 
 class S3ObjectMeta:
@@ -186,6 +193,8 @@ class S3Client:
                     raise S3ClientConnectError(
                         "Access denied to list buckets on the s3 system"
                     ) from e
+            if code == "XAmzContentChecksumMismatch":
+                raise S3ChecksumMismatchError(f"Checksum mismatch for upload to {path}")
             logging.getLogger(__name__).exception(
                 f"Unexpected response from S3. Response data:\n{e.response}")
             raise S3UnexpectedError(f"Unexpected response from S3: {e}") from e
@@ -288,7 +297,7 @@ class S3Client:
         s3paths: S3Paths,
         local_paths: list[Path],
         concurrency: int = 10
-    ) -> list[S3ObjectMeta]:
+    ):
         """
         Download a set of paths to files.
         
@@ -315,6 +324,117 @@ class S3Client:
             download.path = path
             funcs.append(download)
         await self._run_commands(funcs, concurrency)
+
+    async def upload_objects_from_file(
+        self,
+        # Not really sure about this. Might want to make a different data structure
+        s3paths: S3Paths,
+        local_paths: list[Path],
+        base64_crc64nvmes: list[str],
+        concurrency: int = 10,
+    ):
+        """
+        Upload S3 objects from local files.
+        
+        The list inputs must be in the same order for each s3path / local path / checksum.
+        
+        s3paths - the S3 paths where the objects will be stored.
+        local_paths - the local paths of the file to upload.
+        base64_crc64nvmes - the base64 encoded crc64nvme checksums for each file.
+        concurrency - the number of simultaneous connections to S3.
+        """
+        _not_falsy(s3paths, "s3paths")
+        _not_falsy(local_paths, "local_paths")
+        _not_falsy(base64_crc64nvmes, "base64_crc64nvmes")
+        _check_num(concurrency, "concurrency")
+        if len(s3paths) != len(local_paths):
+            raise ValueError("The number of local paths must equal the number of S3 paths")
+        if len(local_paths) != len(base64_crc64nvmes):
+            raise ValueError("The number of local paths must equal the number of checksums")
+        for f in local_paths:
+            try:
+                if f.stat().st_size > _MULTIPART_MAXIMUM_SIZE:  # this would be impressive
+                    raise ValueError(
+                        f"File {f}'s size is greater than the S3 limit of "
+                        + str(_MULTIPART_MAXIMUM_SIZE)
+                    )
+            except FileNotFoundError as e:
+                raise FileNotFoundError(2, f"File not found: {f}") from e
+        funcs = []
+        indata = zip(s3paths.split_paths(include_full_path=True), local_paths, base64_crc64nvmes)
+        for (buk, key, path), loc, crc in indata:
+            # bind the current value of the variables
+            async def upload(client, buk=buk, key=key, loc=loc, crc64nvme=crc):
+                await self._upload(client, buk, key, loc, crc64nvme)
+            upload.path = path
+            upload.write = True
+            funcs.append(upload)
+        await self._run_commands(funcs, concurrency)
+
+    # There is similar code in remote. This whole implementation is a bit odd since we're
+    # supplying the full body crc but calculating the parts...
+    # But I want to ensure the provided crc matches the crc that winds up in S3
+    def _b64_crc64nvme(self, b: bytes):
+        checksum = awschecksums.crc64nvme(b).to_bytes(8)
+        return base64.b64encode(checksum).decode()
+
+    async def _upload(self, client, buk: str, key: str, loc: Path, crc64nvme: str):
+        # kind of long but pretty easy to read I think
+        file_size = loc.stat().st_size
+        if file_size <= _MULTIPART_THRESHOLD:
+            # aiobotocore is not compatible with aiofiles
+            with open(loc, "rb") as f:
+                await client.put_object(
+                    Bucket=buk,
+                    Key=key,
+                    Body=f,
+                    ChecksumCRC64NVME=crc64nvme
+                )
+            return
+        min_part_size = math.ceil(file_size / _MULTIPART_MAXIMUM_PARTS)
+        part_size =  max(_MULTIPART_DEFAULT_PART_SIZE, min_part_size)
+        create_resp = await client.create_multipart_upload(
+            Bucket=buk,
+            Key=key,
+            ChecksumAlgorithm="CRC64NVME",
+            ChecksumType="FULL_OBJECT",
+        )
+        upload_id = create_resp["UploadId"]
+        parts = []
+        part_number = 1
+        try:
+            with open(loc, "rb") as f:
+                while True:
+                    chunk = f.read(part_size)
+                    if not chunk:
+                        break
+                    part_crc = self._b64_crc64nvme(chunk)
+                    upload_resp = await client.upload_part(
+                        Bucket=buk,
+                        Key=key,
+                        PartNumber=part_number,
+                        UploadId=upload_id,
+                        Body=chunk,
+                        ChecksumCRC64NVME=part_crc
+                    )
+                    parts.append({
+                        "ETag": upload_resp["ETag"],
+                        "PartNumber": part_number,
+                        "ChecksumCRC64NVME": part_crc
+                    })
+                    part_number += 1
+
+            await client.complete_multipart_upload(
+                Bucket=buk,
+                Key=key,
+                UploadId=upload_id,
+                MultipartUpload={"Parts": parts},
+                ChecksumCRC64NVME=crc64nvme,
+                ChecksumType="FULL_OBJECT"
+            )
+        except Exception:
+            await client.abort_multipart_upload(Bucket=buk, Key=key, UploadId=upload_id)
+            raise
 
     async def presign_get_urls(self, paths: S3Paths, expiration_sec: int = 3600) -> list[str]:
         """
@@ -383,6 +503,10 @@ class S3PathNotFoundError(Exception):
 
 class S3PathInaccessibleError(Exception):
     """ Error thrown when an S3 path is not accessible to the user. """
+
+
+class S3ChecksumMismatchError(Exception):
+    """ Error thrown when a provided checksum does not match the uploaded file. """
 
 
 class S3UnexpectedError(Exception):
