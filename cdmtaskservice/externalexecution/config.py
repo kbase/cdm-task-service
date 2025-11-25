@@ -14,7 +14,6 @@ class Config(BaseSettings):
     """
     model_config = SettingsConfigDict(case_sensitive=True, str_strip_whitespace=True)
     
-    
     job_id: Annotated[UUID, Field(
         validation_alias="JOB_ID",
         examples=["b9faffb2-453a-4ebe-9bba-1b96636cb3b1"],

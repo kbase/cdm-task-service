@@ -30,8 +30,9 @@ from cdmtaskservice.arg_checkers import (
 )
 from cdmtaskservice.jaws import wdl
 from cdmtaskservice.jaws.config import JAWSConfig
-from cdmtaskservice.jaws.remote import get_filenames_for_container, ERRORS_JSON_FILE
+from cdmtaskservice.jaws.remote import ERRORS_JSON_FILE
 from cdmtaskservice.jaws.sitemapper import get_jaws_site
+from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
 from cdmtaskservice.nersc.paths import NERSCPaths

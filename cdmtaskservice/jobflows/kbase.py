@@ -281,12 +281,18 @@ class KBaseRunner(JobFlow):
         # TODO KBASE_RUNNER poll Condor jobs until complete, get cpu hours, add to job
         # TODO KBASE_RUNNER push container exit code to sbujob in DB on container complete
         if parent_update.state == models.JobState.ERROR:
-            # TODO KBASE_RUNNER pull container exit code from all containers, if any are
-            #     > 0 add a user error telling them to check the logs
+            exit_codes = await self.get_exit_codes(job)
+            # if any exit codes are present and > 0, a container failed. Exit codes can be None
+            # if the container never ran
+            if set(exit_codes) - {0, None}:
+                err = (f"At least one container exited with a non-zero "
+                       + "error code. Please examine the logs for details.")
+            else:
+                err = "An unexpected error occurred."
             # if we can't talk to mongo there's not much to do, so no error handling
             await self._updates.save_error(
                 job.id,
-                "An unexpected error occurred",
+                err,
                 "Check subjobs / containers for admin errors",  # maybe improve later
             )
     
