@@ -243,7 +243,7 @@ Local relative path: {loc}
             print(f)
         return exit_code
 
-    async def _process_error_state(self, job: models. AdminJobDetails, exit_code: int):
+    async def _process_error_state(self, job: models.AdminJobDetails, exit_code: int):
         await self._update_job_state_loop(
             job, models.JobState.ERROR_PROCESSING_SUBMITTING, exit_code=exit_code
         )
