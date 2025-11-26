@@ -117,6 +117,7 @@ def condor_job_stats(job_classads_as_dict: list[dict[str, Any]], requested_cpus:
     * maximum memory use in B over each container (e.g. max(list[max_container_mem_usage])
     """
     _not_falsy(job_classads_as_dict, "job_classads_as_dict")
+    _check_num(requested_cpus, "requested_cpus")
     # Seems like condor uses MiB, although docs aren't great
     # https://htcondor.readthedocs.io/en/24.x/man-pages/condor_submit.html?utm_source=chatgpt.com#request_memory
     max_mem = max([c[_AD_MEM] for c in job_classads_as_dict]) * 1024 * 1024
