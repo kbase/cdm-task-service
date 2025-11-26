@@ -375,14 +375,17 @@ class MongoDAO:
             jbfld, ispush = self._FIELD_TO_KEY_AND_PUSH[fld]
             target = push if ispush else set_
             target[jbfld] = val
-        query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
+        query = {
+            models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
+            _FLD_UPDATE_TIME: {"$lte": _not_falsy(time, "time")},
+        }
         if update.current_state:
             query[models.FLD_COMMON_STATE] = update.current_state.value
         if subjob_id is not None:
             query[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
         transition = {
             models.FLD_COMMON_STATE_TRANSITION_STATE: update.new_state.value,
-            models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
+            models.FLD_COMMON_STATE_TRANSITION_TIME: time,
             _FLD_RETRY_ATTEMPT: 0,  # Unused for now
         }
         if trans_id:
@@ -393,14 +396,17 @@ class MongoDAO:
         res = await col.update_one(
             query,
             {
-                "$push": (push if push else {}) | {models.FLD_COMMON_TRANS_TIMES: transition},
-                "$set": (set_ if set_ else {}) | {
+                "$push": push | {models.FLD_COMMON_TRANS_TIMES: transition},
+                "$set": set_ | {
                     models.FLD_COMMON_STATE: update.new_state.value,
                     _FLD_UPDATE_TIME: time,  # for indexing last state change time
                 }
             },
         )
         if not res.matched_count:
+            # This doesn't account for missing matches due to a too-early `time` argument,
+            # but that generally shouldn't happen unless someone is deliberately being a pain
+            # YAGNI for now, improve later if necessary
             cs = f"in state {update.current_state.value} " if update.current_state else ""
             if subjob_id is not None:
                 raise NoSuchSubJobError(
@@ -623,6 +629,7 @@ class MongoDAO:
         sjs = []
         for sj in _not_falsy(subjobs, "subjobs"):
             sjs.append(_not_falsy(sj, "subjob").model_dump())  # better exception message later
+            sjs[-1][_FLD_UPDATE_TIME] = sj.transition_times[-1].time
             self._add_retry_attempt_to_trans_times(sjs[-1])
         await self._col_subjobs.insert_many(sjs)
 

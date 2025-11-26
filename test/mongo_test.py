@@ -259,6 +259,9 @@ async def test_update_job_fail(mondb):
     await fail_update_job(mc, "foo", submitting_upload(), dt, tid, NoSuchJobError(
         "No job with ID 'foo' in state job_submitted exists"
     ))
+    await fail_update_job(mc, "foo", u, _SAFE_TIME + datetime.timedelta(milliseconds=-1), tid,
+        NoSuchJobError("No job with ID 'foo' in state download_submitted exists")
+    )
 
 
 async def fail_update_job(mc, job_id, update, dt, tid, expected):
@@ -470,6 +473,9 @@ async def test_update_subjob_fail(mondb):
     await fail_update_subjob(mc, "bar", 0, submitting_upload(), dt, NoSuchSubJobError(
         "No job with ID 'bar' and subjob ID 0 in state job_submitted exists"
     ))
+    await fail_update_subjob(mc, "bar", 0, u, _SAFE_TIME + datetime.timedelta(milliseconds=-1),
+         NoSuchSubJobError("No job with ID 'bar' and subjob ID 0 in state created exists")
+    )
 
 
 async def fail_update_subjob(mc, job_id, subjob_id, update, dt, expected):
@@ -487,6 +493,7 @@ async def test_subjob_hidden_fields(mondb):
     # check that the internal fields are set correctly
     job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 0})
     check_trans_retry_fields(job)
+    assert job["_update_time"] == _SAFE_TIME
 
     # check that updating subjob state sets internal fields
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
@@ -504,6 +511,7 @@ async def test_subjob_hidden_fields(mondb):
     # check that the internal fields are set correctly
     job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 0})
     check_trans_retry_fields(job)
+    assert job["_update_time"] == dt
 
 
 @pytest.mark.asyncio
