@@ -56,6 +56,8 @@ FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_HTC_DETAILS = "htcondor_details"
 FLD_HTC_DETAILS_CLUSTER_ID = "cluster_id"
 FLD_JOB_CPU_HOURS = "cpu_hours"
+FLD_JOB_CPU_EFFICIENCY = "cpu_efficiency"
+FLD_JOB_MAX_MEM = "max_memory"
 FLD_JOB_OUTPUTS = "outputs"
 FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
 FLD_JOB_LOGPATH = "logpath"
@@ -884,13 +886,25 @@ class JobPreview(JobStatus):
         examples=[42],
         description="The number of input files."
     )]
-    # This is different from the job_input field, which takes a iso8601 time delta,
+    # These are different from the job_input field, which takes flexible inputs,
     # but I think the inconsistency is warranted. You want to make it easy for people to input
     # and understand a wide range of times but have a consistent output in a fairly standard
     # unit.
     cpu_hours: Annotated[float | None, Field(
         examples=[52.4],
         description="The total CPU hours used by the job, if available.")
+    ] = None
+    cpu_efficiency: Annotated[float | None, Field(
+        examples=[0.8],
+        description="The ratio of the cpu time used to the number of cpus requested times "
+            + "the job's actual time, if available. Perfect efficiency is 1, "
+            + "< 1 is overrequesting CPUs, > 1 is underrequesting CPUs."
+        )
+    ] = None
+    max_memory: Annotated[int | None, Field(
+        examples=[1032000000],
+        description="The maximum memory in bytes used by a single container in the job, "
+            + "if available.")
     ] = None
     output_file_count: Annotated[int | None, Field(
         examples=[24],

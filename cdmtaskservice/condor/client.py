@@ -23,6 +23,10 @@ from cdmtaskservice import models
 
 _AD_JOB_ID = "CTSJobID"
 _AD_CONTAINER_NUMBER = "CTSContainerNumber"
+_AD_CPU_SYS = "RemoteSysCpu"
+_AD_CPU_USER = "RemoteUserCpu"
+_AD_MEM = "MemoryUsage"
+_AD_COMMITTED_TIME = "CommittedTime"
 
 _LOCATIONS = ["Iwd", "Err", "Out", "UserLog"]
 _IDS = ["ClusterId", "ProcId", _AD_JOB_ID, _AD_CONTAINER_NUMBER]
@@ -34,7 +38,8 @@ _RESOURCES = [
     "DiskProvisioned",
     "GPUsProvisioned",
     "CpusUsage",
-    "RemoteUserCpu",
+    _AD_CPU_USER,
+    _AD_CPU_SYS,
     "CumulativeRemoteSysCpu",
     "CumulativeRemoteUserCpu",
     "DiskUsage",
@@ -43,6 +48,7 @@ _RESOURCES = [
     "ResidentSetSize_RAW",
     "ImageSize",
     "ImageSize_RAW",
+    _AD_MEM,
 ]
 _CONDOR_DEETS = ["Owner", "User", "CondorVersion", "CondorPlatform"]
 _INPUTS = ["Environment", "Requirements", "TransferInput", "LeaveJobInQueue"]
@@ -63,7 +69,7 @@ _JOB_STATE = [
 _FAIR_SHARE = ["ConcurrencyLimits", "AccountingGroup"]
 _TIME = [
     "JobStartDate",
-    "CommittedTime",
+    _AD_COMMITTED_TIME,
     "CommittedSuspensionTime",
     "CompletionDate",
     "CumulativeSuspensionTime",
@@ -74,6 +80,7 @@ _TIME = [
     "JobCurrentStartExecutingDate",
     "JobCurrentStartTransferInputDate",
     "JobCurrentStartTransferOutputDate",
+    "RemoteWallClockTime",
 ]
 _OTHER = ["StartdPrincipal", "RemoteHost", "LastRemoteHost"]
 _RETURNED_JOB_ADS = (
@@ -97,6 +104,29 @@ STATIC_SUB = {
     "when_to_transfer_output": "on_exit_or_evict",
     "getenv": "False",
 }
+
+
+def condor_job_stats(job_classads_as_dict: list[dict[str, Any]], requested_cpus: int
+) -> tuple[float, float, int]:
+    """
+    Given HTCondor job ClassAds converted to dictionaries for a job, compute stats for the job.
+    Returns a tuple of
+    
+    * total cpu hours (RemoteSysCpu + RemoteUserCpu) / 3600
+    * cpu efficiency (cpu time / (CommittedTime * requested_cpus))
+    * maximum memory use in B over each container (e.g. max(list[max_container_mem_usage])
+    """
+    _not_falsy(job_classads_as_dict, "job_classads_as_dict")
+    # Seems like condor uses MiB, although docs aren't great
+    # https://htcondor.readthedocs.io/en/24.x/man-pages/condor_submit.html?utm_source=chatgpt.com#request_memory
+    max_mem = max([c[_AD_MEM] for c in job_classads_as_dict]) * 1024 * 1024
+    cpu_sec = 0
+    committed_time = 0
+    for c in job_classads_as_dict:
+        cpu_sec += c[_AD_CPU_USER] + c[_AD_CPU_SYS]
+        committed_time += c[_AD_COMMITTED_TIME]
+    eff = cpu_sec / (committed_time * requested_cpus) if committed_time else None
+    return cpu_sec / 3600.0, eff, max_mem
 
 
 class CondorClient:
@@ -221,6 +251,8 @@ class CondorClient:
         for k in _RETURNED_JOB_ADS:
             v = ca.get(k)
             if v is not None:
+                if k == _AD_MEM:
+                    v = v.eval()
                 if isinstance(v, ExprTree):
                     v = str(v)  # eval()ing he ExprTree isn't helpful, want the expression
                 ret[k] = v
