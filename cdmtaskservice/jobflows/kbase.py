@@ -2,8 +2,10 @@
 The KBase job flow implementation and provider. Runs jobs on the HTCondor system at KBase.
 """
 
+import asyncio
 import htcondor2
 import logging
+from pathlib import Path
 import time
 from typing import Any
 
@@ -12,7 +14,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     require_string as _require_string,
 )
-from cdmtaskservice.condor.client import CondorClient
+from cdmtaskservice.condor.client import CondorClient, condor_job_stats
 from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
@@ -27,7 +29,7 @@ from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
-from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
+from cdmtaskservice.s3.client import S3ObjectMeta
 from cdmtaskservice import sites
 from cdmtaskservice import subjobs
 from cdmtaskservice import update_state
@@ -51,7 +53,7 @@ class KBaseRunner(JobFlow):
         self,
         condor_client: CondorClient,
         mongodao: MongoDAO,
-        s3client: S3Client,
+        s3config: S3Config,
         kafka: KafkaNotifier, 
         coro_manager: CoroutineWrangler,
     ):
@@ -66,7 +68,8 @@ class KBaseRunner(JobFlow):
         """
         self._condor = _not_falsy(condor_client, "condor_client")
         self._mongo = _not_falsy(mongodao, "mongodao")
-        self._s3 = _not_falsy(s3client, "s3client")
+        self._s3 = _not_falsy(s3config, "s3config").get_internal_client()
+        self._s3logdir = s3config.error_log_path
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._logr = logging.getLogger(__name__)
         
@@ -278,23 +281,42 @@ class KBaseRunner(JobFlow):
         self, job: models.AdminJobDetails, parent_update: subjobs.JobUpdate
     ):
         # TODO KBASE_RUNNER handle completed state
-        # TODO KBASE_RUNNER poll Condor jobs until complete, get cpu hours, add to job
-        # TODO KBASE_RUNNER push container exit code to sbujob in DB on container complete
-        if parent_update.state == models.JobState.ERROR:
-            exit_codes = await self.get_exit_codes(job)
-            # if any exit codes are present and > 0, a container failed. Exit codes can be None
-            # if the container never ran
-            if set(exit_codes) - {0, None}:
-                err = (f"At least one container exited with a non-zero "
-                       + "error code. Please examine the logs for details.")
-            else:
-                err = "An unexpected error occurred."
-            # if we can't talk to mongo there's not much to do, so no error handling
-            await self._updates.save_error(
-                job.id,
-                err,
-                "Check subjobs / containers for admin errors",  # maybe improve later
-            )
+        try:
+            # TODO KBASE_RUNNER add to complete job
+            cpu_hours, cpu_efficiency, max_mem = await self._get_condor_stats(job)
+            if parent_update.state == models.JobState.ERROR:
+                exit_codes = await self.get_exit_codes(job)
+                # if any exit codes are present and > 0, a container failed. Exit codes can be None
+                # if the container never ran
+                err_exit = set(exit_codes) - {0, None}
+                if err_exit:
+                    err = (f"At least one container exited with a non-zero "
+                           + "error code. Please examine the logs for details.")
+                else:
+                    err = "An unexpected error occurred."
+                await self._updates.update_job_state(job.id, update_state.error(
+                    "Check subjobs / containers for admin errors",  # maybe improve later,
+                    user_error=err,
+                    log_files_path=str(Path(self._s3logdir) / job.id) if err_exit else None,
+                    cpu_hours=cpu_hours,
+                    cpu_efficiency=cpu_efficiency,
+                    max_memory=max_mem,
+                ))
+        except Exception as e:
+            await self._updates.handle_exception(e, job.id, "completing errored")
+    
+    async def _get_condor_stats(self, job: models.AdminJobDetails) -> tuple[float, float, int]:
+        attempts = 0
+        # if cluster_id exists, there's a cluster ID in it
+        cluster_id = job.htcondor_details.cluster_id[-1]
+        while attempts < 12:  # 60 seconds for condor to finish the job, seems ample?
+            await asyncio.sleep(5)  # give Condor a few seconds to finish up
+            running, complete = await self._condor.get_job_status(cluster_id)
+            # kind of inefficient but I doubt this will happen often
+            if not running:
+                return condor_job_stats(complete, job.job_input.cpus)
+            attempts += 1
+        raise IOError("Condor jobs didn't complete for 60s after all executors sent termination")
     
     async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
         """
@@ -431,7 +453,7 @@ class KBaseFlowProvider:
             kbase = KBaseRunner(
                 condor,
                 self._mongodao,
-                self._s3config.get_internal_client(),
+                self._s3config,
                 self._kafka,
                 self._coman,
             )

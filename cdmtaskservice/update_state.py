@@ -29,7 +29,13 @@ class UpdateField(StrEnum):
     """ The cluster ID of an HTCondor run. """
     
     CPU_HOURS = auto()
-    """ The number of hours a job ran. """
+    """ The number of cpu hours a job used. """
+    
+    MAX_MEMORY = auto()
+    """ The maximum memory a job consumed for a single container. """
+    
+    CPU_EFFICIENCY = auto()
+    """ The ratio of cpu time actually used to cpu time requested. """ 
     
     NERSC_UPLOAD_TASK_ID = auto()
     """ The NERSC Superfacility ID for an upload task. """
@@ -275,6 +281,8 @@ def error(
     traceback: str = None,
     log_files_path: str = None,
     cpu_hours: float = None,
+    cpu_efficiency: float = None,
+    max_memory: int = None,
 ) -> JobUpdate:
     """
     Update a job's state to error.
@@ -285,6 +293,8 @@ def error(
     traceback - the error traceback.
     log_files_path - the path to any logs for the job.
     cpu_hours - the job cpu hours, if available.
+    cpu_efficiency - the job's cpu efficiency, if available.
+    max_memory - the maximum memory used by the job in bytes, if available.
     """ 
     flds = {
         UpdateField.ADMIN_ERROR: _require_string(admin_error, "admin_error"),
@@ -295,6 +305,10 @@ def error(
         flds[UpdateField.USER_ERROR] = user_error
     if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
         flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
+    if cpu_efficiency is not None:
+        flds[UpdateField.CPU_EFFICIENCY] = _check_num(cpu_efficiency, "cpu_efficiency", minimum=0)
+    if max_memory is not None:
+        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
     return JobUpdate()._set_new_state(models.JobState.ERROR)._set_fields(flds)
 
 
