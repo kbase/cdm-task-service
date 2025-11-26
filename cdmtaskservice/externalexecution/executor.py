@@ -69,7 +69,7 @@ class Executor:
             if exit_code > 0:
                 await self._process_error_state(job, exit_code)
             else:
-                print("Job completed successfully, TODO NEXT upload data w/ crcs")
+                await self._process_complete_state(job)
         except Exception as e:
             self._logr.exception(f"Job failed: {e}")
             await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
@@ -237,6 +237,7 @@ Local relative path: {loc}
             env=self._args.env,
             post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
         )
+        self._logr.info(f"Container exited with code {exit_code}")
         # TODO NEXT remove below
         print("output:")
         for f in (mount_container / "__output__" ).iterdir():
@@ -266,6 +267,15 @@ Local relative path: {loc}
         await self._update_job_state_loop(
             job, models.JobState.ERROR, admin_error=f"Container exit code: {exit_code}"
         )
+        
+    async def _process_complete_state(self, job: models.AdminJobDetails):
+        await self._update_job_state_loop(
+            job, models.JobState.UPLOAD_SUBMITTING, exit_code=0
+        )
+        # Nothing to do prior to updating state again
+        await self._update_job_state_loop(job, models.JobState.UPLOAD_SUBMITTED)
+        # upload files with CRCs to S3
+        # update job state with S3 files & CRCs
 
 
 async def run_executor(stderr: TextIO):
