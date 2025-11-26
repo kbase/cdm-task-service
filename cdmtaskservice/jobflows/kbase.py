@@ -225,6 +225,9 @@ class KBaseRunner(JobFlow):
     _SUBJOB_STATE_TO_UPDATE_FUNC = {
         models.JobState.JOB_SUBMITTING: lambda _: update_state.submitting_job(),
         models.JobState.JOB_SUBMITTED: lambda _: update_state.submitted_job(),
+        models.JobState.UPLOAD_SUBMITTING: lambda update:
+            update_state.submitting_upload_with_exit_code(update.exit_code),
+        models.JobState.UPLOAD_SUBMITTED: lambda _: update_state.submitted_upload(),
         models.JobState.ERROR_PROCESSING_SUBMITTING: lambda update:
             update_state.submitting_error_processing_with_exit_code(update.exit_code),
         models.JobState.ERROR_PROCESSING_SUBMITTED: lambda _:

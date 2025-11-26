@@ -193,6 +193,28 @@ def submitting_upload(cpu_hours: float = None) -> JobUpdate:
     )
 
 
+def submitting_upload_with_exit_code(exit_code: int) -> JobUpdate:
+    """
+    Update a container's state from job submitted to upload submitting and set the
+    exit code.
+    """
+    return JobUpdate(
+        )._set_current_state(models.JobState.JOB_SUBMITTED
+        )._set_new_state(models.JobState.UPLOAD_SUBMITTING
+        )._set_fields({UpdateField.EXIT_CODE: _check_num(exit_code, "exit_code", minimum=0)}
+    )
+
+
+def submitted_upload() -> JobUpdate:
+    """
+    Update a job's state from upload submitting to upload submitted.
+    """
+    return JobUpdate(
+        )._set_current_state(models.JobState.UPLOAD_SUBMITTING
+        )._set_new_state(models.JobState.UPLOAD_SUBMITTED
+    )
+
+
 def submitted_nersc_upload(task_id: str) -> JobUpdate:
     """
     Update a job's state from upload submitting to upload submitted and add a NERSC
