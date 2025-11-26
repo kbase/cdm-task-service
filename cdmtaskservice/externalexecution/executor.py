@@ -27,8 +27,8 @@ from cdmtaskservice.timestamp import utcdatetime
 
 _EXP_BACKOFF_SEC = [5, 10, 30, 60, 120, 300, 600]
 
-
-logging.basicConfig(level=logging.INFO)
+_INPUT = "__input__"
+_OUTPUT = "__output__"
 
 
 class Executor:
@@ -180,7 +180,7 @@ class Executor:
     async def _download_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
         s3paths = []
         local_paths = []
-        root = Path(".") / "__input__"
+        root = Path(".") / _INPUT
         filerecs = []
         for i, (obj, loc) in enumerate(self._args.files.items(), start=1):
             s3paths.append(obj.file)
@@ -219,10 +219,10 @@ Local relative path: {loc}
             prefix, replace = self._cfg.mount_prefix_override.split(":")
             relative = mount_host.relative_to(Path(prefix))
             mount_host = Path(replace) / relative
-        input_ = mount_host / "__input__"
-        output = mount_host / "__output__"
+        input_ = mount_host / _INPUT
+        output = mount_host / _OUTPUT
         # Needs to be global write since the job container user is unknown
-        (mount_container / "__output__").mkdir(0x777, parents=True, exist_ok=True)
+        (mount_container / _OUTPUT).mkdir(0x777, parents=True, exist_ok=True)
         mounts = {
             str(input_): job.job_input.params.input_mount_point,
             str(output): job.job_input.params.output_mount_point,
@@ -238,10 +238,6 @@ Local relative path: {loc}
             post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
         )
         self._logr.info(f"Container exited with code {exit_code}")
-        # TODO NEXT remove below
-        print("output:")
-        for f in (mount_container / "__output__" ).iterdir():
-            print(f)
         return exit_code
 
     async def _process_error_state(self, job: models.AdminJobDetails, exit_code: int):
@@ -258,8 +254,8 @@ Local relative path: {loc}
         # TODO PERF config / set concurrency
         await self._s3cli.upload_objects_from_file(
             S3Paths([
-                f"{self._cfg.s3_error_log_path}/{s3outpath}",
-                f"{self._cfg.s3_error_log_path}/{s3errpath}",
+                f"{self._cfg.s3_error_log_path.strip('/')}/{s3outpath}",
+                f"{self._cfg.s3_error_log_path.strip('/')}/{s3errpath}",
             ]),
             [stdout, stderr],
             [outcrc, errcrc]
@@ -274,8 +270,15 @@ Local relative path: {loc}
         )
         # Nothing to do prior to updating state again
         await self._update_job_state_loop(job, models.JobState.UPLOAD_SUBMITTED)
-        # upload files with CRCs to S3
-        # update job state with S3 files & CRCs
+        outdir = Path(_OUTPUT)
+        outfiles = [file.relative_to(outdir) for file in outdir.rglob('*') if file.is_file()]
+        if outfiles:
+            crcs = [crc64nvme_b64(outdir / o) for o in outfiles]
+            s3paths = [f"{job.job_input.output_dir.strip('/')}/{p}" for p in outfiles]
+            await self._s3cli.upload_objects_from_file(
+                S3Paths(s3paths), [outdir / o for o in outfiles], crcs
+            )
+        # TODO NEXT update job state with S3 files & CRCs
 
 
 async def run_executor(stderr: TextIO):

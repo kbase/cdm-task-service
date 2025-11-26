@@ -14,7 +14,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     require_string as _require_string,
 )
-from cdmtaskservice.condor.client import CondorClient, condor_job_stats
+from cdmtaskservice.condor.client import CondorClient, condor_job_stats, condor_jobs_all_held
 from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
@@ -315,9 +315,11 @@ class KBaseRunner(JobFlow):
         while attempts < 12:  # 60 seconds for condor to finish the job, seems ample?
             await asyncio.sleep(5)  # give Condor a few seconds to finish up
             running, complete = await self._condor.get_job_status(cluster_id)
-            # kind of inefficient but I doubt this will happen often
-            if not running:
-                return condor_job_stats(complete, job.job_input.cpus)
+            # Kind of inefficient but I doubt this will happen often
+            # If the condor job errors, it's held with the current setup
+            # Means the client and this code is coupled, might need to rethink
+            if condor_jobs_all_held(running):
+                return condor_job_stats(running + complete, job.job_input.cpus)
             attempts += 1
         raise IOError("Condor jobs didn't complete for 60s after all executors sent termination")
     

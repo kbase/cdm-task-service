@@ -27,6 +27,8 @@ _AD_CPU_SYS = "RemoteSysCpu"
 _AD_CPU_USER = "RemoteUserCpu"
 _AD_MEM = "MemoryUsage"
 _AD_COMMITTED_TIME = "CommittedTime"
+_AD_JOB_STATUS = "JobStatus"
+_JOB_STATUS_HELD = 5
 
 _LOCATIONS = ["Iwd", "Err", "Out", "UserLog"]
 _IDS = ["ClusterId", "ProcId", _AD_JOB_ID, _AD_CONTAINER_NUMBER]
@@ -55,7 +57,7 @@ _INPUTS = ["Environment", "Requirements", "TransferInput", "LeaveJobInQueue"]
 _JOB_STATE = [
     "Rank",
     "JobPrio",
-    "JobStatus",
+    _AD_JOB_STATUS,
     "ExitCode",
     "ExitStatus",
     "JobRunCount",
@@ -105,6 +107,14 @@ STATIC_SUB = {
     "getenv": "False",
 }
 
+
+def condor_jobs_all_held(job_classads_as_dict: list[dict[str, Any]]) -> bool:
+    """
+    Given HTCondor job ClassAds converted to dictionaries for a job, return True if all of them
+    are in the held state. 
+    """
+    _not_falsy(job_classads_as_dict, "job_classads_as_dict")
+    return not {ad[_AD_JOB_STATUS] for ad in job_classads_as_dict} - {_JOB_STATUS_HELD}
 
 def condor_job_stats(job_classads_as_dict: list[dict[str, Any]], requested_cpus: int
 ) -> tuple[float, float, int]:
@@ -176,7 +186,7 @@ class CondorClient:
             "S3_URL": self._s3config.get_url(self._config.use_S3_external_url),
             "S3_ACCESS_KEY": self._s3config.access_key,
             "S3_SECRET_PATH": self._config.s3_access_secret_path,
-            "S3_ERROR_LOG_PATH": str(Path(self._s3config.error_log_path) / job.id),
+            "S3_ERROR_LOG_PATH": f"{self._s3config.error_log_path.strip('/')}/{job.id}",
             "JOB_UPDATE_TIMEOUT_MIN": self._config.job_update_timeout_min,
         }
         if self._config.mount_prefix_override:
