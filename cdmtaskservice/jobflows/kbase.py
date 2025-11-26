@@ -315,6 +315,7 @@ class KBaseRunner(JobFlow):
             # kind of inefficient but I doubt this will happen often
             if not running:
                 return condor_job_stats(complete, job.job_input.cpus)
+            attempts += 1
         raise IOError("Condor jobs didn't complete for 60s after all executors sent termination")
     
     async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
