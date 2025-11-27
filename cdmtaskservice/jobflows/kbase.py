@@ -30,6 +30,7 @@ from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.s3.client import S3ObjectMeta
+from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice import sites
 from cdmtaskservice import subjobs
 from cdmtaskservice import update_state
@@ -299,31 +300,61 @@ class KBaseRunner(JobFlow):
     async def _update_terminal_job(
         self, job: models.AdminJobDetails, parent_update: subjobs.JobUpdate
     ):
-        # TODO KBASE_RUNNER handle completed state
         try:
-            # TODO KBASE_RUNNER add to complete job
-            cpu_hours, cpu_efficiency, max_mem = await self._get_condor_stats(job)
             if parent_update.state == models.JobState.ERROR:
-                exit_codes = await self.get_exit_codes(job)
-                # if any exit codes are present and > 0, a container failed. Exit codes can be None
-                # if the container never ran
-                err_exit = set(exit_codes) - {0, None}
-                if err_exit:
-                    err = (f"At least one container exited with a non-zero "
-                           + "error code. Please examine the logs for details.")
-                else:
-                    err = "An unexpected error occurred."
-                await self._updates.update_job_state(job.id, update_state.error(
-                    "Check subjobs / containers for admin errors",  # maybe improve later,
-                    user_error=err,
-                    log_files_path=str(Path(self._s3logdir) / job.id) if err_exit else None,
-                    cpu_hours=cpu_hours,
-                    cpu_efficiency=cpu_efficiency,
-                    max_memory=max_mem,
-                ))
+                await self._error_job(job)
+            else:
+                await self._complete_job(job)
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "completing errored")
-    
+
+    async def _error_job(self, job: models.AdminJobDetails):
+        cpu_hours, cpu_efficiency, max_mem = await self._get_condor_stats(job)
+        exit_codes = await self.get_exit_codes(job)
+        # if any exit codes are present and > 0, a container failed. Exit codes can be None
+        # if the container never ran
+        err_exit = set(exit_codes) - {0, None}
+        if err_exit:
+            err = (f"At least one container exited with a non-zero "
+                   + "error code. Please examine the logs for details.")
+        else:
+            err = "An unexpected error occurred."
+        await self._updates.update_job_state(job.id, update_state.error(
+            "Check subjobs / containers for admin errors",  # maybe improve later,
+            user_error=err,
+            log_files_path=str(Path(self._s3logdir) / job.id) if err_exit else None,
+            cpu_hours=cpu_hours,
+            cpu_efficiency=cpu_efficiency,
+            max_memory=max_mem,
+        ))
+        
+    async def _complete_job(self, job: models.AdminJobDetails):
+        cpu_hours, cpu_efficiency, max_mem = await self._get_condor_stats(job)
+        subjobs = await self.get_subjobs(job.id)
+        filechecksums = {}
+        for sj in subjobs:
+            for f in sj.outputs:
+                filechecksums[f.file] = f.crc64nvme
+        if not filechecksums:
+            err = "The job produced no output files"
+            await self._updates.update_job_state(job.id, update_state.error(err, user_error=err))
+            return
+        s3objs = await self._s3.get_object_meta(S3Paths(filechecksums.keys()))
+        outfiles = []
+        for o in s3objs:
+            if o.crc64nvme != filechecksums[o.path]:
+                raise ValueError(
+                    f"Expected CRC64/NVME checkusm {filechecksums[o.path]} but got "
+                    + f"{o.crc64nvme} for uploaded file {o.path}"
+                )
+            outfiles.append(models.S3File(file=o.path, crc64nvme=o.crc64nvme))
+        await self._updates.update_job_state(job.id, update_state.complete(
+            outfiles,
+            cpu_hours=cpu_hours,
+            cpu_efficiency=cpu_efficiency,
+            max_memory=max_mem
+        ))
+
     async def _get_condor_stats(self, job: models.AdminJobDetails) -> tuple[float, float, int]:
         attempts = 0
         # if cluster_id exists, there's a cluster ID in it
