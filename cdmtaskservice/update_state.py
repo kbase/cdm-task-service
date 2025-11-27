@@ -8,7 +8,6 @@ from typing import Self, Any, TypeVar, Generic
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import (
-    not_falsy as _not_falsy,
     require_string as _require_string,
     check_num as _check_num,
 )
@@ -227,18 +226,36 @@ def submitted_nersc_upload(task_id: str) -> JobUpdate:
     )
 
 
-def complete(output_file_paths: list[models.S3File]) -> JobUpdate:
+def complete(
+    output_file_paths: list[models.S3File],
+    cpu_hours: float = None,
+    cpu_efficiency: float = None,
+    max_memory: int = None,
+) -> JobUpdate:
     """
-    Update a job's state from upload submitted to complete and add output files.
+    Update a job's state from upload submitted to complete.
+    
+    output_file_paths - the output file paths.
+    cpu_hours - the job cpu hours, if available.
+    cpu_efficiency - the job's cpu efficiency, if available.
+    max_memory - the maximum memory used by the job in bytes, if available.
     """
-    out = [o.model_dump() for o in _not_falsy(output_file_paths, "output_file_paths")]
+    output_file_paths = output_file_paths or []
+    out = [o.model_dump() for o in output_file_paths]
+    flds = {
+        UpdateField.OUTPUT_FILE_PATHS: out,
+        UpdateField.OUTPUT_FILE_COUNT: len(out),
+    }
+    if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
+        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
+    if cpu_efficiency is not None:
+        flds[UpdateField.CPU_EFFICIENCY] = _check_num(cpu_efficiency, "cpu_efficiency", minimum=0)
+    if max_memory is not None:
+        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
     return JobUpdate(
         )._set_current_state(models.JobState.UPLOAD_SUBMITTED
         )._set_new_state(models.JobState.COMPLETE
-        )._set_fields({
-            UpdateField.OUTPUT_FILE_PATHS: out,
-            UpdateField.OUTPUT_FILE_COUNT: len(out),
-        }
+        )._set_fields(flds
     )
 
 ####################

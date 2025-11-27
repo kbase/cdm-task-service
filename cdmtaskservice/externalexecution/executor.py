@@ -115,7 +115,9 @@ class Executor:
         self,
         job: models.AdminJobDetails,
         state: models.JobState,
+        *,
         exit_code: int = None,
+        outputs: list[models.S3File] = None,
         admin_error: str = None,
         exception: Exception = None
     ):
@@ -127,7 +129,12 @@ class Executor:
         while True:
             try:
                 await self._update_job_state(
-                    job, state, exit_code=exit_code, admin_error=admin_error, exception=exception
+                    job,
+                    state,
+                    exit_code=exit_code,
+                    outputs=outputs,
+                    admin_error=admin_error,
+                    exception=exception
                 )
                 return
             except FatalExecutorError:
@@ -158,15 +165,18 @@ class Executor:
         self,
         job: models.AdminJobDetails,
         state: models.JobState,
+        *,
+        outputs: list[models.S3File] = None,
         exit_code: int = None,
         admin_error: str = None,
         exception: Exception = None
     ):
         url = (
-            f"{self._url}/external_exec/{job.id}/container/{self._cfg.container_number}/update"
+            f"{self._url}/external_exec/{job.id}/"
+            + f"container/{self._cfg.container_number}/update/{state.value}"
         )
         # TODO TEST need to mockout utcdatetime
-        data = {"new_state": state.value, "time": utcdatetime().isoformat()}
+        data = {"time": utcdatetime().isoformat()}
         if exception:
             data["admin_error"] = str(exception)
             data["traceback"] = traceback.format_exc()
@@ -174,6 +184,8 @@ class Executor:
             data["admin_error"] = admin_error
         if exit_code is not None:
             data['exit_code'] = exit_code
+        if outputs:
+            data["outputs"] = [o.model_dump() for o in outputs]
         async with self._sess.put(url, json=data) as resp:
             await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 
@@ -227,7 +239,9 @@ Local relative path: {loc}
             str(input_): job.job_input.params.input_mount_point,
             str(output): job.job_input.params.output_mount_point,
         }
-        self._logr.info(f"Starting image {job.image.name_with_digest}")
+        self._logr.info(
+            f"Starting image {job.image.name_with_digest} with command:\n{self._args.args}"
+        )
         exit_code = await container_runner.run_container(
             job.image.name_with_digest,
             Path(".") / (self._get_log_prefix(job) + ".out"),
@@ -272,13 +286,17 @@ Local relative path: {loc}
         await self._update_job_state_loop(job, models.JobState.UPLOAD_SUBMITTED)
         outdir = Path(_OUTPUT)
         outfiles = [file.relative_to(outdir) for file in outdir.rglob('*') if file.is_file()]
+        crcs = [crc64nvme_b64(outdir / o) for o in outfiles]
+        s3paths = [f"{job.job_input.output_dir.strip('/')}/{p}" for p in outfiles]
         if outfiles:
-            crcs = [crc64nvme_b64(outdir / o) for o in outfiles]
-            s3paths = [f"{job.job_input.output_dir.strip('/')}/{p}" for p in outfiles]
             await self._s3cli.upload_objects_from_file(
                 S3Paths(s3paths), [outdir / o for o in outfiles], crcs
             )
-        # TODO NEXT update job state with S3 files & CRCs
+        await self._update_job_state_loop(
+            job, models.JobState.COMPLETE, outputs=[
+                models.S3File(file=f, crc64nvme=c) for f, c in zip(s3paths, crcs)
+            ]
+        )
 
 
 async def run_executor(stderr: TextIO):
