@@ -851,6 +851,9 @@ class SubJob(_JobBase):
         examples=[0, 255],
         description="The container exit code, if available."
     )] = None
+    outputs: Annotated[list[S3File] | None, Field(
+        description="The files produced by the container stored in S3, if available."
+    )] = None
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
@@ -1039,10 +1042,6 @@ class AdminJobDetails(Job):
 
 class ContainerUpdate(BaseModel):
     
-    new_state: Annotated[JobState, Field(
-        examples=[JobState.JOB_SUBMITTED.value],
-        description="The new state for the container / subjob."
-    )]
     time: Annotated[datetime.datetime, Field(
         examples=[utcdatetime()],
         description="The time the state transition occurred."
@@ -1051,6 +1050,10 @@ class ContainerUpdate(BaseModel):
         examples=[0, 255],
         description="The container exit code. Ignored if the new state isn't "
             + "error processing submitting or upload submitting."
+    )] = None
+    outputs: Annotated[list[S3File] | None, Field(
+        description="The files produced by the container stored in S3. Ignored if the new state "
+            + "isn't job complete."
     )] = None
     admin_error: Annotated[str | None, Field(
         examples=["The top fell off"],

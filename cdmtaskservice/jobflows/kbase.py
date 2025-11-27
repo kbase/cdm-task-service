@@ -221,24 +221,39 @@ class KBaseRunner(JobFlow):
         raise UnsupportedOperationError(
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
-    
-    _SUBJOB_STATE_TO_UPDATE_FUNC = {
+    _COMMON_STATE_TO_UPDATE_FUNC = {
         models.JobState.JOB_SUBMITTING: lambda _: update_state.submitting_job(),
         models.JobState.JOB_SUBMITTED: lambda _: update_state.submitted_job(),
-        models.JobState.UPLOAD_SUBMITTING: lambda update:
-            update_state.submitting_upload_with_exit_code(update.exit_code),
         models.JobState.UPLOAD_SUBMITTED: lambda _: update_state.submitted_upload(),
-        models.JobState.ERROR_PROCESSING_SUBMITTING: lambda update:
-            update_state.submitting_error_processing_with_exit_code(update.exit_code),
         models.JobState.ERROR_PROCESSING_SUBMITTED: lambda _:
             update_state.submitted_error_processing(),
+    }
+    
+    _SUBJOB_STATE_TO_UPDATE_FUNC = {
+        **_COMMON_STATE_TO_UPDATE_FUNC,
+        models.JobState.UPLOAD_SUBMITTING: lambda update:
+            update_state.submitting_upload_with_exit_code(update.exit_code),
+        models.JobState.COMPLETE: lambda update: update_state.complete(update.outputs),
+        models.JobState.ERROR_PROCESSING_SUBMITTING: lambda update:
+            update_state.submitting_error_processing_with_exit_code(update.exit_code),
         models.JobState.ERROR: lambda update: update_state.error(
             update.admin_error, traceback=update.traceback
         ),
     }
     
+    _JOB_STATE_TO_UPDATE_FUNC = {
+        **_COMMON_STATE_TO_UPDATE_FUNC,
+        models.JobState.UPLOAD_SUBMITTING: lambda _: update_state.submitting_upload(),
+        models.JobState.ERROR_PROCESSING_SUBMITTING: lambda _:
+            update_state.submitting_error_processing()
+    }
+    
     async def update_container_state(
-        self, job: models.AdminJobDetails, container_num: int, update: models.ContainerUpdate
+        self,
+        job: models.AdminJobDetails,
+        container_num: int,
+        new_state: models.JobState,
+        update: models.ContainerUpdate,
     ):
         """
         Update the state of a container / subjob.
@@ -250,19 +265,20 @@ class KBaseRunner(JobFlow):
         # TODO UPDATE_SUBJOB add other states.
         _not_falsy(job, "job")
         _check_num(container_num, "conteiner_num", minimum=0)
+        _not_falsy(new_state, "new_state")
         _not_falsy(update, "update")
-        if update.new_state not in self._SUBJOB_STATE_TO_UPDATE_FUNC:
+        if new_state not in self._SUBJOB_STATE_TO_UPDATE_FUNC:
             raise UnsupportedOperationError(
-                f"Cannot update a container to state {update.new_state.value}"
+                f"Cannot update a container to state {new_state.value}"
         )
-        mongo_update = self._SUBJOB_STATE_TO_UPDATE_FUNC[update.new_state](update)
+        mongo_update = self._SUBJOB_STATE_TO_UPDATE_FUNC[new_state](update)
         # Just throw the error, don't error out the job. If the caller thinks this is an error
         # they can try and set the error state.
         await self._mongo.update_subjob_state(job.id, container_num, mongo_update, update.time)
         # If this fails the job is only stuck if parent_update is not None. It seems really
         # unlikely that the line above would succeed and this line fail, so we don't catch
         # errors here
-        parent_update = await subjobs.get_job_update(self._mongo, job, update.new_state)
+        parent_update = await subjobs.get_job_update(self._mongo, job, new_state)
         if parent_update:
             if parent_update.state.is_terminal():
                 # In order to get the final job info from Condor, need to return so the
@@ -270,7 +286,7 @@ class KBaseRunner(JobFlow):
                 await self._coman.run_coroutine(self._update_terminal_job(job, parent_update))
                 return
             # May not be the same update func as the subjob
-            mongo_update = self._SUBJOB_STATE_TO_UPDATE_FUNC[parent_update.state](update)
+            mongo_update = self._JOB_STATE_TO_UPDATE_FUNC[parent_update.state](update)
             # If this fails all the containers have transitioned to an equivalent state and
             # so the job is stuck, so we error out if possible.
             try:
@@ -318,7 +334,7 @@ class KBaseRunner(JobFlow):
             # Kind of inefficient but I doubt this will happen often
             # If the condor job errors, it's held with the current setup
             # Means the client and this code is coupled, might need to rethink
-            if condor_jobs_all_held(running):
+            if not running or condor_jobs_all_held(running):
                 return condor_job_stats(running + complete, job.job_input.cpus)
             attempts += 1
         raise IOError("Condor jobs didn't complete for 60s after all executors sent termination")
