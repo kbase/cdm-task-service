@@ -40,11 +40,11 @@ from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSUser, CTSRole, SERVICE_USER
 
-SERVICE_NAME = "CDM Task Service"
 NOTES = "This service is a prototype"
 
 # may need to split these into different files if this file gets too big
 ROUTER_GENERAL = APIRouter(tags=["General"])
+ROUTER_SITES = APIRouter(tags=["Sites"])
 ROUTER_JOBS = APIRouter(tags=["Jobs"], prefix="/jobs")
 ROUTER_IMAGES = APIRouter(tags=["Images"], prefix="/images")
 ROUTER_REFDATA = APIRouter(tags=["Reference Data"], prefix="/refdata")
@@ -72,11 +72,9 @@ def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
 
 class Root(BaseModel):
     """ General information about the service """
-    service_name: Annotated[
-        str, Field(examples=[SERVICE_NAME], description="The name of the service."
-    )]
-    version: Annotated[
-        str, Field(examples=[VERSION], description="The semantic version of the service."
+    service_name: Annotated[str, Field(description="The name of the service.")]
+    version: Annotated[str, Field(
+        examples=[VERSION], description="The semantic version of the service."
     )]
     git_hash: Annotated[str, Field(
         examples=["b78f6e15e85381a7df71d6005d99e866f3f868dc"],
@@ -94,9 +92,9 @@ class Root(BaseModel):
     response_model=Root,
     summary="General service info",
     description="General information about the service.")
-async def root() -> Root:
+async def root(r: Request) -> Root:
     return {
-        "service_name": SERVICE_NAME,
+        "service_name": app_state.get_app_state(r).service_name,
         "version": VERSION,
         "git_hash": GIT_COMMIT,
         "server_time": utcdatetime(),
@@ -173,7 +171,7 @@ class Sites(BaseModel):
     sites: Annotated[list[Site], Field(description="The list of compute sites.")]
 
 
-@ROUTER_GENERAL.get(
+@ROUTER_SITES.get(
     "/sites/",
     response_model=Sites,
     summary="Available compute sites",

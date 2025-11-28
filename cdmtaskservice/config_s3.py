@@ -15,8 +15,11 @@ class S3Config(BaseModel):
     internal_url: str
     """ The URL of the S3 instance to use for data storage. """
     
-    external_url: str
-    """ The URL of the S3 instance accessible to external code or services. """
+    external_url: str | None = None
+    """
+    The URL of the S3 instance accessible to external code or services.
+    May not be present if unavailable.
+    """
     
     access_key: str
     """ The S3 access key. """
@@ -24,8 +27,11 @@ class S3Config(BaseModel):
     access_secret: str
     """ The S3 access secret. """
     
-    error_log_path: str
-    """ A path in S3 where error logs should be stored. """
+    error_log_path: str | None = None
+    """
+    A path in S3 where error logs should be stored.
+    May not be present if unavailable.
+    """
     
     insecure: bool = False
     """
@@ -48,6 +54,8 @@ class S3Config(BaseModel):
         """
         Initialize the S3 clients. NOTE: this method is not safe for concurrent access.
         
+        If no external url is supplied, the external client will not be initialized.
+        
         Calling this method more than once has no effect.
         """
         if self._s3_client is None:
@@ -57,7 +65,7 @@ class S3Config(BaseModel):
                 self.access_secret,
                 insecure_ssl=self.insecure
             )
-        if self._s3_external_client is None:
+        if self._s3_external_client is None and self.external_url:
             self._s3_external_client = await S3Client.create(
                 self.external_url,
                 self.access_key,

@@ -1,6 +1,17 @@
 #!/bin/bash
 
-export KB_DEPLOYMENT_CONFIG=cdmtaskservice_config.toml
+echo "Service mode: $KBCTS_MODE"
+
+# Determine config file and app factory based on mode
+if [ "$KBCTS_MODE" = "refdata" ]; then
+    CONFIG_FILE="cdmtaskservice_refdata_config.toml"
+    APP_FACTORY="cdmtaskservice.app:create_refdata_app"
+else
+    CONFIG_FILE="cdmtaskservice_config.toml"
+    APP_FACTORY="cdmtaskservice.app:create_app"
+fi
+
+export KB_DEPLOYMENT_CONFIG=$CONFIG_FILE
 
 jinja $KB_DEPLOYMENT_CONFIG.jinja -X "^KBCTS_" > $KB_DEPLOYMENT_CONFIG
 
@@ -11,4 +22,4 @@ PORT=${KBCTS_PORT:-5000}
 # and scaling via adding more containers. If we need to run multiple processes, use guvicorn as
 # a process manager as described in the FastAPI docs
 # https://fastapi.tiangolo.com/deployment/docker/#replication-number-of-processes
-uvicorn --host 0.0.0.0 --port "$PORT" --factory cdmtaskservice.app:create_app
+uvicorn --host 0.0.0.0 --port "$PORT" --factory $APP_FACTORY
