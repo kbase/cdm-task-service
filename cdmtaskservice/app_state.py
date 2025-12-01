@@ -32,6 +32,7 @@ from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.notifications.kafka_checker import KafkaChecker
 from cdmtaskservice.refdata import Refdata
+from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice import sites
@@ -44,6 +45,8 @@ from cdmtaskservice.user import CTSAuth, CTSUser
 
 class AppState(NamedTuple):
     """ Holds application state. """
+    service_name: str
+    """ The name of the service. """
     auth: CTSAuth
     """ The authentication client for the service. """
     sfapi_client_provider: Callable[[], NERSCSFAPIClientProvider]
@@ -97,15 +100,60 @@ async def _check_paths(s3: S3Client, logr: logging.Logger, cfg: CDMTaskServiceCo
     logr.info("Done")
 
 
-async def build_app(
-    app: FastAPI,
-    cfg: CDMTaskServiceConfig,
-) -> None:
+async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_name: str):
+    """
+    Build the refdata application state.
+
+    app - the FastAPI app.
+    cfg - the CDM task service config.
+    service_name - the name of the service.
+    """
+    # way too ugly trying to integrate this into the main method below
+    logr = logging.getLogger(__name__)
+    logr.info("Connecting to KBase auth service... ")
+    kbauth = await AsyncKBaseAuthClient.create(cfg.auth_url)
+    auth = CTSAuth(
+        kbauth,
+        set(cfg.auth_full_admin_roles),
+        require_kbase_staff_and_nersc_accounts_for_admin=False
+    )
+    logr.info("Done")
+    try:
+        logr.info("Initializing S3 client... ")
+        s3cfg = cfg.get_s3_config()
+        # ensure clients are working before we proceed
+        await s3cfg.initialize_clients()
+        logr.info("Done")
+        app.state._mongo = None
+        app.state._coroman = None
+        app.state._jaws_provider = None
+        app.state._kafka = None
+        app.state._kbauth = kbauth
+        app.state._cdmstate = AppState(
+            service_name=service_name,
+            auth=auth,
+            sfapi_client_provider=None,
+            job_state=None,
+            refdata=None,
+            images=None,
+            jobflow_manager=None,
+            kafka_checker=None,
+            allowed_paths=[],
+            condor_exe_path=None,
+            code_archive_path=None,
+        )
+    except:
+        await kbauth.close()
+        raise
+
+
+async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
     """
     Build the application state.
 
     app - the FastAPI app.
     cfg - the CDM task service config.
+    service_name - the name of the service.
     """
     # This method is getting pretty long but it's stupid simple so...
     # May want to parallelize some of this for faster startups. would need to rework prints
@@ -123,9 +171,9 @@ async def build_app(
     auth = CTSAuth(
         kbauth,
         set(cfg.auth_full_admin_roles),
-        cfg.kbase_staff_role,
-        cfg.has_nersc_account_role,
-        cfg.external_executor_role,
+        is_kbase_staff_role=cfg.kbase_staff_role,
+        has_nersc_account_role=cfg.has_nersc_account_role,
+        external_executor_role=cfg.external_executor_role,
     )
     logr.info("Done")
     jaws_job_flows = None
@@ -177,6 +225,7 @@ async def build_app(
         kc = KafkaChecker(mongodao, kafka_notifier)
         sfcliprov = _get_sfapi_client_provider(jaws_job_flows)
         app.state._cdmstate = AppState(
+            service_name,
             auth,
             sfcliprov,
             job_state,
@@ -288,8 +337,10 @@ async def destroy_app_state(app: FastAPI):
     Destroy the application state, shutting down services and releasing resources.
     """
     await app.state._kbauth.close()
-    app.state._mongo.close()
-    app.state._coroman.destroy()
+    if app.state._mongo:
+        app.state._mongo.close()
+    if app.state._coroman:
+        app.state._coroman.destroy()
     if app.state._jaws_provider:
         await app.state._jaws_provider.close()
     if app.state._kafka:

@@ -61,9 +61,11 @@ class CTSAuth:
             self,
             kbaseauth: AsyncKBaseAuthClient,
             service_admin_roles: set[str],
-            is_kbase_staff_role: str,
-            has_nersc_account_role: str,
-            external_executor_role: str,
+            *,
+            is_kbase_staff_role: str | None = None,
+            has_nersc_account_role: str | None = None,
+            external_executor_role: str | None = None,
+            require_kbase_staff_and_nersc_accounts_for_admin: bool = True,
     ):
         """
         Create the auth client.
@@ -77,16 +79,18 @@ class CTSAuth:
             account.
         external_executor_roel -a KBase auth role that designates the user is a external
             job executor.
+        require_kbase_staff_and_nersc_accounts_for_admin - if false, the KBase staff role
+            and NERSC account role are not required for full admin status. This is typically
+            only used for the reference data service.
         """
         # In the future this mey need changes to support other auth sources...?
         self._kbauth = _not_falsy(kbaseauth, "kbaseauth")
         # TODO CODE check contents are non-whitespace only strings
         self._admin_roles = _not_falsy(service_admin_roles, "service_admin_roles")
-        self._kbstaff_role = require_string(is_kbase_staff_role, "is_kbase_staff_role")
-        self._nersc_role = require_string(has_nersc_account_role, "has_nersc_account_role")
-        self._external_executor_role = require_string(
-            external_executor_role, "external_executor_role"
-        )
+        self._kbstaff_role = is_kbase_staff_role
+        self._nersc_role = has_nersc_account_role
+        self._external_executor_role = external_executor_role
+        self._require_admin_roles = require_kbase_staff_and_nersc_accounts_for_admin
 
 
     async def is_valid_kbase_user(self, user: str, token: str) -> bool:
@@ -120,6 +124,7 @@ class CTSAuth:
         # ensure admins have all roles necessary to use any part of the system
         if (
             ctsuser.is_full_admin()
+            and self._require_admin_roles
             and (not ctsuser.is_kbase_staff or not ctsuser.has_nersc_account)
         ):
             raise UnauthorizedError("Service admins must be KBase staff and have NERSC accounts")

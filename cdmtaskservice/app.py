@@ -22,16 +22,17 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from cdmtaskservice import app_state
-from cdmtaskservice import errors
-from cdmtaskservice import logfields
-from cdmtaskservice import models_errors
-from cdmtaskservice import routes
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.error_mapping import map_error
+from cdmtaskservice import errors
+from cdmtaskservice.exceptions import InvalidAuthHeaderError
 from cdmtaskservice.git_commit import GIT_COMMIT
+from cdmtaskservice import logfields
+from cdmtaskservice import models_errors
+from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
+from cdmtaskservice import routes
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
-from cdmtaskservice.exceptions import InvalidAuthHeaderError
 
 
 # TODO FEATURE cleanup files:
@@ -47,9 +48,13 @@ from cdmtaskservice.exceptions import InvalidAuthHeaderError
 
 
 _KB_DEPLOYMENT_CONFIG = "KB_DEPLOYMENT_CONFIG"
-
+SERVICE_NAME = "CDM Task Service"
+REFDATA_SERVICE_NAME = "CDM Refdata Service"
 SERVICE_DESCRIPTION = (
     "A service for running arbitrary binaries on remote compute for the KBase CDM"
+)
+REFDATA_SERVICE_DESCRIPTION = (
+    "A CTS companion service for manageing reference data"
 )
 
 
@@ -186,7 +191,7 @@ def create_app():
     sys.stdout.flush()
 
     app = FastAPI(
-        title = routes.SERVICE_NAME,
+        title = SERVICE_NAME,
         description = SERVICE_DESCRIPTION,
         version = VERSION,
         root_path = cfg.service_root_path or "",
@@ -203,6 +208,7 @@ def create_app():
     app.add_middleware(GZipMiddleware)
     app.add_middleware(_AppMiddleWare)
     app.include_router(routes.ROUTER_GENERAL)
+    app.include_router(routes.ROUTER_SITES)
     app.include_router(routes.ROUTER_JOBS)
     app.include_router(routes.ROUTER_IMAGES)
     app.include_router(routes.ROUTER_REFDATA)
@@ -211,7 +217,50 @@ def create_app():
     app.include_router(routes.ROUTER_EXTERNAL_EXEC)
 
     async def build_app_wrapper():
-        await app_state.build_app(app, cfg)
+        await app_state.build_app(app, cfg, SERVICE_NAME)
+    app.add_event_handler("startup", build_app_wrapper)
+
+    async def clean_app_wrapper():
+        await app_state.destroy_app_state(app)
+    app.add_event_handler("shutdown", clean_app_wrapper)
+    
+    return app
+
+
+def create_refdata_app():
+    """
+    Create the CDM refdata service application
+    """
+
+    logging.getLogger(__name__).info(
+        f"Refdata server starting", extra={"version": VERSION, "git_commit": GIT_COMMIT}
+    )
+    with open(os.environ[_KB_DEPLOYMENT_CONFIG], "rb") as cfgfile:
+        cfg = CDMRefdataServiceConfig(cfgfile)
+    cfg.print_config(sys.stdout)  # maybe should redo the service config in json...?
+    sys.stdout.flush()
+
+    app = FastAPI(
+        title = REFDATA_SERVICE_NAME,
+        description = REFDATA_SERVICE_DESCRIPTION,
+        version = VERSION,
+        root_path = cfg.service_root_path or "",
+        exception_handlers = {
+            RequestValidationError: _handle_fastapi_validation_exception,
+            StarletteHTTPException: _handle_starlette_exception,
+            Exception: _handle_general_exception
+        },
+        responses = {
+            "4XX": {"model": models_errors.ClientError},
+            "5XX": {"model": models_errors.ServerError}
+        }
+    )
+    app.add_middleware(GZipMiddleware)
+    app.add_middleware(_AppMiddleWare)
+    app.include_router(routes.ROUTER_GENERAL)
+
+    async def build_app_wrapper():
+        await app_state.build_refdata_app(app, cfg, REFDATA_SERVICE_NAME)
     app.add_event_handler("startup", build_app_wrapper)
 
     async def clean_app_wrapper():

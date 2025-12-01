@@ -1,0 +1,38 @@
+[Authentication]
+
+# The URL of a KBase auth2 service
+url = "{{ KBCTS_KBASE_AUTH2_URL or "https://ci.kbase.us/services/auth" }}"
+
+# KBase auth2 custom roles that signify that a user is an admin for the CDM refdata service
+# This is a comma delimited list, e.g. "KBASE_ADMIN, CDM_TASK_SERVICE_ADMIN"
+admin_roles_full = "{{ KBCTS_KBASE_AUTH2_ADMIN_ROLES or "" }}"
+
+[S3]
+
+# The connection parameters for the S3 instance where the refdata is stored. The credentials must
+# have access to any refdata that will be used with CTS jobs.
+# See S3 requirements in the README.
+
+# The URL of the S3 instance accessible to the service.
+url = "{{ KBCTS_S3_URL or "" }}"
+# The S3 access key.
+access_key = "{{ KBCTS_S3_ACCESS_KEY or "" }}"
+# The S3 secret key.
+access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
+# Setting allow_insecure = true (and only the exact string "true") skips checking the validity of
+# the SSL certificate for both the standard and external urls, leaving the service vulnerable
+# to Man in the Middle attacks.
+allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
+
+[Service]
+
+# If the service is behind a reverse proxy that rewrites the service path, that path needs
+# to be defined here in order for the OpenAPI documentation to function.
+root_path = "{{ KBCTS_SERVICE_ROOT_PATH or "" }}"
+
+# The service group to which this instance of the service belongs. This is used to separate files
+# on remote services so files from different S3 instances (say production and development)
+# don't collide.
+# MongoDB databases should not be split among different service groups or errors accessing
+# job files may occur.
+group_id = "{{ KBCTS_SERVICE_GROUP or "dev" }}"
