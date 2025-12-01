@@ -63,6 +63,7 @@ class JAWSClient:
         url = _require_string(url, "url")
         if not url.endswith("/"):
             url += "/"
+        url += "api/v2/"
         self._sess = aiohttp.ClientSession(
             base_url=url,
             headers={"Authorization": f"Bearer {_require_string(token, 'token')}"}

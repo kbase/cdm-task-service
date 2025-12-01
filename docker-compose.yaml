@@ -38,7 +38,7 @@ services:
       - KBCTS_NERSC_JAWS_PERMUTTER_STAGING_DIR=/pscratch/sd/k/kbjaws/kbase-prod/
       - KBCTS_SFAPI_CRED_PATH=/creds/sfapi_creds
       - KBCTS_NERSC_REMOTE_CODE_DIR=/global/cfs/cdirs/kbase/cdm_task_service
-      - KBCTS_JAWS_URL=https://jaws-api.jgi.doe.gov/api/v2
+      - KBCTS_JAWS_URL=https://jaws-api.jgi.doe.gov/
       # Don't commit your token to github please
       - KBCTS_JAWS_TOKEN=dont_check_tokens_into_vcs_please
       - KBCTS_JAWS_GROUP=kbase
