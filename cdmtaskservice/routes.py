@@ -1069,7 +1069,7 @@ async def _callback_handling(
 
 
 @ROUTER_EXTERNAL_EXEC.put(
-    "/external_exec/{job_id}/container/{container_num}/update",
+    "/external_exec/{job_id}/container/{container_num}/update/{new_state}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Update a container's state.",
@@ -1079,6 +1079,10 @@ async def update_container(
     r: Request,
     job_id: _ANN_JOB_ID,
     container_num: _ANN_CONTAINER_NUMBER,
+    new_state: Annotated[models.JobState, FastPath(
+        openapi_examples={"job_submitted": {"value": models.JobState.JOB_SUBMITTED}},
+        description="The new state for the container / subjob.",
+    )],
     update: models.ContainerUpdate,
     user: CTSUser=Depends(_AUTH),
 ):
@@ -1086,7 +1090,7 @@ async def update_container(
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, user, as_admin=True)
     flow =  await appstate.jobflow_manager.get_flow(job.job_input.cluster)
-    await flow.update_container_state(job, container_num, update)
+    await flow.update_container_state(job, container_num, new_state, update)
 
 
 @ROUTER_EXTERNAL_EXEC.get(
