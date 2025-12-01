@@ -29,6 +29,7 @@ from cdmtaskservice.exceptions import InvalidAuthHeaderError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice import logfields
 from cdmtaskservice import models_errors
+from cdmtaskservice.refserv import routes as refroutes
 from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
 from cdmtaskservice import routes
 from cdmtaskservice.version import VERSION
@@ -258,6 +259,7 @@ def create_refdata_app():
     app.add_middleware(GZipMiddleware)
     app.add_middleware(_AppMiddleWare)
     app.include_router(routes.ROUTER_GENERAL)
+    app.include_router(refroutes.ROUTER_REFDATA)
 
     async def build_app_wrapper():
         await app_state.build_refdata_app(app, cfg, REFDATA_SERVICE_NAME)
