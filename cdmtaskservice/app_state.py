@@ -125,11 +125,7 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
         # ensure clients are working before we proceed
         await s3cfg.initialize_clients()
         logr.info("Done")
-        app.state._mongo = None
-        app.state._coroman = None
-        app.state._jaws_provider = None
-        app.state._kafka = None
-        app.state._kbauth = kbauth
+        _set_destroyable_resources(app, kbauth)
         app.state._cdmstate = AppState(
             service_name=service_name,
             auth=auth,
@@ -178,6 +174,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
     )
     logr.info("Done")
     jaws_job_flows = None
+    kbase_job_flow = None
     mongocli = None
     kafka_notifier = None
     try:
@@ -201,7 +198,9 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         jaws_job_flows = await _register_nersc_job_flows(
             logr, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
         )
-        _register_kbase_job_flow(cfg, flowman, mongodao, s3cfg, kafka_notifier, coman)
+        kbase_job_flow = await _register_kbase_job_flow(
+            cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
+        )
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
         images = Images(mongodao, imginfo, refdata)
@@ -218,11 +217,15 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             cfg.job_max_cpu_hours,
             test_mode=test_mode,
         )
-        app.state._mongo = mongocli
-        app.state._coroman = coman
-        app.state._jaws_provider = jaws_job_flows
-        app.state._kafka = kafka_notifier
-        app.state._kbauth = kbauth
+        _set_destroyable_resources(
+            app,
+            kbauth,
+            coro=coman,
+            mongo=mongocli,
+            jaws_provider=jaws_job_flows,
+            kbase_provider=kbase_job_flow,
+            kafka=kafka_notifier
+        )
         kc = KafkaChecker(mongodao, kafka_notifier)
         sfcliprov = _get_sfapi_client_provider(jaws_job_flows)
         app.state._cdmstate = AppState(
@@ -245,6 +248,8 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             mongocli.close()
         if jaws_job_flows:
             await jaws_job_flows.close()
+        if kbase_job_flow:
+            await kbase_job_flow.close()
         if kafka_notifier:
             # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
             await asyncio.wait_for(kafka_notifier.close(), 10)
@@ -308,7 +313,7 @@ async def _register_nersc_job_flows(
     return jaws_job_flows
 
 
-def _register_kbase_job_flow(
+async def _register_kbase_job_flow(
     cfg: CDMTaskServiceConfig,
     flowman: JobFlowManager,
     mongodao: MongoDAO,
@@ -316,14 +321,17 @@ def _register_kbase_job_flow(
     kafka_notifier: KafkaNotifier,
     coman: CoroutineWrangler
 ):
-    kbase_provider = KBaseFlowProvider.create(
+    kbase_provider = await KBaseFlowProvider.create(
         cfg.get_condor_client_config(),
         mongodao,
         s3config,
         kafka_notifier,
         coman,
+        cfg.refdata_server_url,
+        cfg.refdata_server_token,
     )
     flowman.register_flow(KBaseRunner.CLUSTER, kbase_provider.get_kbase_job_flow)
+    return kbase_provider
 
 
 def get_app_state(r: Request) -> AppState:
@@ -331,6 +339,23 @@ def get_app_state(r: Request) -> AppState:
     Get the application state from a request.
     """
     return _get_app_state_from_app(r.app)
+
+
+def _set_destroyable_resources(
+    app: FastAPI,
+    kbauth: AsyncKBaseAuthClient,
+    coro: CoroutineWrangler | None = None,
+    mongo: MongoDAO | None = None,
+    jaws_provider: JAWSFlowProvider | None = None,
+    kbase_provider: KBaseFlowProvider | None = None,
+    kafka: KafkaNotifier | None = None,
+):
+    app.state._mongo = mongo
+    app.state._coroman = coro
+    app.state._jaws_provider = jaws_provider
+    app.state._kbase_provider = kbase_provider
+    app.state._kafka = kafka
+    app.state._kbauth = kbauth
 
 
 async def destroy_app_state(app: FastAPI):
@@ -344,6 +369,8 @@ async def destroy_app_state(app: FastAPI):
         app.state._coroman.destroy()
     if app.state._jaws_provider:
         await app.state._jaws_provider.close()
+    if app.state._kbase_provider:
+        await app.state._kbase_provider.close()
     if app.state._kafka:
         # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
         await asyncio.wait_for(app.state._kafka.close(), 10)

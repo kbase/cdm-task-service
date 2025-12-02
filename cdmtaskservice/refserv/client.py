@@ -27,7 +27,13 @@ class RefdataServiceClient:
         token - the token to use to contact the refdata server.
         """
         c = cls(url, token)
-        await c._check_server()
+        try:
+            # TDOO CODE may wan to call a method that checks the token has the right roles.
+            #           Don't really want to expose the CTS role to users, though
+            await c._check_server()
+        except Exception:
+            await c.close()
+            raise
         return c
         
         
@@ -76,6 +82,12 @@ class RefdataServiceClient:
         url = f"{self._url}/refdata/{refdata_id}/{cluster.value}"
         async with self._sess.post(url) as resp:
             await self._check_resp(resp, "Failed staging refdata")
+
+    async def close(self):
+        """
+        Release resources associated with the client instance.
+        """
+        await self._sess.close()
 
 
 class RefdataServerError(Exception):

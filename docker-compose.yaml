@@ -24,6 +24,8 @@ services:
         condition: service_healthy
       htcondor-mini:
         condition: service_started
+      cdm_refdata_service:
+        condition: service_started
     environment:
       - _CONDOR_COLLECTOR_HOST=htcondor-mini:9618
       - _CONDOR_SEC_TOKEN_DIRECTORY=/etc/condor/tokens.d
@@ -47,6 +49,8 @@ services:
       # From ./docker_compose/htcondor/condor_config.local
       - KBCTS_HTC_CLIENT_GROUP=test_cg
       - KBCTS_HTC_ADDL_PATH=/home/submituser/.local/bin
+      - KBCTS_REFDATA_SERVER_URL=http://cdm_refdata_service:5001
+      - KBCTS_REFDATA_SERVER_TOKEN=token_with_the_cts_role
       - KBCTS_EXTERNAL_JOB_MOUNT_PREFIX_OVERRIDE=/var/lib/condor/execute:<path to condor_share>/condor_share
       # Note that the host minio must be bound to 0.0.0.0:9002 or 172.17.0.1:9002 (the docker
       # bridge interface). The latter is safer but only works for bridge networks

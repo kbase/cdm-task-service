@@ -69,6 +69,9 @@ class CDMTaskServiceConfig:
     condor_exe_path: str - the local path to the HTCondor worker executable.
     condor_exe_url_override: str | None - a url, if any, to use for downloading the HTCondor
         executable rather than the default location.
+    refdata_server_url: str - the url of the refdata staging server.
+    refdata_server_token: str - the token to use when communicating with the refdata staging
+        server.
     external_executor_job_update_timeout_min: int - the number of minutes to wait when trying
         to update the job state in the service before failing.
     external_executor_mount_prefix_override: str - a host container mount path prefix override
@@ -169,6 +172,14 @@ class CDMTaskServiceConfig:
         self.condor_exe_path = _get_string_required(config, _SEC_HTCONDOR, "executable_path")
         self.condor_exe_url_override = _get_string_optional(
             config, _SEC_HTCONDOR, "executable_url_override"
+        )
+        # Some of the htcontor and external execution config assumes there's only one
+        # htcondor instance and one refdata server. For now those are acceptable assumptions
+        # May need to refactor in the future
+        # TODO CODE url validation
+        self.refdata_server_url = _get_string_required(config, _SEC_EXTERNAL_EXEC, "refserver_url")
+        self.refdata_server_token = _get_string_required(
+            config, _SEC_EXTERNAL_EXEC, "refserver_token"
         )
         self.external_executor_job_update_timeout_min = _get_int_required(
             config, _SEC_EXTERNAL_EXEC, "job_update_timeout_min", minimum=1
@@ -319,6 +330,8 @@ class CDMTaskServiceConfig:
             f"HTCondor use external S3 URL: {self.condor_use_s3_external_url}",
             f"HTCondor exe path: {self.condor_exe_path}",
             f"HTCondor exe url override: {self.condor_exe_url_override}",
+            f"Refdata server url: {self.refdata_server_url}",
+            f"Refdata server token: REDACTED FOR YOUR PLEASURE",
             "External executor job update timeout (min): "
                 + str(self.external_executor_job_update_timeout_min),
             "External executor mount prefix override: " +

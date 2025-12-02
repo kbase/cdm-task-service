@@ -3,6 +3,7 @@ The KBase job flow implementation and provider. Runs jobs on the HTCondor system
 """
 
 import asyncio
+from dataclasses import dataclass
 import htcondor2
 import logging
 from pathlib import Path
@@ -29,6 +30,7 @@ from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
+from cdmtaskservice.refserv.client import RefdataServiceClient
 from cdmtaskservice.s3.client import S3ObjectMeta
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice import sites
@@ -57,6 +59,7 @@ class KBaseRunner(JobFlow):
         s3config: S3Config,
         kafka: KafkaNotifier, 
         coro_manager: CoroutineWrangler,
+        refserv_client: RefdataServiceClient
     ):
         """
         Create the runner.
@@ -72,6 +75,7 @@ class KBaseRunner(JobFlow):
         self._s3 = _not_falsy(s3config, "s3config").get_internal_client()
         self._s3logdir = s3config.error_log_path
         self._coman = _not_falsy(coro_manager, "coro_manager")
+        self._refcli = _not_falsy(refserv_client, "refserv_client")
         self._logr = logging.getLogger(__name__)
         
         self._updates = JobFlowStateUpdates(self.CLUSTER, self._mongo, _not_falsy(kafka, "kafka"))
@@ -222,6 +226,7 @@ class KBaseRunner(JobFlow):
         raise UnsupportedOperationError(
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
+
     _COMMON_STATE_TO_UPDATE_FUNC = {
         models.JobState.JOB_SUBMITTING: lambda _: update_state.submitting_job(),
         models.JobState.JOB_SUBMITTED: lambda _: update_state.submitted_job(),
@@ -344,7 +349,7 @@ class KBaseRunner(JobFlow):
         for o in s3objs:
             if o.crc64nvme != filechecksums[o.path]:
                 raise ValueError(
-                    f"Expected CRC64/NVME checkusm {filechecksums[o.path]} but got "
+                    f"Expected CRC64/NVME checksum {filechecksums[o.path]} but got "
                     + f"{o.crc64nvme} for uploaded file {o.path}"
                 )
             outfiles.append(models.S3File(file=o.path, crc64nvme=o.crc64nvme))
@@ -390,7 +395,18 @@ class KBaseRunner(JobFlow):
         if refstate.state != models.ReferenceDataState.CREATED:
             raise InvalidReferenceDataStateError("Reference data must be in the created state")
         # Could check that the s3 and refdata path / etag match... YAGNI
-        # TODO KBASE_CLUSTER implement
+        try: 
+            await self._refcli.stage_refdata(refdata.id, self.CLUSTER)
+        except Exception as e:
+            await self._updates.handle_exception(
+                e, refdata.id, "starting staging for", refdata=True
+            )
+
+    async def refdata_complete(self, refdata_id: str):
+        """ Throws an exception as this method is not supported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
 
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """
@@ -399,21 +415,27 @@ class KBaseRunner(JobFlow):
         pass # Intentionally do nothing 
 
 
+@dataclass(frozen=True)
+class _Dependencies():
+    refdata_client: RefdataServiceClient
+    kbase_job_flow: KBaseRunner
+
+
 class KBaseFlowProvider:
     """
     Manages KBase job flow initialization.
     """
     
-    # So we don't really need a create method here since this is all sync, but we go ahead to
-    # match the other flow provider.
     @classmethod
-    def create(
+    async def create(
         cls,
         condor_config: CondorClientConfig,
         mongodao: MongoDAO,
         s3config: S3Config,
         kafka_notifier: KafkaNotifier,
         coman: CoroutineWrangler,
+        refserver_url: str,
+        refserver_token: str,
     ):
         """
         WARNING: this class is not thread safe.
@@ -425,6 +447,8 @@ class KBaseFlowProvider:
         s3config - the S3 configuration.
         kafka_notifier - a kafka notifier.
         coman - a coroutine manager.
+        refserver_url - the url for the refdata server.
+        refserver_token - the token to use when communicating with the refdata server.
         """
     
         kb = cls()
@@ -433,10 +457,14 @@ class KBaseFlowProvider:
         kb._s3config = _not_falsy(s3config, "s3config")
         kb._kafka = _not_falsy(kafka_notifier, "kafka_notifier")
         kb._coman = _not_falsy(coman, "coman")
+        kb._refserv_url = _require_string(refserver_url, "refserver_url")
+        kb._refserv_token = _require_string(refserver_token, "refserver_token")
         
         kb._logr = logging.getLogger(__name__)
+        kb._closed = False
         
-        kb._build_deps()
+        res = await kb._build_deps()
+        kb._handle_build_result(res)
         return kb
         
     def __init__(self):
@@ -444,15 +472,28 @@ class KBaseFlowProvider:
         Don't call this method. Ever. If you do may a curse be upon you such that your
         head falls off at an awkward moment
         """
+        
+    async def close(self):
+        """
+        Close all resources managed by this class.
+        """
+        self._closed = True
+        if isinstance(self._build_state, _Dependencies):
+            await self._build_state.refdata_client.close()
+
+    def _check_closed(self):
+        if self._closed:
+            raise ValueError("Provider is closed")
 
     async def get_kbase_job_flow(self) -> JobFlowOrError:
         """
         Get the KBase job flow manager or an error message.
         """
+        self._check_closed()
         err = self._check_build()
         if err:
             return JobFlowOrError(error=err)
-        return JobFlowOrError(jobflow=self._kbase)
+        return JobFlowOrError(jobflow=self._build_state.kbase_job_flow)
 
     # TODO KBASESTART could maybe make this automatic vs lazy in the future. Would need to be
     #                 careful around concurrency. Maybe start a thread and only that thread
@@ -469,27 +510,50 @@ class KBaseFlowProvider:
           
         Returns an error string or None if the build is complete.
         """
-        if not self._kbase:
+        state = self._build_state
+        if not state:
             remaining_delay = _RETRY_DELAY_SEC - (time.monotonic() - self._last_fail_time)
             if remaining_delay > 0:
                 return (
                     "KBase job flow startup failed. Further attempts blocked for "
                     + f"{remaining_delay}s."
                 )
-            success = self._build_deps()
-            if not success:
-                return (
+            fut = asyncio.get_event_loop().create_future()
+            self._build_state = fut
+            async def init():
+                res = await self._build_deps()
+                fut.set_result(res)
+            asyncio.create_task(init())
+            return "Recovery for KBase job flow in process"
+        elif isinstance(self._build_state, asyncio.Future):
+            if self._build_state.done():
+                err = self._handle_build_result(self._build_state.result())
+                if err:
+                    return (
                     "KBase job flow startup failed. Further attempts blocked for "
                     + f"{_RETRY_DELAY_SEC}s."
                 )
+            else:
+                return "Recovery for KBase job flow in process"
         return None
 
-    def _build_deps(self):
+    def _handle_build_result(self, deps: _Dependencies | None) -> bool:
+        """ Returns True if an error occurred. """
+        if deps:
+            self._build_state = deps
+            self._last_fail_time = None
+            return False
+        else:
+            self._last_fail_time = time.monotonic()
+            self._build_state = None
+            return True
+
+    async def _build_deps(self) -> _Dependencies | None:
         """
         This method should only run as part of _check_build or the constructor to make sure
         it's never run concurrently.
         
-        Returns true if the build was successful.
+        Returns the dependencies if the build was successful.
         """
         # all this is fast enough we shouldn't need to have a complex async system like
         # the JAWS flow manager
@@ -502,18 +566,18 @@ class KBaseFlowProvider:
             schedd = htcondor2.Schedd(schedd_ad)
             self._logr.info("Done")
             condor = CondorClient(schedd, self._condor_config, self._s3config)
+            self._logr.info("Initializing refdata service client...")
+            refcli = await RefdataServiceClient.create(self._refserv_url, self._refserv_token)
             kbase = KBaseRunner(
                 condor,
                 self._mongodao,
                 self._s3config,
                 self._kafka,
                 self._coman,
+                refcli,
             )
-            self._kbase = kbase
-            self._last_fail_time = None
-            return True
+            self._logr.info("Done")
+            return _Dependencies(refcli, kbase)
         except Exception as e:
             self._logr.exception(f"Failed to initialize KBase job flow dependencies: {e}")
-            self._kbase = None
-            self._last_fail_time = time.monotonic()
-            return False
+            return None
