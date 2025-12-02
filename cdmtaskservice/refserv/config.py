@@ -27,6 +27,7 @@ class CDMRefdataServiceConfig:
     auth_url: str - the URL of the KBase Auth2 service.
     auth_full_admin_roles: list[str] - the list of Auth2 custom roles that signify that a user is
         a full admin for the CDM task service
+    auth_cts_role: str - the Auth2 custom role that signifies a user is the CTS service.
     s3_url: str - the URL of the S3 instance to use for data storage.
     s3_access_key: str - the S3 access key.
     s3_access_secret: str - the S3 access secret.
@@ -59,6 +60,7 @@ class CDMRefdataServiceConfig:
         #           yarl is way too liberal though. yarl + validators maybe?
         self.auth_url = _get_string_required(config, _SEC_AUTH, "url")
         self.auth_full_admin_roles = _get_list_string(config, _SEC_AUTH, "admin_roles_full")
+        self.auth_cts_role = _get_string_required(config, _SEC_AUTH, "cts_role")
         self.s3_url = _get_string_required(config, _SEC_S3, "url")
         self.s3_access_key = _get_string_required(config, _SEC_S3, "access_key")
         self.s3_access_secret = _get_string_required(config, _SEC_S3, "access_secret")
@@ -85,6 +87,7 @@ class CDMRefdataServiceConfig:
             "\n*** Service Configuration ***",
             f"Authentication URL: {self.auth_url}",
             f"Authentication full admin roles: {self.auth_full_admin_roles}",
+            f"Authentiation CTS role: {self.auth_cts_role}",
             f"S3 URL: {self.s3_url}",
             f"S3 access key: {self.s3_access_key}",
             "S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT",

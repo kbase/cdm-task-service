@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from kbase.auth import AsyncKBaseAuthClient
 
-from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.exceptions import UnauthorizedError
 
 
@@ -34,6 +34,7 @@ class CTSUser:
     roles: frozenset[CTSRole] = field(default_factory=frozenset)
     is_kbase_staff: bool = False
     has_nersc_account: bool = False
+    is_cdm_task_service: bool = False
 
     def __post_init__(self):
         # Convert roles to frozenset if it isn't one already
@@ -65,6 +66,7 @@ class CTSAuth:
             is_kbase_staff_role: str | None = None,
             has_nersc_account_role: str | None = None,
             external_executor_role: str | None = None,
+            cts_role: str | None = None,
             require_kbase_staff_and_nersc_accounts_for_admin: bool = True,
     ):
         """
@@ -77,8 +79,10 @@ class CTSAuth:
             member.
         has_nersc_account_role - a KBase auth role that designates that a user has a NERSC
             account.
-        external_executor_roel -a KBase auth role that designates the user is a external
+        external_executor_role -a KBase auth role that designates the user is a external
             job executor.
+        cts_role - a KBase auth role that designates that the user represents the CDM Task
+            Service.
         require_kbase_staff_and_nersc_accounts_for_admin - if false, the KBase staff role
             and NERSC account role are not required for full admin status. This is typically
             only used for the reference data service.
@@ -86,10 +90,11 @@ class CTSAuth:
         # In the future this mey need changes to support other auth sources...?
         self._kbauth = _not_falsy(kbaseauth, "kbaseauth")
         # TODO CODE check contents are non-whitespace only strings
-        self._admin_roles = _not_falsy(service_admin_roles, "service_admin_roles")
+        self._admin_roles = service_admin_roles or []
         self._kbstaff_role = is_kbase_staff_role
         self._nersc_role = has_nersc_account_role
         self._external_executor_role = external_executor_role
+        self._cts_role = cts_role
         self._require_admin_roles = require_kbase_staff_and_nersc_accounts_for_admin
 
 
@@ -120,6 +125,7 @@ class CTSAuth:
             roles=roles,
             is_kbase_staff=self._kbstaff_role in has_roles,
             has_nersc_account=self._nersc_role in has_roles,
+            is_cdm_task_service=self._cts_role in has_roles
         )
         # ensure admins have all roles necessary to use any part of the system
         if (

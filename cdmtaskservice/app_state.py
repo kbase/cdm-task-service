@@ -115,6 +115,7 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
     auth = CTSAuth(
         kbauth,
         set(cfg.auth_full_admin_roles),
+        cts_role=cfg.auth_cts_role,
         require_kbase_staff_and_nersc_accounts_for_admin=False
     )
     logr.info("Done")
