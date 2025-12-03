@@ -33,6 +33,7 @@ from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.notifications.kafka_checker import KafkaChecker
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
+from cdmtaskservice.resource_destructor import ResourceDestructor
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice import sites
@@ -110,8 +111,11 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
     """
     # way too ugly trying to integrate this into the main method below
     logr = logging.getLogger(__name__)
+    dest = ResourceDestructor()
+    app.state._destroyable = dest
     logr.info("Connecting to KBase auth service... ")
     kbauth = await AsyncKBaseAuthClient.create(cfg.auth_url)
+    dest.register("auth client", kbauth.close())
     auth = CTSAuth(
         kbauth,
         set(cfg.auth_full_admin_roles),
@@ -125,7 +129,6 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
         # ensure clients are working before we proceed
         await s3cfg.initialize_clients()
         logr.info("Done")
-        _set_destroyable_resources(app, kbauth)
         app.state._cdmstate = AppState(
             service_name=service_name,
             auth=auth,
@@ -140,7 +143,7 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
             code_archive_path=None,
         )
     except:
-        await kbauth.close()
+        await dest.destruct()
         raise
 
 
@@ -161,10 +164,11 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
     test_mode = os.environ.get("KBCTS_TEST_MODE") == "true"
     if test_mode:
         logr.info("KBCTS_TEST_MODE env var is 'true', will not submit jobs for processing")
-    # check that the path is a valid path
-    coman = CoroutineWrangler()
+    dest = ResourceDestructor()
+    app.state._destroyable = dest
     logr.info("Connecting to KBase auth service... ")
     kbauth = await AsyncKBaseAuthClient.create(cfg.auth_url)
+    dest.register("auth client", kbauth.close())
     auth = CTSAuth(
         kbauth,
         set(cfg.auth_full_admin_roles),
@@ -174,10 +178,11 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
     )
     logr.info("Done")
     jaws_job_flows = None
-    kbase_job_flow = None
     mongocli = None
     kafka_notifier = None
     try:
+        coman = CoroutineWrangler()
+        dest.register("coroutine manager", coman.destroy)
         logr.info("Initializing S3 client... ")
         s3cfg = cfg.get_s3_config()
         # ensure clients are working before we proceed
@@ -185,7 +190,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         logr.info("Done")
         await _check_paths(s3cfg.get_internal_client(), logr, cfg)
         logr.info("Initializing MongoDB client...")
-        mongocli = await get_mongo_client(cfg)
+        mongocli = await get_mongo_client(dest, cfg)
         logr.info("Done")
         mongodao = await MongoDAO.create(mongocli[cfg.mongo_db])
         await mongodao.initialize_sites(list(sites.Cluster))
@@ -193,14 +198,14 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         kafka_notifier = await KafkaNotifier.create(
             cfg.kafka_boostrap_servers, cfg.kafka_topic_jobs
         )
+        # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
+        dest.register("kafka notifier", asyncio.wait_for(kafka_notifier.close(), 10))
         logr.info("Done")
         flowman = JobFlowManager(mongodao)
         jaws_job_flows = await _register_nersc_job_flows(
-            logr, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
+            logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
         )
-        kbase_job_flow = await _register_kbase_job_flow(
-            cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
-        )
+        await _register_kbase_job_flow(dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman)
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
         images = Images(mongodao, imginfo, refdata)
@@ -216,15 +221,6 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             cfg.container_s3_log_dir,
             cfg.job_max_cpu_hours,
             test_mode=test_mode,
-        )
-        _set_destroyable_resources(
-            app,
-            kbauth,
-            coro=coman,
-            mongo=mongocli,
-            jaws_provider=jaws_job_flows,
-            kbase_provider=kbase_job_flow,
-            kafka=kafka_notifier
         )
         kc = KafkaChecker(mongodao, kafka_notifier)
         sfcliprov = _get_sfapi_client_provider(jaws_job_flows)
@@ -243,16 +239,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         )
         await _check_unsent_kafka_messages(logr, cfg, kc)
     except:
-        await kbauth.close()
-        if mongocli:
-            mongocli.close()
-        if jaws_job_flows:
-            await jaws_job_flows.close()
-        if kbase_job_flow:
-            await kbase_job_flow.close()
-        if kafka_notifier:
-            # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
-            await asyncio.wait_for(kafka_notifier.close(), 10)
+        await dest.destruct()
         raise
 
 
@@ -284,6 +271,7 @@ async def _check_unsent_kafka_messages(
 
 async def _register_nersc_job_flows(
     logr: logging.Logger,
+    dest: ResourceDestructor,
     cfg: CDMTaskServiceConfig,
     flowman: JobFlowManager,
     mongodao: MongoDAO,
@@ -308,12 +296,14 @@ async def _register_nersc_job_flows(
         cfg.service_group,
         cfg.service_root_url
     )
+    dest.register("JAWS flow provider", jaws_job_flows.close())
     flowman.register_flow(NERSCJAWSRunner.CLUSTER, jaws_job_flows.get_nersc_job_flow)
     flowman.register_flow(LawrenciumJAWSRunner.CLUSTER, jaws_job_flows.get_lrc_job_flow)
     return jaws_job_flows
 
 
 async def _register_kbase_job_flow(
+    dest: ResourceDestructor,
     cfg: CDMTaskServiceConfig,
     flowman: JobFlowManager,
     mongodao: MongoDAO,
@@ -330,6 +320,7 @@ async def _register_kbase_job_flow(
         cfg.refdata_server_url,
         cfg.refdata_server_token,
     )
+    dest.register("KBase flow provider", kbase_provider.close())
     flowman.register_flow(KBaseRunner.CLUSTER, kbase_provider.get_kbase_job_flow)
     return kbase_provider
 
@@ -341,39 +332,11 @@ def get_app_state(r: Request) -> AppState:
     return _get_app_state_from_app(r.app)
 
 
-def _set_destroyable_resources(
-    app: FastAPI,
-    kbauth: AsyncKBaseAuthClient,
-    coro: CoroutineWrangler | None = None,
-    mongo: MongoDAO | None = None,
-    jaws_provider: JAWSFlowProvider | None = None,
-    kbase_provider: KBaseFlowProvider | None = None,
-    kafka: KafkaNotifier | None = None,
-):
-    app.state._mongo = mongo
-    app.state._coroman = coro
-    app.state._jaws_provider = jaws_provider
-    app.state._kbase_provider = kbase_provider
-    app.state._kafka = kafka
-    app.state._kbauth = kbauth
-
-
 async def destroy_app_state(app: FastAPI):
     """
     Destroy the application state, shutting down services and releasing resources.
     """
-    await app.state._kbauth.close()
-    if app.state._mongo:
-        app.state._mongo.close()
-    if app.state._coroman:
-        app.state._coroman.destroy()
-    if app.state._jaws_provider:
-        await app.state._jaws_provider.close()
-    if app.state._kbase_provider:
-        await app.state._kbase_provider.close()
-    if app.state._kafka:
-        # TODO KAFKA see https://github.com/aio-libs/aiokafka/issues/1101
-        await asyncio.wait_for(app.state._kafka.close(), 10)
+    await app.state._destroyable.destruct()
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)
 
@@ -406,7 +369,9 @@ def get_request_token(r: Request) -> str:
     return _get_request_state(r, "token")
 
 
-async def get_mongo_client(cfg: CDMTaskServiceConfig) -> AsyncIOMotorClient:
+async def get_mongo_client(
+    dest: ResourceDestructor, cfg: CDMTaskServiceConfig
+) -> AsyncIOMotorClient:
     client = AsyncIOMotorClient(
         cfg.mongo_host,
         # Note auth is only currently tested manually
@@ -416,11 +381,8 @@ async def get_mongo_client(cfg: CDMTaskServiceConfig) -> AsyncIOMotorClient:
         retryWrites=cfg.mongo_retrywrites,
         tz_aware=True,
     )
+    dest.register("mongodb client", client.close)
     # Test connnection cheaply, doesn't need auth.
     # Just throw the exception as is
-    try:
-        await client.admin.command("ismaster")
-        return client
-    except:
-        client.close()
-        raise
+    await client.admin.command("ismaster")
+    return client
