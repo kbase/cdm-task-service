@@ -182,10 +182,8 @@ def create_app():
     """
     Create the CDM task service application
     """
-
-    logging.getLogger(__name__).info(
-        f"Server starting", extra={"version": VERSION, "git_commit": GIT_COMMIT}
-    )
+    logr = logging.getLogger(__name__)
+    logr.info(f"Server starting", extra={"version": VERSION, "git_commit": GIT_COMMIT})
     with open(os.environ[_KB_DEPLOYMENT_CONFIG], "rb") as cfgfile:
         cfg = CDMTaskServiceConfig(cfgfile, VERSION)
     cfg.print_config(sys.stdout)  # maybe should redo the service config in json...?
@@ -218,10 +216,12 @@ def create_app():
     app.include_router(routes.ROUTER_EXTERNAL_EXEC)
 
     async def build_app_wrapper():
+        logr.info("Running app state build")
         await app_state.build_app(app, cfg, SERVICE_NAME)
     app.add_event_handler("startup", build_app_wrapper)
 
     async def clean_app_wrapper():
+        logr.info("Running app state destroy")
         await app_state.destroy_app_state(app)
     app.add_event_handler("shutdown", clean_app_wrapper)
     
@@ -232,10 +232,8 @@ def create_refdata_app():
     """
     Create the CDM refdata service application
     """
-
-    logging.getLogger(__name__).info(
-        f"Refdata server starting", extra={"version": VERSION, "git_commit": GIT_COMMIT}
-    )
+    logr = logging.getLogger(__name__)
+    logr.info(f"Refdata server starting", extra={"version": VERSION, "git_commit": GIT_COMMIT})
     with open(os.environ[_KB_DEPLOYMENT_CONFIG], "rb") as cfgfile:
         cfg = CDMRefdataServiceConfig(cfgfile)
     cfg.print_config(sys.stdout)  # maybe should redo the service config in json...?
@@ -262,10 +260,12 @@ def create_refdata_app():
     app.include_router(refroutes.ROUTER_REFDATA)
 
     async def build_app_wrapper():
+        logr.info("Running app state build")
         await app_state.build_refdata_app(app, cfg, REFDATA_SERVICE_NAME)
     app.add_event_handler("startup", build_app_wrapper)
 
     async def clean_app_wrapper():
+        logr.info("Running app state destroy")
         await app_state.destroy_app_state(app)
     app.add_event_handler("shutdown", clean_app_wrapper)
     

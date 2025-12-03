@@ -22,4 +22,7 @@ PORT=${KBCTS_PORT:-5000}
 # and scaling via adding more containers. If we need to run multiple processes, use guvicorn as
 # a process manager as described in the FastAPI docs
 # https://fastapi.tiangolo.com/deployment/docker/#replication-number-of-processes
-uvicorn --host 0.0.0.0 --port "$PORT" --factory $APP_FACTORY
+
+# exec so that tini properly forwards signals directly to uvicorn without bash getting its
+# greasy mitts in the way
+exec uvicorn --host 0.0.0.0 --port "$PORT" --factory $APP_FACTORY
