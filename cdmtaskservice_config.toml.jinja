@@ -114,7 +114,7 @@ use_S3_external_url = "{{ KBCTS_HTC_USE_S3_EXTERNAL_URL or "false" }}"
 
 # The local path, accessible to the server, to the executable file to run on the HTCondor workers.
 # If using the provided Dockerfile, this value is set there.
-executable_path = "{{ KBCTS_HTC_EXE_PATH }}"
+executable_path = "{{ KBCTS_HTC_EXE_PATH or "" }}"
 
 # A URL that will override the default location for HTCondor to download the executable file
 # for the worker. By default this is constructed from the service root url (below) and a
@@ -124,6 +124,14 @@ executable_path = "{{ KBCTS_HTC_EXE_PATH }}"
 executable_url_override = "{{ KBCTS_HTC_EXE_URL_OVERRIDE or "" }}"
 
 [ExternalExecution]
+
+# The url of the reference data server.
+refserver_url = "{{ KBCTS_REFDATA_SERVER_URL or "" }}"
+
+# The token to use when communicating with the refdata server. The token must have the role
+# defined in the Authentication section of the standard server configuration that allows use
+# of the refdata server.
+refserver_token = "{{ KBCTS_REFDATA_SERVER_TOKEN or "" }}"
 
 # The time in minutes after which an external executor should give up and fail rather than
 # continue to try and update a job's state in the service if the service can't be contacted.
@@ -153,7 +161,7 @@ mount_prefix_override = "{{ KBCTS_EXTERNAL_JOB_MOUNT_PREFIX_OVERRIDE or "" }}"
 
 # The local path, accessible to the server, to the external execution code tgz archive file.
 # If using the provided Dockerfile, this value is set there.
-archive_path = "{{ KBCTS_CODE_ARCHIVE_PATH }}"
+archive_path = "{{ KBCTS_CODE_ARCHIVE_PATH or  "" }}"
 
 # A URL that will override the default location to download the external execution code
 # archive tgz file.
