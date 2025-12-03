@@ -28,6 +28,17 @@ access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
 # to Man in the Middle attacks.
 allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
 
+[CTS]
+
+# The root URL of the CTS service. This is used to contact the service when refdata state
+# changes.
+# Note: to prevent deadlocks, this URL is not verified at service startup.
+cts_root_url = "{{ KBCTS_SERVICE_ROOT_URL or "https://ci.kbase.us/services/cts" }}"
+
+# A token that provides the custom role necessary for the CTS to identify the user as the refdata
+# service. See the CTS configuration.
+cts_refdata_token = "{{ KBCTS_REFDATA_SERVICE_TOKEN or "" }}"
+
 [Service]
 
 # If the service is behind a reverse proxy that rewrites the service path, that path needs

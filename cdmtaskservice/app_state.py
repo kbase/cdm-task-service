@@ -6,6 +6,7 @@ calling the build_app() method
 """
 
 import asyncio
+from dataclasses import dataclass, field
 import datetime
 from fastapi import FastAPI, Request
 from kbase.auth import AsyncKBaseAuthClient
@@ -33,6 +34,8 @@ from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.notifications.kafka_checker import KafkaChecker
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
+from cdmtaskservice.refserv.cts_client import CTSRefdataClient
+from cdmtaskservice.refserv.refdata_manager import RefdataManager
 from cdmtaskservice.resource_destructor import ResourceDestructor
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
@@ -44,12 +47,31 @@ from cdmtaskservice.user import CTSAuth, CTSUser
 # to keep it consistent and allow for refactoring without breaking other code
 
 
-class AppState(NamedTuple):
-    """ Holds application state. """
+@dataclass(frozen=True, kw_only=True)
+class AppState():
+    """ Holds general application state. """
     service_name: str
     """ The name of the service. """
     auth: CTSAuth
     """ The authentication client for the service. """
+    allowed_paths: list[str] = field(default_factory=list)
+    """
+    What paths are allowed for reading and writing files in S3.
+    If empty, the user can read and write to anywhere the service can read and write,
+    other than where job logs are stored.
+    """
+
+
+@dataclass(frozen=True)
+class RefdataState(AppState):
+    """ Holds application state for the CDM Refdata service. """
+    refdata_manager: RefdataManager
+    """ The reference data manager. """
+
+
+@dataclass(frozen=True)
+class CTSAppState(AppState):
+    """ Holds application state for the CDM Task service. """
     sfapi_client_provider: Callable[[], NERSCSFAPIClientProvider]
     """ A callable that returns a provider for a NERSC SFAPI client. """
     job_state: JobState
@@ -62,12 +84,6 @@ class AppState(NamedTuple):
     """ The job flow manager class. """
     kafka_checker: KafkaChecker
     """ The Kafka state checker class. """
-    allowed_paths: list[str]
-    """
-    What paths are allowed for reading and writing files in S3.
-    If empty, the user can read and write to anywhere the service can read and write,
-    other than where job logs are stored.
-    """
     condor_exe_path: Path
     """ The local path to the executable file for use when running jobs with HTCondor. """ 
     code_archive_path: Path
@@ -124,23 +140,21 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
     )
     logr.info("Done")
     try:
+        coman = CoroutineWrangler()
+        dest.register("coroutine manager", coman.destroy)
         logr.info("Initializing S3 client... ")
         s3cfg = cfg.get_s3_config()
         # ensure clients are working before we proceed
         await s3cfg.initialize_clients()
         logr.info("Done")
-        app.state._cdmstate = AppState(
+        logr.info("Initializing CTS refdata client... ")
+        refcli = await CTSRefdataClient.create(cfg.cts_root_url, cfg.cts_refdata_token)
+        dest.register("cts refdata client", refcli.close())
+        refman = RefdataManager(refcli, s3cfg.get_internal_client(), coman)
+        app.state._cdmstate = RefdataState(
             service_name=service_name,
             auth=auth,
-            sfapi_client_provider=None,
-            job_state=None,
-            refdata=None,
-            images=None,
-            jobflow_manager=None,
-            kafka_checker=None,
-            allowed_paths=[],
-            condor_exe_path=None,
-            code_archive_path=None,
+            refdata_manager=refman
         )
     except:
         await dest.destruct()
@@ -224,18 +238,18 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         )
         kc = KafkaChecker(mongodao, kafka_notifier)
         sfcliprov = _get_sfapi_client_provider(jaws_job_flows)
-        app.state._cdmstate = AppState(
-            service_name,
-            auth,
-            sfcliprov,
-            job_state,
-            refdata,
-            images,
-            flowman,
-            kc,
-            cfg.allowed_s3_paths,
-            _get_local_path(cfg.condor_exe_path),
-            _get_local_path(cfg.code_archive_path),
+        app.state._cdmstate = CTSAppState(
+            service_name=service_name,
+            auth=auth,
+            allowed_paths=cfg.allowed_s3_paths,
+            sfapi_client_provider=sfcliprov,
+            job_state=job_state,
+            refdata=refdata,
+            images=images,
+            jobflow_manager=flowman,
+            kafka_checker=kc,
+            condor_exe_path=_get_local_path(cfg.condor_exe_path),
+            code_archive_path=_get_local_path(cfg.code_archive_path),
         )
         await _check_unsent_kafka_messages(logr, cfg, kc)
     except:
