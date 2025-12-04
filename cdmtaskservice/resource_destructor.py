@@ -23,7 +23,7 @@ class ResourceDestructor:
         Register a resource for eventual destruction.
         
         name - the name of the resource for logging purposes.
-        destructor - a sync function to be called or an aysnc awaitable to awaited to destroy
+        destructor - a sync function to be called or an async awaitable to awaited to destroy
             the resource.
         """
         self._resources.append(
@@ -31,6 +31,7 @@ class ResourceDestructor:
         )
     
     async def destruct(self):
+        """ Destroy the registered resources. """
         # don't worry about multiple calls for now, add fixes if needed later
         logr = logging.getLogger(__name__)
         for name, destructor in self._resources:
