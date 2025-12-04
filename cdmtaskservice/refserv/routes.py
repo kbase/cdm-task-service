@@ -12,6 +12,8 @@ from fastapi import (
     status,
     Path as FastPath
 )
+
+from cdmtaskservice import app_state
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice import sites
@@ -54,7 +56,6 @@ async def create_refdata(
     )],
     user: CTSUser=Depends(_AUTH)
 ):
-    # TODO NEXT REMOVE logging
-    import logging
-    logging.getLogger(__name__).info(f"Refdata call {refdata_id}, {cluster}, {user}")
     _ensure_cts(user, "Only the CTS service can create reference data.")
+    refman = app_state.get_app_state(r).refdata_manager
+    await refman.stage_refdata(refdata_id, cluster)
