@@ -20,6 +20,10 @@ has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"
 # and update job state.
 external_executor_role = "{{ KBCTS_EXTERNAL_EXECUTOR_ROLE or "CTS_EXTERNAL_EXECUTOR" }}"
 
+# KBase auth2 custom role that signifies a request is coming from a user representing an
+# refdata service. Used by refdata servers to get and update refdata state.
+refdata_service_role = "{{ KBCTS_REFDATA_SERVICE_ROLE or "CTS_REFDATA_SERVICE" }}"
+
 [NERSC_JAWS]
 
 # The username of the NERSC user that will interact with the Superfacility API and JAWS.

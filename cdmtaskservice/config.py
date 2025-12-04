@@ -43,6 +43,7 @@ class CDMTaskServiceConfig:
     has_nersc_account_role: str - the Auth2 custom role indicating a user has a NERSC account.
     external_executor_role: str - the Auth2 custom role indicating a user is an external job
         executor.
+    refdata_service_role: str - the Auth2 custom role indicating a user is the refdata service.
     nersc_jaws_user: str - the user name of the user associated with the NERSC and JAWS
         credentials.
     jaws_refdata_root_dir: str - the JAWS refdata root directory to use for refdata storage.
@@ -135,6 +136,9 @@ class CDMTaskServiceConfig:
         )
         self.external_executor_role = _get_string_required(
             config, _SEC_AUTH, "external_executor_role"
+        )
+        self.refdata_service_role = _get_string_required(
+            config, _SEC_AUTH, "refdata_service_role"
         )
         self.jaws_refdata_root_dir = _get_string_required(
             config, _SEC_NERSC_JAWS, "refdata_root_dir"
@@ -312,6 +316,7 @@ class CDMTaskServiceConfig:
             f"Authentication KBase staff role: {self.kbase_staff_role}",
             f"Authentication has NERSC account role: {self.has_nersc_account_role}",
             f"Authentication external executor role: {self.external_executor_role}",
+            f"Authentication refdata service role: {self.refdata_service_role}",
             f"NERSC / JAWS user: {self.nersc_jaws_user}",
             f"NERSC / JAWS refdata root dir: {self.jaws_refdata_root_dir}",
             f"NERSC / JAWS DTN staging dir: {self.jaws_staging_dir_dtn}",

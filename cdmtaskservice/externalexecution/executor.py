@@ -172,7 +172,7 @@ class Executor:
         exception: Exception = None
     ):
         url = (
-            f"{self._url}/external_exec/{job.id}/"
+            f"{self._url}/external_exec/jobs/{job.id}/"
             + f"container/{self._cfg.container_number}/update/{state.value}"
         )
         # TODO TEST need to mockout utcdatetime

@@ -408,11 +408,50 @@ class KBaseRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
+    _COMMON_STATE_TO_UPDATE_REFDATA_FUNC = {
+        models.ReferenceDataState.DOWNLOAD_SUBMITTED: lambda _:
+            update_state.submitted_refdata_download(),
+        models.ReferenceDataState.COMPLETE: lambda _: update_state.refdata_complete(),
+        models.ReferenceDataState.ERROR: lambda update: update_state.refdata_error(
+            "An unexpected error occurred", update.admin_error, traceback=update.traceback),
+    }
+
+    async def update_refdata_state(
+        self,
+        refdata_id: str,
+        new_state: models.ReferenceDataState,
+        update: models.RefdataUpdate | None = None
+    ):
+        """
+        Update refdata state for the KBase site.
+        
+        refdata_id - the reference data's ID.
+        new_state - the new state for the reference data.
+        update - the update to apply.
+        """
+        _require_string(refdata_id, "refdata_id")
+        _not_falsy(new_state, "new_state")
+        update = update or models.RefdataUpdate()
+        if new_state not in self._COMMON_STATE_TO_UPDATE_REFDATA_FUNC:
+            raise UnsupportedOperationError(
+                f"Cannot update refdatqa to state {new_state.value}"
+        )
+        mongo_update = self._COMMON_STATE_TO_UPDATE_REFDATA_FUNC[new_state](update)
+        # Just throw the error, don't error out the refdata staging.
+        # If the caller thinks this is an error they can try and set the error state.
+        # Theoretically this could be used to transition a complete job to an error state,
+        # but since the endpoint requires a special role don't worry about it for now.
+        # Could add a criteria to the mongo query such that
+        # if new_state = error current_state != complete
+        await self._mongo.update_refdata_state(
+            self.CLUSTER, refdata_id, mongo_update, utcdatetime()
+        )
+
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """
         Do nothing. There's nothing to clean up.
         """
-        pass # Intentionally do nothing 
+        pass # Intentionally do nothing
 
 
 @dataclass(frozen=True)

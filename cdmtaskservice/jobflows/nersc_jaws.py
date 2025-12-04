@@ -56,7 +56,7 @@ from cdmtaskservice.user import CTSUser
 # TODO RELIABILITY will need a system for detecting NERSC downs, not putting jobs into an
 #                  error state while it's down, and resuming jobs when it's back up
 
-# TODO COdE when a job is passed in, make sure the cluster matches.
+# TODO CODE when a job is passed in, make sure the cluster matches.
 
 
 class NERSCJAWSRunner(JobFlow):
@@ -408,7 +408,11 @@ class NERSCJAWSRunner(JobFlow):
         )
 
     async def update_container_state(
-        self, job: models.AdminJobDetails, container_num: int, update: models.ContainerUpdate
+        self,
+        job: models.AdminJobDetails,
+        container_num: int,
+        new_state: models.JobState,
+        update: models.ContainerUpdate,
     ):
         """ Throws an error as this method is unsupported. """
         raise UnsupportedOperationError(
@@ -505,6 +509,17 @@ class NERSCJAWSRunner(JobFlow):
         if self._on_refdata_complete:
             # don't wait for this function to run before returning
             await self._coman.run_coroutine(self._on_refdata_complete(refdata))
+
+    async def update_refdata_state(
+        self,
+        refdata_id: str,
+        new_state: models.ReferenceDataState,
+        update: models.RefdataUpdate | None = None
+    ):
+        """ Throws an error as this method is unsupported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
 
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """

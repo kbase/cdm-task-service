@@ -65,6 +65,11 @@ def _ensure_executor(user: CTSUser, err_msg: str):
         raise UnauthorizedError(err_msg)
 
 
+def _ensure_refdata_service(user: CTSUser, err_msg: str):
+    if not user.is_refdata_service:
+        raise UnauthorizedError(err_msg)
+
+
 def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
     if not user.is_full_admin() and not user.is_external_executor():
         raise UnauthorizedError(err_msg)
@@ -1067,7 +1072,7 @@ async def _callback_handling(
 
 
 @ROUTER_EXTERNAL_EXEC.put(
-    "/external_exec/{job_id}/container/{container_num}/update/{new_state}",
+    "/external_exec/jobs/{job_id}/container/{container_num}/update/{new_state}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Update a container's state.",
@@ -1089,6 +1094,34 @@ async def update_container(
     job = await appstate.job_state.get_job(job_id, user, as_admin=True)
     flow =  await appstate.jobflow_manager.get_flow(job.job_input.cluster)
     await flow.update_container_state(job, container_num, new_state, update)
+
+
+@ROUTER_EXTERNAL_EXEC.put(
+    "/external_exec/refdata/{refdata_id}/{cluster}/update/{new_state}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Update refdata state.",
+    description="Not for general use.\n\nUpdate refdata state for a cluster.",
+)
+async def update_refdata(
+    r: Request,
+    refdata_id: _ANN_REFDATA_ID,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which the refdata should be updated."
+    )],
+    new_state: Annotated[models.ReferenceDataState, FastPath(
+        openapi_examples={"download_submitted": {
+            "value": models.ReferenceDataState.DOWNLOAD_SUBMITTED
+        }},
+        description="The new state for the refdata.",
+    )],
+    update: models.RefdataUpdate | None = None,
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_refdata_service(user, "Only refdata services can update refdata state.")
+    appstate = app_state.get_app_state(r)
+    flow =  await appstate.jobflow_manager.get_flow(cluster)
+    await flow.update_refdata_state(refdata_id, new_state, update)
 
 
 @ROUTER_EXTERNAL_EXEC.get(

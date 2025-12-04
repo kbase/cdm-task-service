@@ -189,6 +189,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         is_kbase_staff_role=cfg.kbase_staff_role,
         has_nersc_account_role=cfg.has_nersc_account_role,
         external_executor_role=cfg.external_executor_role,
+        refdata_service_role=cfg.refdata_service_role,
     )
     logr.info("Done")
     jaws_job_flows = None

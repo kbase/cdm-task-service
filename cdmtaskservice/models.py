@@ -1041,6 +1041,7 @@ class AdminJobDetails(Job):
 
 
 class ContainerUpdate(BaseModel):
+    """ An update to the state of a subjob / container. """
     
     time: Annotated[datetime.datetime, Field(
         examples=[utcdatetime()],
@@ -1062,7 +1063,7 @@ class ContainerUpdate(BaseModel):
             + "Ignored if the new state isn't the error state."
     )] = None
     traceback: Annotated[str | None, Field(
-        description="The error's traceback.Ignored if the new state isn't the error state."
+        description="The error's traceback. Ignored if the new state isn't the error state."
     )] = None
 
 
@@ -1184,3 +1185,17 @@ class AdminReferenceData(_ReferenceDataRoot):
     statuses: Annotated[list[AdminReferenceDataStatus], Field(
         description="The states of reference data staging processes at remote compute locations.",
     )]
+
+
+class RefdataUpdate(BaseModel):
+    """ An update to the state of a reference data staging process. """
+    
+    admin_error: Annotated[str | None, Field(
+        examples=["The middle fell off"],
+        description="The error that occurred when staging refdata, suitable for displaying to a "
+            + "service admin.\n"
+            + "Ignored if the new state isn't the error state."
+    )] = None
+    traceback: Annotated[str | None, Field(
+        description="The error's traceback. Ignored if the new state isn't the error state."
+    )] = None
