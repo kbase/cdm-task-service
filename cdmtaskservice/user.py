@@ -29,12 +29,27 @@ class CTSUser:
         roles - the set of roles assigned to the user.
         is_kbase_staff - whether the user is a KBase staff member.
         has_nersc_account - whether the user has a NERSC account.
+        is_cdm_task_service - whether the user is the CDM task service.
+            Used by the refdata service.
+        is_refdata_service - whether the user is the refdata service.
     """
     user: str
+    # TODO ROLES Need to rethink how roles are presented here.
+    # Why is the executor a role vs a bool like the refdata service?
+    # The difference is that roles are visible in the whoami endpoint while bools are not.
+    # Roles should allow the token to perform privileged tasks (like admin)
+    # but I'm not sure if we should expose roles that no regular user should have (like
+    # executor) in the api docs
+    # Maybe a special endpoint for executor / cts / refserver roles?
+    # Should the kbase staff and NERSC roles be exposed? Those are just basic requirements
+    # for running jobs and so aren't really useful to expose
+    # Maybe make CTSRoles for operations and add those operations as appropriate
+    # for each service / executor 
     roles: frozenset[CTSRole] = field(default_factory=frozenset)
     is_kbase_staff: bool = False
     has_nersc_account: bool = False
     is_cdm_task_service: bool = False
+    is_refdata_service: bool = False
 
     def __post_init__(self):
         # Convert roles to frozenset if it isn't one already
@@ -67,6 +82,7 @@ class CTSAuth:
             has_nersc_account_role: str | None = None,
             external_executor_role: str | None = None,
             cts_role: str | None = None,
+            refdata_service_role: str | None = None,
             require_kbase_staff_and_nersc_accounts_for_admin: bool = True,
     ):
         """
@@ -83,6 +99,8 @@ class CTSAuth:
             job executor.
         cts_role - a KBase auth role that designates that the user represents the CDM Task
             Service.
+        refdata_service_role -a KBase auth role that designates the user is the refdata
+            service.
         require_kbase_staff_and_nersc_accounts_for_admin - if false, the KBase staff role
             and NERSC account role are not required for full admin status. This is typically
             only used for the reference data service.
@@ -95,6 +113,7 @@ class CTSAuth:
         self._nersc_role = has_nersc_account_role
         self._external_executor_role = external_executor_role
         self._cts_role = cts_role
+        self._refserv_role = refdata_service_role
         self._require_admin_roles = require_kbase_staff_and_nersc_accounts_for_admin
 
 
@@ -125,7 +144,8 @@ class CTSAuth:
             roles=roles,
             is_kbase_staff=self._kbstaff_role in has_roles,
             has_nersc_account=self._nersc_role in has_roles,
-            is_cdm_task_service=self._cts_role in has_roles
+            is_cdm_task_service=self._cts_role in has_roles,
+            is_refdata_service=self._refserv_role in has_roles,
         )
         # ensure admins have all roles necessary to use any part of the system
         if (
