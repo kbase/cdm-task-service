@@ -1,6 +1,7 @@
 """ Manager for staging reference data based on CTS records. """
 
 import logging
+from pathlib import Path
 import traceback
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
@@ -10,16 +11,27 @@ from cdmtaskservice import models
 from cdmtaskservice.refserv.cts_client import CTSRefdataClient
 from cdmtaskservice import sites
 from cdmtaskservice.s3.client import S3Client
+from cdmtaskservice.s3.paths import S3Paths
 
 
 class RefdataManager:
     """ Manages CTS refdata locally. """
     
-    def __init__(self, ctsrefcli: CTSRefdataClient, s3cli: S3Client, coman: CoroutineWrangler):
+    def __init__(
+        self,
+        ctsrefcli: CTSRefdataClient,
+        s3cli: S3Client,
+        coman: CoroutineWrangler,
+        refdata_path: Path,
+        refdata_meta_path: Path,
+        
+    ):
         """ Create the manager. """
         self._cli = _not_falsy(ctsrefcli, "ctsrefcli")
         self._s3cli = _not_falsy(s3cli, "s3cli")
         self._coman = _not_falsy(coman, "coman")
+        self._refpath = _not_falsy(refdata_path, "refdata_path")
+        self._metapath = _not_falsy(refdata_meta_path, "refdata_meta_path")
         self._logr = logging.getLogger(__name__)
 
     async def stage_refdata(self, refdata_id: str, cluster: sites.Cluster):
@@ -52,7 +64,14 @@ class RefdataManager:
     
     async def _stage_refdata(self, refdata: models.ReferenceData, cluster: sites.Cluster):
         try:
-            self._logr.info(f"Running staging coroutine on {refdata}, {cluster}")  # TODO REFDATA remove
+            refdir = self._refpath / refdata.id
+            refdir.mkdir(parents=True, exist_ok=True)
+            arcpath = refdir / Path(refdata.file).name
+            self._logr.info(
+                f"Downloading refdata {refdata.id} from S3 {refdata.file} to {arcpath}"
+            )
+            await self._s3cli.download_objects_to_file(S3Paths([refdata.file]), [arcpath])
+            # TODO NEXT check crc64nve, unzip, delete archive, calc md5s in interpreter thread
         except Exception as e:
             self._logr.exception(
                 f"Failed to stage refdata {refdata.id} for cluster {cluster.value}"

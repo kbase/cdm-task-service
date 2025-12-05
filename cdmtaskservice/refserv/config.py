@@ -15,9 +15,10 @@ from cdmtaskservice.config_s3 import S3Config
 _SEC_AUTH = "Authentication"
 _SEC_S3 = "S3"
 _SEC_CTS = "CTS"
+_SEC_REFDATA = "Refdata"
 _SEC_SERVICE = "Service"
 
-_SECS=[_SEC_AUTH, _SEC_S3, _SEC_CTS, _SEC_SERVICE]
+_SECS=[_SEC_AUTH, _SEC_S3, _SEC_CTS, _SEC_REFDATA, _SEC_SERVICE]
 
 
 class CDMRefdataServiceConfig:
@@ -37,6 +38,8 @@ class CDMRefdataServiceConfig:
     cts_root_url: str - the root URL of the CTS service.
     cts_refdata_token: str - a token that provides the custom role necessary for the CTS to
         identify the user as the refdata service.
+    refdata_local_path: str - where refdata will be stored.
+    refdata_meta_path: str - where refdata metadata will be stored. 
     service_root_path: str  | None - if the service is behind a reverse proxy that rewrites the
         service path, the path to the service. The path is required in order for the OpenAPI
         documentation to function.
@@ -73,6 +76,8 @@ class CDMRefdataServiceConfig:
         # If needed we could add sub sections to support > 1 S3 instance per service. YAGNI
         self.cts_root_url = _get_string_required(config, _SEC_CTS, "cts_root_url")
         self.cts_refdata_token = _get_string_required(config, _SEC_CTS, "cts_refdata_token")
+        self.refdata_local_path = _get_string_required(config, _SEC_REFDATA, "local_path")
+        self.refdata_meta_path = _get_string_required(config, _SEC_REFDATA, "metadata_path")
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
         self.service_group = _get_string_optional(config, _SEC_SERVICE, "group_id")
 
@@ -100,6 +105,8 @@ class CDMRefdataServiceConfig:
             f"S3 allow insecure: {self.s3_allow_insecure}",
             f"CTS root URL: {self.cts_root_url}",
             f"CTS refdata token: REDACTED BY ORDER OF HIS MAJESTY KING OOLEPH OF SWEDEN",
+            f"Refdata local path: {self.refdata_local_path}",
+            f"Refdata metadata path: {self.refdata_meta_path}",
             f"Service root path: {self.service_root_path}",
             f"Service group: {self.service_group}",
             "*** End Service Configuration ***\n"
