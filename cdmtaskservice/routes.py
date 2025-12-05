@@ -61,7 +61,7 @@ def _ensure_admin(user: CTSUser, err_msg: str):
 
 
 def _ensure_executor(user: CTSUser, err_msg: str):
-    if not user.is_external_executor():
+    if not user.is_external_executor:
         raise UnauthorizedError(err_msg)
 
 
@@ -71,7 +71,7 @@ def _ensure_refdata_service(user: CTSUser, err_msg: str):
 
 
 def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
-    if not user.is_full_admin() and not user.is_external_executor():
+    if not user.is_full_admin() and not user.is_external_executor:
         raise UnauthorizedError(err_msg)
 
 
