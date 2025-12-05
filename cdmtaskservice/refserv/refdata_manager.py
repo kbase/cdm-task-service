@@ -1,6 +1,7 @@
 """ Manager for staging reference data based on CTS records. """
 
 import logging
+import traceback
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
@@ -40,7 +41,13 @@ class RefdataManager:
             raise InvalidReferenceDataStateError(
                 f"Reference data must be in the created state for cluster {refstate.cluster.value}"
             )
-        # TODO NEXT switch state to DOWNLOAD_SUBMITTED
+        await self._cli.update_refdata_state(
+            refdata.id, cluster, models.ReferenceDataState.DOWNLOAD_SUBMITTED
+        )
+        # Now this server coroutine has claimed the staging process, any other requests to
+        # the server will fail for this refdata ID so we're safe to proceed and send errors
+        # directly to the CTS vs. the caller, whoever that might be (although it should
+        # only be the CTS under normal circumstances)
         await self._coman.run_coroutine(self._stage_refdata(refdata, cluster))
     
     async def _stage_refdata(self, refdata: models.ReferenceData, cluster: sites.Cluster):
@@ -50,5 +57,11 @@ class RefdataManager:
             self._logr.exception(
                 f"Failed to stage refdata {refdata.id} for cluster {cluster.value}"
             )
-            # TODO REFDATASERV set refdata to error in CTS if possible
-            raise  # TODO REFDATASERV remove
+            # if this fails there's not much else we can do
+            await self._cli.update_refdata_state(
+                refdata.id,
+                cluster,
+                models.ReferenceDataState.ERROR,
+                admin_error=str(e),
+                traceback=traceback.format_exc()
+            )

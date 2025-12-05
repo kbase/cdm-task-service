@@ -11,8 +11,9 @@ import json
 import logging
 from typing import Self, Any
 
-from cdmtaskservice.arg_checkers import require_string as _require_string
+from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
 from cdmtaskservice import models
+from cdmtaskservice import sites
 
 
 class CTSRefdataClient:
@@ -75,6 +76,36 @@ class CTSRefdataClient:
         async with self._sess.get(url) as resp:
             res = await self._check_resp(resp, "Failed staging refdata")
         return models.ReferenceData.parse_obj(res)
+
+    async def update_refdata_state(
+        self,
+        refdata_id: str,
+        cluster: sites.Cluster,
+        new_state: models.ReferenceDataState,
+        admin_error: str | None = None,
+        traceback: str | None = None,
+    ):
+        """
+        Update refdata state in the CDM Task Service.
+        
+        refdata_id - the ID of the refdata to update.
+        cluster - the cluster to update.
+        new_state - the new state for the refdata.
+        admin_error - an error suitable for display to service admins if the new state is error.
+        traceback - the error traceback if the new state is error.
+        """
+        _require_string(refdata_id, "refdata_id")
+        _not_falsy(cluster, "cluster")
+        _not_falsy(new_state, "new_state")
+        url = (
+            f"{self._url}/external_exec/refdata/{refdata_id}/{cluster.value}/"
+            + f"update/{new_state.value}"
+        )
+        payload = None
+        if new_state == models.ReferenceDataState.ERROR:
+            payload = {"admin_error":admin_error, "traceback":traceback}
+        async with self._sess.put(url, json=payload) as resp:
+            await self._check_resp(resp, "Failed updating refdata state")
 
     async def close(self):
         """

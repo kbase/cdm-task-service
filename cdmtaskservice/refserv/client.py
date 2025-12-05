@@ -70,7 +70,7 @@ class RefdataServiceClient:
                     f"The service at {self._url} is not the refdata servvice"
                 )
 
-    async def stage_refdata(self, refdata_id, cluster: sites.Cluster):
+    async def stage_refdata(self, refdata_id: str, cluster: sites.Cluster):
         """
         Start the refdata staging process.
         
