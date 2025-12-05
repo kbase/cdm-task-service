@@ -13,8 +13,6 @@ from cdmtaskservice.exceptions import UnauthorizedError
 class CTSRole(str, Enum):
     """ A role for the service a user may possess. """
     
-    EXTERNAL_EXECUTOR = "external_executor"
-    
     FULL_ADMIN = "full_admin"
     # add roles as needed
 
@@ -29,13 +27,13 @@ class CTSUser:
         roles - the set of roles assigned to the user.
         is_kbase_staff - whether the user is a KBase staff member.
         has_nersc_account - whether the user has a NERSC account.
+        is_external_excutor - whether ther user is an external executor running a CTS job.
         is_cdm_task_service - whether the user is the CDM task service.
             Used by the refdata service.
         is_refdata_service - whether the user is the refdata service.
     """
     user: str
-    # TODO ROLES Need to rethink how roles are presented here.
-    # Why is the executor a role vs a bool like the refdata service?
+    # TODO ROLES Need to rethink how roles are presented here - bools vs CTSRoles
     # The difference is that roles are visible in the whoami endpoint while bools are not.
     # Roles should allow the token to perform privileged tasks (like admin)
     # but I'm not sure if we should expose roles that no regular user should have (like
@@ -50,6 +48,7 @@ class CTSUser:
     has_nersc_account: bool = False
     is_cdm_task_service: bool = False
     is_refdata_service: bool = False
+    is_external_executor: bool = False
 
     def __post_init__(self):
         # Convert roles to frozenset if it isn't one already
@@ -60,10 +59,6 @@ class CTSUser:
     def is_full_admin(self):
         """ Returns true if the user is a service admin with full rights to everything. """
         return CTSRole.FULL_ADMIN in self.roles
-
-    def is_external_executor(self):
-        """ Returns true if the user is an external executor. """
-        return CTSRole.EXTERNAL_EXECUTOR in self.roles
 
 
 # Illegal user name in kbase and hopefully everywhere else
@@ -137,13 +132,12 @@ class CTSAuth:
         has_roles = set(user.customroles)
         if has_roles & self._admin_roles:
             roles.add(CTSRole.FULL_ADMIN)
-        if self._external_executor_role in has_roles:
-            roles.add(CTSRole.EXTERNAL_EXECUTOR)
         ctsuser = CTSUser(
             user=user.user,
             roles=roles,
             is_kbase_staff=self._kbstaff_role in has_roles,
             has_nersc_account=self._nersc_role in has_roles,
+            is_external_executor=self._external_executor_role in has_roles,
             is_cdm_task_service=self._cts_role in has_roles,
             is_refdata_service=self._refserv_role in has_roles,
         )
