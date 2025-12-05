@@ -56,7 +56,7 @@ FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_HTC_DETAILS = "htcondor_details"
 FLD_HTC_DETAILS_CLUSTER_ID = "cluster_id"
 FLD_JOB_CPU_HOURS = "cpu_hours"
-FLD_JOB_CPU_EFFICIENCY = "cpu_efficiency"
+FLD_JOB_CPU_FACTOR = "cpu_factor"
 FLD_JOB_MAX_MEM = "max_memory"
 FLD_JOB_OUTPUTS = "outputs"
 FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
@@ -897,11 +897,13 @@ class JobPreview(JobStatus):
         examples=[52.4],
         description="The total CPU hours used by the job, if available.")
     ] = None
-    cpu_efficiency: Annotated[float | None, Field(
+    cpu_factor: Annotated[float | None, Field(
         examples=[0.8],
         description="The ratio of the cpu time used to the number of cpus requested times "
-            + "the job's actual time, if available. Perfect efficiency is 1, "
-            + "< 1 is overrequesting CPUs, > 1 is underrequesting CPUs."
+            + "the job's actual time, if available. Perfect usage is 1, "
+            + "< 1 means requested CPUs are partially idle, "
+            + "possibly due to memory or IO bounded work, "
+            + "> 1 means more CPU usage than requested."
         )
     ] = None
     max_memory: Annotated[int | None, Field(

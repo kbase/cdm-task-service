@@ -123,7 +123,7 @@ def condor_job_stats(job_classads_as_dict: list[dict[str, Any]], requested_cpus:
     Returns a tuple of
     
     * total cpu hours (RemoteSysCpu + RemoteUserCpu) / 3600
-    * cpu efficiency (cpu time / (CommittedTime * requested_cpus))
+    * cpu usage factor (cpu time / (CommittedTime * requested_cpus))
     * maximum memory use in B over each container (e.g. max(list[max_container_mem_usage])
     """
     _not_falsy(job_classads_as_dict, "job_classads_as_dict")
@@ -136,8 +136,8 @@ def condor_job_stats(job_classads_as_dict: list[dict[str, Any]], requested_cpus:
     for c in job_classads_as_dict:
         cpu_sec += c[_AD_CPU_USER] + c[_AD_CPU_SYS]
         committed_time += c[_AD_COMMITTED_TIME]
-    eff = cpu_sec / (committed_time * requested_cpus) if committed_time else None
-    return cpu_sec / 3600.0, eff, max_mem
+    cpufactor = cpu_sec / (committed_time * requested_cpus) if committed_time else None
+    return cpu_sec / 3600.0, cpufactor, max_mem
 
 
 class CondorClient:

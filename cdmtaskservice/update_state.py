@@ -33,7 +33,7 @@ class UpdateField(StrEnum):
     MAX_MEMORY = auto()
     """ The maximum memory a job consumed for a single container. """
     
-    CPU_EFFICIENCY = auto()
+    CPU_FACTOR = auto()
     """ The ratio of cpu time actually used to cpu time requested. """ 
     
     NERSC_UPLOAD_TASK_ID = auto()
@@ -229,7 +229,7 @@ def submitted_nersc_upload(task_id: str) -> JobUpdate:
 def complete(
     output_file_paths: list[models.S3File],
     cpu_hours: float = None,
-    cpu_efficiency: float = None,
+    cpu_factor: float = None,
     max_memory: int = None,
 ) -> JobUpdate:
     """
@@ -237,7 +237,7 @@ def complete(
     
     output_file_paths - the output file paths.
     cpu_hours - the job cpu hours, if available.
-    cpu_efficiency - the job's cpu efficiency, if available.
+    cpu_factor - the job's cpu usage factor, if available.
     max_memory - the maximum memory used by the job in bytes, if available.
     """
     output_file_paths = output_file_paths or []
@@ -248,8 +248,8 @@ def complete(
     }
     if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
         flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
-    if cpu_efficiency is not None:
-        flds[UpdateField.CPU_EFFICIENCY] = _check_num(cpu_efficiency, "cpu_efficiency", minimum=0)
+    if cpu_factor is not None:
+        flds[UpdateField.CPU_FACTOR] = _check_num(cpu_factor, "cpu_factor", minimum=0)
     if max_memory is not None:
         flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
     return JobUpdate(
@@ -320,7 +320,7 @@ def error(
     traceback: str = None,
     log_files_path: str = None,
     cpu_hours: float = None,
-    cpu_efficiency: float = None,
+    cpu_factor: float = None,
     max_memory: int = None,
 ) -> JobUpdate:
     """
@@ -332,7 +332,7 @@ def error(
     traceback - the error traceback.
     log_files_path - the path to any logs for the job.
     cpu_hours - the job cpu hours, if available.
-    cpu_efficiency - the job's cpu efficiency, if available.
+    cpu_factor - the job's cpu usage factor, if available.
     max_memory - the maximum memory used by the job in bytes, if available.
     """ 
     flds = {
@@ -344,8 +344,8 @@ def error(
         flds[UpdateField.USER_ERROR] = user_error
     if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
         flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
-    if cpu_efficiency is not None:
-        flds[UpdateField.CPU_EFFICIENCY] = _check_num(cpu_efficiency, "cpu_efficiency", minimum=0)
+    if cpu_factor is not None:
+        flds[UpdateField.CPU_FACTOR] = _check_num(cpu_factor, "cpu_factor", minimum=0)
     if max_memory is not None:
         flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
     return JobUpdate()._set_new_state(models.JobState.ERROR)._set_fields(flds)

@@ -314,7 +314,7 @@ class KBaseRunner(JobFlow):
             await self._updates.handle_exception(e, job.id, "completing errored")
 
     async def _error_job(self, job: models.AdminJobDetails):
-        cpu_hours, cpu_efficiency, max_mem = await self._get_condor_stats(job)
+        cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
         exit_codes = await self.get_exit_codes(job)
         # if any exit codes are present and > 0, a container failed. Exit codes can be None
         # if the container never ran
@@ -329,12 +329,12 @@ class KBaseRunner(JobFlow):
             user_error=err,
             log_files_path=str(Path(self._s3logdir) / job.id) if err_exit else None,
             cpu_hours=cpu_hours,
-            cpu_efficiency=cpu_efficiency,
+            cpu_factor=cpu_factor,
             max_memory=max_mem,
         ))
         
     async def _complete_job(self, job: models.AdminJobDetails):
-        cpu_hours, cpu_efficiency, max_mem = await self._get_condor_stats(job)
+        cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
         subjobs = await self.get_subjobs(job.id)
         filechecksums = {}
         for sj in subjobs:
@@ -356,7 +356,7 @@ class KBaseRunner(JobFlow):
         await self._updates.update_job_state(job.id, update_state.complete(
             outfiles,
             cpu_hours=cpu_hours,
-            cpu_efficiency=cpu_efficiency,
+            cpu_factor=cpu_factor,
             max_memory=max_mem
         ))
 

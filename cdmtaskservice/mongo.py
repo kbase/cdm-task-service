@@ -427,7 +427,7 @@ class MongoDAO:
             UpdateField.JAWS_RUN_ID: (self._FLD_JAWS_RUN_ID, True),
             UpdateField.HTCONDOR_CLUSTER_ID: (self._FLD_HTC_CLUSTER_ID, True),
             UpdateField.CPU_HOURS: (models.FLD_JOB_CPU_HOURS, False),
-            UpdateField.CPU_EFFICIENCY: (models.FLD_JOB_CPU_EFFICIENCY, False),
+            UpdateField.CPU_FACTOR: (models.FLD_JOB_CPU_FACTOR, False),
             UpdateField.MAX_MEMORY: (models.FLD_JOB_MAX_MEM, False),
             UpdateField.NERSC_UPLOAD_TASK_ID: (self._FLD_NERSC_UL_TASK, True),
             UpdateField.OUTPUT_FILE_PATHS: (models.FLD_JOB_OUTPUTS, False),
