@@ -73,7 +73,7 @@ Metadata  :
 
 ## Service Requirements
 
-* Python 3.11+
+* Python 3.12+
 * [crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md)
 * An S3 instance for use as a file store, but see "S3 requirements" below
 * MongoDB 7+
