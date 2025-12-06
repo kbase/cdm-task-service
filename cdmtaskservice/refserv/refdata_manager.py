@@ -1,5 +1,6 @@
 """ Manager for staging reference data based on CTS records. """
 
+import aiofiles
 import asyncio
 from concurrent.futures.process import ProcessPoolExecutor
 import json
@@ -13,6 +14,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice import models
 from cdmtaskservice.refserv.cts_client import CTSRefdataClient
+from cdmtaskservice.refserv.models import RefdataLocalStatus, RefdataLocalState
 from cdmtaskservice import sites
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths
@@ -60,6 +62,22 @@ class RefdataManager:
         Close any resources associated with the manager.
         """
         self._exe.shutdown(cancel_futures=True)
+
+    async def get_refdata_state(self, refdata_id) -> RefdataLocalStatus:
+        """
+        Get the local refdata staging status for an ID.
+        """
+        _require_string(refdata_id, "refdata_id")
+        if not (self._refpath / refdata_id).exists():
+            return RefdataLocalStatus(state=RefdataLocalState.NONE)
+        metapath = self._metapath / refdata_id / _MD5_FILE
+        if not (metapath).exists():
+            return RefdataLocalStatus(state=RefdataLocalState.STAGING)
+        async with aiofiles.open(metapath) as f:
+            cont = await f.read()
+        return RefdataLocalStatus(
+            state=RefdataLocalState.DONE, files=json.loads(cont)["files"]
+        )
 
     async def stage_refdata(self, refdata_id: str, cluster: sites.Cluster):
         """
@@ -133,6 +151,7 @@ def _unpack_refdata(refdata_id: str, arcpath: Path, unpack: bool, metadata_dir: 
     file_md5s = []
     for f in files:
         with open(f, "rb") as fo:
+            # NOTE: these keys match the data structures in models.py
             file_md5s.append({
                 "file": str(f.relative_to(refparent)),
                 "md5": hashlib.file_digest(fo, "md5").hexdigest(),
@@ -141,7 +160,7 @@ def _unpack_refdata(refdata_id: str, arcpath: Path, unpack: bool, metadata_dir: 
     tmpfile = metadata_dir / refdata_id / _MD5_FILE_TMP
     tmpfile.parent.mkdir(parents=True, exist_ok=True)
     with open(tmpfile, "w") as f:
-        f.write(json.dumps({"file_md5s": file_md5s}, indent=4))
+        f.write(json.dumps({"files": file_md5s}, indent=4))
     # Ensure no reading of partially written files
     finalfile = metadata_dir / refdata_id / _MD5_FILE
     tmpfile.rename(finalfile)
