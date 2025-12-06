@@ -31,3 +31,4 @@ __pycache__
 /cdm_task_service_temp
 /tmp_creds/
 /.venv/
+/refdata_mount/

@@ -113,7 +113,7 @@ services:
       - KBCTS_REFDATA_SERVICE_TOKEN=token_with_refservice_role
       - KBCTS_SERVICE_GROUP=localdev
     volumes:
-      - <path_to_refdata_mount>:/refdata
+      - ./refdata_mount:/refdata
 
   kafka:
     # Note the image should sync with the test.cfg.example and GHA test files.

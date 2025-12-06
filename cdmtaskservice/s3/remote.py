@@ -321,19 +321,24 @@ async def _process_download(
     if cache_dir:
         _add_to_cache(outputpath, cache_path)
     if unpack:  # never used with a cache
-        try:
-            op = str(outputpath).lower()
-            if op.endswith(_EXT_TGZ) or op.endswith(_EXT_TARGZ):
-                return _extract_tar(outputpath)
-            elif op.endswith(_EXT_GZ):
-                return _extract_gz(outputpath)
-            else:
-                raise ValueError(
-                    f"Unsupported unpack file type for file {outputpath}. " +
-                    f"Only {', '.join(UNPACK_FILE_EXTENSIONS)} are supported."
-                )
-        finally:
-            outputpath.unlink(missing_ok=True)
+        unpack_archive(outputpath)
+
+
+def unpack_archive(archive: Path):
+    """ Unpack a *.tgz, *.tar.gz, or *.gz file. """
+    try:
+        op = str(archive).lower()
+        if op.endswith(_EXT_TGZ) or op.endswith(_EXT_TARGZ):
+            return _extract_tar(archive)
+        elif op.endswith(_EXT_GZ):
+            return _extract_gz(archive)
+        else:
+            raise ValueError(
+                f"Unsupported unpack file type for file {archive}. " +
+                f"Only {', '.join(UNPACK_FILE_EXTENSIONS)} are supported."
+            )
+    finally:
+        archive.unlink(missing_ok=True)
 
 
 async def _process_downloads(
