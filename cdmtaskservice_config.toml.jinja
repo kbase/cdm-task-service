@@ -137,6 +137,11 @@ refserver_url = "{{ KBCTS_REFDATA_SERVER_URL or "" }}"
 # of the refdata server.
 refserver_token = "{{ KBCTS_REFDATA_SERVER_TOKEN or "" }}"
 
+# The root path local to the job container host where reference data is stored, e.g.
+# reference data will be stored in <reference_data_path>/<refdata_id>. This *must* be an
+# absolute path. This will be used to mount the reference data into the job container.
+refdata_host_path = "{{ KBCTS_REFDATA_HOST_PATH or "" }}"
+
 # The time in minutes after which an external executor should give up and fail rather than
 # continue to try and update a job's state in the service if the service can't be contacted.
 # The default is 6 hours and minimum 1 minute.

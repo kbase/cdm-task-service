@@ -51,6 +51,7 @@ services:
       - KBCTS_HTC_ADDL_PATH=/home/submituser/.local/bin
       - KBCTS_REFDATA_SERVER_URL=http://cdm_refdata_service:5001
       - KBCTS_REFDATA_SERVER_TOKEN=token_with_the_cts_role
+      - KBCTS_REFDATA_HOST_PATH=<absolute_path_to_repo>/refdata_mount/data
       - KBCTS_EXTERNAL_JOB_MOUNT_PREFIX_OVERRIDE=/var/lib/condor/execute:<path to condor_share>/condor_share
       # Note that the host minio must be bound to 0.0.0.0:9002 or 172.17.0.1:9002 (the docker
       # bridge interface). The latter is safer but only works for bridge networks
