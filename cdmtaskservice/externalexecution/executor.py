@@ -239,6 +239,10 @@ Local relative path: {loc}
             str(input_): job.job_input.params.input_mount_point,
             str(output): job.job_input.params.output_mount_point,
         }
+        if job.image.refdata_id:
+            mounts[
+                str(Path(self._cfg.refdata_host_path) / job.image.refdata_id)
+            ] = job.get_refdata_mount_point()
         self._logr.info(
             f"Starting image {job.image.name_with_digest} with command:\n{self._args.args}"
         )

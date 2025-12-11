@@ -73,6 +73,8 @@ class CDMTaskServiceConfig:
     refdata_server_url: str - the url of the refdata staging server.
     refdata_server_token: str - the token to use when communicating with the refdata staging
         server.
+    refdata_host_path: str - The root path local to the job container host where reference
+        data is stored.
     external_executor_job_update_timeout_min: int - the number of minutes to wait when trying
         to update the job state in the service before failing.
     external_executor_mount_prefix_override: str - a host container mount path prefix override
@@ -184,6 +186,9 @@ class CDMTaskServiceConfig:
         self.refdata_server_url = _get_string_required(config, _SEC_EXTERNAL_EXEC, "refserver_url")
         self.refdata_server_token = _get_string_required(
             config, _SEC_EXTERNAL_EXEC, "refserver_token"
+        )
+        self.refdata_host_path = _get_string_required(
+            config, _SEC_EXTERNAL_EXEC, "refdata_host_path"
         )
         self.external_executor_job_update_timeout_min = _get_int_required(
             config, _SEC_EXTERNAL_EXEC, "job_update_timeout_min", minimum=1
@@ -302,6 +307,7 @@ class CDMTaskServiceConfig:
             additional_path=self.condor_addl_path,
             cache_dir=self.condor_cache_dir,
             use_S3_external_url=self.condor_use_s3_external_url,
+            refdata_host_path=self.refdata_host_path
         )
 
     def print_config(self, output: TextIO):
@@ -337,6 +343,7 @@ class CDMTaskServiceConfig:
             f"HTCondor exe url override: {self.condor_exe_url_override}",
             f"Refdata server url: {self.refdata_server_url}",
             f"Refdata server token: REDACTED FOR YOUR PLEASURE",
+            f"Refdata host path: {self.refdata_host_path}",
             "External executor job update timeout (min): "
                 + str(self.external_executor_job_update_timeout_min),
             "External executor mount prefix override: " +

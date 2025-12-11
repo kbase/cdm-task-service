@@ -84,10 +84,14 @@ class Config(BaseSettings):
     )]
     s3_insecure: Annotated[bool, Field(
         validation_alias="S3_INSECURE",
-        description=
-            "Whether to skip checking the SSL certificate for the S3 instance, "
+        description="Whether to skip checking the SSL certificate for the S3 instance, "
             + "leaving the service open to MITM attacks.",
     )] = False
+    refdata_host_path: Annotated[str, Field(
+        validation_alias="REFDATA_HOST_PATH",
+        description="The path to the root of the refdata storage area on the host to mount into "
+            + "the job container."
+    )]
     job_update_timeout_min: Annotated[int, Field(
         validation_alias="JOB_UPDATE_TIMEOUT_MIN",
         examples=[360],
@@ -126,7 +130,9 @@ class Config(BaseSettings):
         "s3_access_secret_path",
         "s3_error_log_path",
         "s3_insecure",
+        "refdata_host_path",
         "job_update_timeout_sec",
+        "mount_prefix_override",
     }
     
     def safe_dump(self) -> dict[str, Any]:

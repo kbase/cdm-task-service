@@ -188,6 +188,7 @@ class CondorClient:
             "S3_SECRET_PATH": self._config.s3_access_secret_path,
             "S3_ERROR_LOG_PATH": f"{self._s3config.error_log_path.strip('/')}/{job.id}",
             "JOB_UPDATE_TIMEOUT_MIN": self._config.job_update_timeout_min,
+            "REFDATA_HOST_PATH": self._config.refdata_host_path,
         }
         if self._config.mount_prefix_override:
             env["MOUNT_PREFIX_OVERRIDE"] = self._config.mount_prefix_override

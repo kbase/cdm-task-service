@@ -2,7 +2,8 @@
 Configuration for the CTS HTCondor client.
 """
 
-from pydantic import BaseModel, Field
+from pathlib import Path
+from pydantic import BaseModel, Field, field_validator
 from typing import Annotated
 from yarl import URL
 
@@ -82,6 +83,25 @@ class CondorClientConfig(BaseModel):
     """
     Whether to use the external S3 URL vs. the standard URL.
     """
+    
+    refdata_host_path: str
+    """
+    The root directory of the refdata storage location on the job container host.
+    """
+    
+    @field_validator("refdata_host_path", mode="after")
+    @classmethod
+    def _validate_refdata_host_path(cls, v: str) -> str:
+        p = Path(v)
+        if not p.is_absolute():
+            raise ValueError("refdata_host_path must be an absolute path")
+
+        if len(p.parts) <= 1:
+            raise ValueError(
+                "refdata_host_path must contain at least one path element beyond the root"
+            )
+
+        return v
 
     def get_executable_url(self) -> str:
         """
