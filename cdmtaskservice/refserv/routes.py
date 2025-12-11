@@ -17,6 +17,7 @@ from cdmtaskservice import app_state
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice import sites
+from cdmtaskservice.refserv import models
 from cdmtaskservice.user import CTSUser
 
 
@@ -24,6 +25,11 @@ ROUTER_REFDATA = APIRouter(tags=["Refdata"], prefix="/refdata")
 
 # TODO CODE this is duplicated in the standard routes.py. Make a common class?
 _AUTH = KBaseHTTPBearer()
+
+
+def _ensure_admin(user: CTSUser, err_msg: str):
+    if not user.is_full_admin():
+        raise UnauthorizedError(err_msg)
 
 
 def _ensure_cts(user: CTSUser, err_msg: str):
@@ -59,3 +65,21 @@ async def create_refdata(
     _ensure_cts(user, "Only the CTS service can create reference data.")
     refman = app_state.get_app_state(r).refdata_manager
     await refman.stage_refdata(refdata_id, cluster)
+
+
+@ROUTER_REFDATA.get(
+    "/{refdata_id}/",
+    response_model=models.RefdataLocalStatus,
+    response_model_exclude_none=True,
+    summary="Get reference data state",
+    description="This is an admin oriented sort-of-hacky method to get information about a "
+        + "local refdata staging process."
+)
+async def get_refdata_status(
+    r: Request,
+    refdata_id: _ANN_REFDATA_ID,
+    user: CTSUser=Depends(_AUTH)
+):
+    _ensure_admin(user, "Only service admins can get refdata state.")
+    refman = app_state.get_app_state(r).refdata_manager
+    return await refman.get_refdata_state(refdata_id)
