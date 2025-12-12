@@ -43,7 +43,6 @@ class CDMRefdataServiceConfig:
     service_root_path: str  | None - if the service is behind a reverse proxy that rewrites the
         service path, the path to the service. The path is required in order for the OpenAPI
         documentation to function.
-    service_group: str - the group to which this service belongs.
     """
 
     def __init__(self, config_file: BinaryIO):
@@ -79,7 +78,6 @@ class CDMRefdataServiceConfig:
         self.refdata_local_path = _get_string_required(config, _SEC_REFDATA, "local_path")
         self.refdata_meta_path = _get_string_required(config, _SEC_REFDATA, "metadata_path")
         self.service_root_path = _get_string_optional(config, _SEC_SERVICE, "root_path")
-        self.service_group = _get_string_optional(config, _SEC_SERVICE, "group_id")
 
     def get_s3_config(self) -> S3Config:
         """ Get the S3 configuration. """
@@ -108,7 +106,6 @@ class CDMRefdataServiceConfig:
             f"Refdata local path: {self.refdata_local_path}",
             f"Refdata metadata path: {self.refdata_meta_path}",
             f"Service root path: {self.service_root_path}",
-            f"Service group: {self.service_group}",
             "*** End Service Configuration ***\n"
         ]])
 

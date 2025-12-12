@@ -56,10 +56,3 @@ metadata_path = "{{ KBCTS_REFDATA_METADATA_PATH or "" }}"
 # If the service is behind a reverse proxy that rewrites the service path, that path needs
 # to be defined here in order for the OpenAPI documentation to function.
 root_path = "{{ KBCTS_SERVICE_ROOT_PATH or "" }}"
-
-# The service group to which this instance of the service belongs. This is used to separate files
-# on remote services so files from different S3 instances (say production and development)
-# don't collide.
-# MongoDB databases should not be split among different service groups or errors accessing
-# job files may occur.
-group_id = "{{ KBCTS_SERVICE_GROUP or "dev" }}"
