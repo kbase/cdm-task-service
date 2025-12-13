@@ -358,7 +358,14 @@ class NERSCJAWSRunner(JobFlow):
     
     async def _upload_complete(self, job: models.AdminJobDetails):
         try:
+            await self._mongo.save_exit_codes_for_standard_job(
+                job.id, [8] * job.job_input.num_containers
+            )
             checksums = await self._nman.get_uploaded_JAWS_files(job)
+            if not checksums:
+                err = "The job produced no output files"
+                await self._updates.update_job_state(job.id, error(err, user_error=err))
+                return
             filechecksums = {
                 os.path.join(job.job_input.output_dir, f): crc for f, crc in checksums.items()
             }
@@ -394,12 +401,16 @@ class NERSCJAWSRunner(JobFlow):
             "Error log upload",
             "getting error log upload results for",
         )
-        if {i[0] for i in data} != {0}:
-            err = (f"At least one container did not start or exited with a non-zero error code. "
+        exit_codes = [i[0] for i in data]
+        # if any exit codes are present and > 0, a container failed. Exit codes can be None
+        # if the container never ran
+        if set(exit_codes) - {0, None}:
+            err = (f"At least one container exited with a non-zero error code. "
                    + "Please examine the logs for details.")
         else:  # will probably need to expand this as we learn about JAWS errors
             err = "An unexpected error occurred."
         # if we can't talk to mongo there's not much to do
+        await self._mongo.save_exit_codes_for_standard_job(job.id, exit_codes)
         await self._updates.save_error(
             job.id,
             err,
