@@ -335,11 +335,22 @@ class Parameters(BaseModel):
         default="/output_files",
         description="Where output files should be written in the container. "
             + "Must start from the container root and include at least one directory "
-            + "when resolved.",
+            + "when resolved. Note that the mount point is not included in the file paths that"
+            + "are eventually transferred to S3.",
         min_length=1,
         max_length=1024,
         pattern=ABSOLUTE_PATH_REGEX,
     )] = "/output_files"
+    declobber: Annotated[bool, Field(
+        description="If true, prepend the container number to all output file paths as a "
+            + "directory. This prevents "
+            + "containers that write to the same file path from clobbering each other and "
+            + "losing data. If the output files of containers are guaranteed to be unique "
+            + "(e.g. output file names are based on input file names and input file names "
+            + "are unique) then this setting is not necessary. The same effect can be created "
+            + "by use of a container number parameter when specifying the output directory "
+            + "in the arguments or environment."
+    )] = False
     refdata_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
         description="Where reference data files should be pleased in the container. "

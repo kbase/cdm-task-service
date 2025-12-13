@@ -338,6 +338,12 @@ class KBaseRunner(JobFlow):
         subjobs = await self.get_subjobs(job.id)
         filechecksums = {}
         for sj in subjobs:
+            # TODO ERRORHANDLING if two containers write to the same path, it's possible a 
+            #                    checksum mismatch could occur here. Options - maintain a list
+            #                    of checksums and check that one matches or throw an error on
+            #                    duplicate paths. NERSC based runs effectively choose one
+            #                    file or the other to keep; the first option above would be
+            #                    equivalent to that.
             for f in sj.outputs:
                 filechecksums[f.file] = f.crc64nvme
         if not filechecksums:
