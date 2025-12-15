@@ -79,6 +79,6 @@ task run_container {
     memory: "10000000 B"
     cpu: 1
     dynamic_input: "__input__:/input_files"
-    dynamic_output: "__output__:/output_files"
+    dynamic_output: "__output__/~{container_num}:/output_files"
   }
 }

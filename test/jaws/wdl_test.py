@@ -79,7 +79,25 @@ def test_wdl_basic():
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["file1"]],
         "some_image.environment_list": [[]],
-        "some_image.cmdline_list": [["main_command"]]
+        "some_image.cmdline_list": [["main_command"]],
+        "some_image.container_num_list": [0],
+    }
+    assert jawsinput.wdl == expwdl
+
+
+def test_wdl_declobber():
+    mapping = {models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar")}
+    p = models.Parameters(declobber=True)
+    ji = _JOB_BASIC.job_input.model_copy(update={"params": p})
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_data_for_test()
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar"]],
+        "some_image.file_locs_list": [["file1"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [["main_command"]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -105,7 +123,8 @@ def test_wdl_multiple_containers():
         "some_image.input_files_list": [["foo/bar2", "foo/bar"], ["foo/bar3"]],
         "some_image.file_locs_list": [["file1", "file2"], ["file3"]],
         "some_image.environment_list": [[], []],
-        "some_image.cmdline_list": [["main_command"], ["main_command"]]
+        "some_image.cmdline_list": [["main_command"], ["main_command"]],
+        "some_image.container_num_list": [0, 1],
     }
     assert jawsinput.wdl == expwdl
 
@@ -120,7 +139,8 @@ def test_wdl_workflow_name_translation():
         "docker_io_foo_bar_stuff_thing_yay.input_files_list": [["foo/bar"]],
         "docker_io_foo_bar_stuff_thing_yay.file_locs_list": [["file1"]],
         "docker_io_foo_bar_stuff_thing_yay.environment_list": [[]],
-        "docker_io_foo_bar_stuff_thing_yay.cmdline_list": [["main_command"]]
+        "docker_io_foo_bar_stuff_thing_yay.cmdline_list": [["main_command"]],
+        "docker_io_foo_bar_stuff_thing_yay.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
     
@@ -135,7 +155,8 @@ def test_wdl_full_input_path():
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["bucket/file1"]],
         "some_image.environment_list": [[]],
-        "some_image.cmdline_list": [["main_command"]]
+        "some_image.cmdline_list": [["main_command"]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -153,7 +174,8 @@ def test_wdl_partial_input_path():
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["dir2/file1"]],
         "some_image.environment_list": [[]],
-        "some_image.cmdline_list": [["main_command"]]
+        "some_image.cmdline_list": [["main_command"]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -172,7 +194,9 @@ def test_wdl_refdata():
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["file1"]],
         "some_image.environment_list": [[]],
-        "some_image.cmdline_list": [["main_command"]]
+        "some_image.cmdline_list": [["main_command"]],
+        "some_image.container_num_list": [0],
+        
     }
     assert jawsinput.wdl == expwdl
 
@@ -193,7 +217,8 @@ def test_wdl_resources_and_io_mounts():
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["file1"]],
         "some_image.environment_list": [[]],
-        "some_image.cmdline_list": [["main_command"]]
+        "some_image.cmdline_list": [["main_command"]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -209,7 +234,8 @@ def test_wdl_entrypoint_quoted():
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["file1"]],
         "some_image.environment_list": [[]],
-        "some_image.cmdline_list": [["'prog;ram'", '\'sub*com\'"\'"\'mand\'',]]
+        "some_image.cmdline_list": [["'prog;ram'", '\'sub*com\'"\'"\'mand\'',]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -247,6 +273,7 @@ def test_wdl_manifest_files():
             ["main_command", "/input_files/m.-_1"], ["main_command", "/input_files/m2"]
         ],
         "some_image.manifest_list": ["m.-_1", "/a.-_bs/m2"],
+        "some_image.container_num_list": [0, 1],
     }
     assert jawsinput.wdl == expwdl
 
@@ -270,6 +297,7 @@ def test_wdl_manifest_file_with_std_flag():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [["main_command", "-m", "/input_files/manipedi"]],
         "some_image.manifest_list": ["relative/manipedi"],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -293,6 +321,7 @@ def test_wdl_manifest_file_with_equal_flag():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [["main_command", "-m=/input_files/manipedi"]],
         "some_image.manifest_list": ["manipedi"],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -315,6 +344,7 @@ def test_wdl_manifest_file_in_env():
         "some_image.environment_list": [["MANIFEST=/input_files/manipedi"]],
         "some_image.cmdline_list": [["main_command"]],
         "some_image.manifest_list": ["manipedi"],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -330,7 +360,8 @@ def test_wdl_args_env_simple():
         "some_image.input_files_list": [["foo/bar"]],
         "some_image.file_locs_list": [["file1"]],
         "some_image.environment_list": [["ENVKEY=envval"]],
-        "some_image.cmdline_list": [["main_command", "im_an_argument"]]
+        "some_image.cmdline_list": [["main_command", "im_an_argument"]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -373,7 +404,8 @@ def test_wdl_args_space_sep_list_and_container_number():
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "/input_files/file1", "/input_files/file2",
             "--container_number", "0", "pref/0/suff"
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -406,7 +438,8 @@ def test_wdl_args_space_sep_list_quoted():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "'/input_files/fi*le1'", "'/input_files/fil]e2'",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -452,7 +485,8 @@ def test_wdl_args_space_sep_list_and_container_number_with_std_flag():
             "main_command", "im_an_argument",
             "--input", "/input_files/file1", "/input_files/file2",
             "--cn1", "0", "-c", "pref/0/suff"
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -487,7 +521,8 @@ def test_wdl_args_space_sep_list_with_std_flag_quoted():
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument",
             "--input", "'/input_files/$file1'", "'/input_files/fi&le2'",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -533,7 +568,8 @@ def test_wdl_args_space_sep_list_and_container_number_with_equal_flag():
             "main_command", "im_an_argument",
             "--input=/input_files/file1", "/input_files/file2",
             "--cn1=0", "-c=pref/0/suff"
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -568,7 +604,8 @@ def test_wdl_args_space_sep_list_with_equal_flag_quoted():
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument",
             "'--input=/input_files/f!ile1'", "'/input_files/file(2'",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -601,7 +638,8 @@ def test_wdl_args_comma_sep_list():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "/input_files/file1,/input_files/file2",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -634,7 +672,8 @@ def test_wdl_args_comma_sep_list_quoted():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "'/input_files/f[ile1,/input_files/file2'",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -668,7 +707,8 @@ def test_wdl_args_comma_sep_list_with_std_flag():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "-i", "/input_files/file1,/input_files/file2",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -702,7 +742,8 @@ def test_wdl_args_comma_sep_list_with_std_flag_quoted():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "-i", "'/input_files/file1,/input_files/fi<le2'",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -736,7 +777,8 @@ def test_wdl_args_comma_sep_list_with_equals_flag():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "-input=/input_files/file1,/input_files/file2",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -770,7 +812,8 @@ def test_wdl_args_comma_sep_list_with_equals_flag_quoted():
         "some_image.environment_list": [[]],
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument", "'-input=/input_files/f|ile1,/input_files/file2'",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -805,7 +848,8 @@ def test_wdl_args_repeated_param_with_std_flag():
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument",
             "-i", "/input_files/file1", "-i", "/input_files/file2",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -840,7 +884,8 @@ def test_wdl_args_repeated_param_with_std_flag_quoted():
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument",
             "-i", "/input_files/file1", "-i", "'/input_files/fil{e2'",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -875,7 +920,8 @@ def test_wdl_args_repeated_param_with_equal_flag():
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument",
             "--infiles=/input_files/file1", "--infiles=/input_files/file2",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -910,7 +956,8 @@ def test_wdl_args_repeated_param_with_equal_flag_quoted():
         "some_image.cmdline_list": [[
             "main_command", "im_an_argument",
             "'--infiles=/input_files/#file1'", "--infiles=/input_files/file2",
-        ]]
+        ]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -942,7 +989,8 @@ def test_wdl_env_comma_sep_list():
         "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
         "some_image.file_locs_list": [["file1", "file2"]],
         "some_image.environment_list": [["INFILES=/input_files/file1,/input_files/file2"]],
-        "some_image.cmdline_list": [["main_command", "im_an_argument"]]
+        "some_image.cmdline_list": [["main_command", "im_an_argument"]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -974,7 +1022,8 @@ def test_wdl_env_comma_sep_list_quoted():
         "some_image.input_files_list": [["foo/bar", "foo/bar2"]],
         "some_image.file_locs_list": [['\'fil"e1\'', "file2"]],
         "some_image.environment_list": [['INFILES=\'/input_files/fil"e1,/input_files/file2\'',]],
-        "some_image.cmdline_list": [["main_command", "im_an_argument"]]
+        "some_image.cmdline_list": [["main_command", "im_an_argument"]],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 
@@ -1013,7 +1062,8 @@ def test_wdl_container_number_multiple_containers():
         "some_image.cmdline_list": [
             ["main_command", "0", "pref/0/suff"],
             ["main_command", "1", "pref/1/suff"],
-        ]
+        ],
+        "some_image.container_num_list": [0, 1],
     }
     assert jawsinput.wdl == expwdl
 

@@ -9,6 +9,7 @@ workflow docker_io_foo_bar_stuff_thing_yay {
       Array[Array[String]] file_locs_list
       Array[Array[String]] environment_list
       Array[Array[String]] cmdline_list
+      Array[Int] container_num_list
   }
   scatter (i in range(length(input_files_list))) {
     call run_container {
@@ -16,7 +17,8 @@ workflow docker_io_foo_bar_stuff_thing_yay {
         input_files = input_files_list[i],
         file_locs = file_locs_list[i],
         environ = environment_list[i],
-        cmdline = cmdline_list[i]
+        cmdline = cmdline_list[i],
+        container_num = container_num_list[i]
     }
   }
   output {
@@ -32,6 +34,7 @@ task run_container {
     Array[String] file_locs
     Array[String] environ
     Array[String] cmdline
+    Int container_num
   }
   command <<<
     # ensure host mount points exist

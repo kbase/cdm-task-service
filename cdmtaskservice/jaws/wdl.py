@@ -89,6 +89,7 @@ def generate_wdl(
         f"{workflow_name}.file_locs_list": relpaths,
         f"{workflow_name}.environment_list": environment,
         f"{workflow_name}.cmdline_list": cmdlines,
+        f"{workflow_name}.container_num_list": list(range(job.job_input.num_containers)),
     }
     if manifest_file_list:
         input_json[f"{workflow_name}.manifest_list"] = [str(m) for m in manifest_file_list]
@@ -121,6 +122,7 @@ def _generate_wdl(job: Job, workflow_name: str, manifests: bool, relative_refdat
     if [[ -n "~{manifest}" ]]; then
         ln ~{manifest} ./__input__/$(basename ~{manifest})
     fi"""
+    connum = "/~{container_num}" if job.job_input.params.declobber else ""
     if relative_refdata_path:
         refdata_mount = f'''
     dynamic_refdata: "{relative_refdata_path}:{job.get_refdata_mount_point()}"'''
@@ -135,7 +137,8 @@ workflow {workflow_name} {{
       Array[Array[File]] input_files_list
       Array[Array[String]] file_locs_list
       Array[Array[String]] environment_list
-      Array[Array[String]] cmdline_list{mani_wf_input}
+      Array[Array[String]] cmdline_list
+      Array[Int] container_num_list{mani_wf_input}
   }}
   scatter (i in range(length(input_files_list))) {{
     call run_container {{
@@ -143,7 +146,8 @@ workflow {workflow_name} {{
         input_files = input_files_list[i],
         file_locs = file_locs_list[i],
         environ = environment_list[i],
-        cmdline = cmdline_list[i]{mani_call_input}
+        cmdline = cmdline_list[i],
+        container_num = container_num_list[i]{mani_call_input}
     }}
   }}
   output {{
@@ -158,7 +162,8 @@ task run_container {{
     Array[File] input_files
     Array[String] file_locs
     Array[String] environ
-    Array[String] cmdline{mani_task_input}
+    Array[String] cmdline
+    Int container_num{mani_task_input}
   }}
   command <<<
     # ensure host mount points exist
@@ -203,7 +208,7 @@ task run_container {{
     memory: "{job.job_input.memory} B"
     cpu: {job.job_input.cpus}{refdata_mount}
     dynamic_input: "__input__:{job.job_input.params.input_mount_point}"
-    dynamic_output: "__output__:{job.job_input.params.output_mount_point}"
+    dynamic_output: "{OUTPUT_DIR}{connum}:{job.job_input.params.output_mount_point}"
   }}
 }}
 """

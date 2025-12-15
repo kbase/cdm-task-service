@@ -225,16 +225,19 @@ Local relative path: {loc}
         return f"cts-{job.id}-{self._cfg.container_number}-container"
 
     async def _run_container(self, job: models.AdminJobDetails) -> int:
-        mount_container = Path.cwd().expanduser().absolute()
-        mount_host = mount_container
-        if self._cfg.mount_prefix_override:
-            prefix, replace = self._cfg.mount_prefix_override.split(":")
-            relative = mount_host.relative_to(Path(prefix))
-            mount_host = Path(replace) / relative
-        input_ = mount_host / _INPUT
-        output = mount_host / _OUTPUT
+        mount = Path.cwd().expanduser().absolute()
+        input_ = mount / _INPUT
+        output = mount / _OUTPUT
+        if job.job_input.params.declobber:
+            output = output / str(self._cfg.container_number)
         # Needs to be global write since the job container user is unknown
-        (mount_container / _OUTPUT).mkdir(0x777, parents=True, exist_ok=True)
+        output.mkdir(0x777, parents=True, exist_ok=True)
+        if self._cfg.mount_prefix_override:
+            prefix, replace = [Path(x) for x in self._cfg.mount_prefix_override.split(":")]
+            relative_in = input_.relative_to(prefix)
+            relative_out = output.relative_to(prefix)
+            input_ = replace / relative_in
+            output = replace / relative_out 
         mounts = {
             str(input_): job.job_input.params.input_mount_point,
             str(output): job.job_input.params.output_mount_point,
