@@ -89,6 +89,9 @@ class ErrorType(Enum):
     
     NO_SUCH_REFDATA =            (40060, "No such reference data")
     """ The reference data was not found in the system. """
+    
+    NO_JOB_LOGS =                (40070, "No logs available")
+    """ The job logs were not available. """
 
     IMAGE_TAG_EXISTS =           (50000, "Image tag exists")
     """ The tag for the image already exists in the system. """

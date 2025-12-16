@@ -21,6 +21,7 @@ from cdmtaskservice.http_bearer import MissingTokenError
 from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
 from cdmtaskservice.jobflows.flowmanager import InactiveJobFlowError, UnavailableJobFlowError
+from cdmtaskservice.job_state import NoJobLogsError
 from cdmtaskservice.mongo import (
     ImageTagExistsError,
     ImageDigestExistsError,
@@ -83,6 +84,7 @@ _ERR_MAP = {
     UnavailableJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_UNAVAILABLE, _H400),
     IllegalParameterError: ErrorMapping(ErrorType.ILLEGAL_PARAMETER, _H400),
     UnsupportedOperationError: ErrorMapping(ErrorType.UNSUPPORTED_OP, _H400),
+    NoJobLogsError: ErrorMapping(ErrorType.NO_JOB_LOGS, _H404),
 }
 
 
