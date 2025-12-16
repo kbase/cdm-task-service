@@ -15,7 +15,7 @@ from botocore.parsers import ResponseParserError
 import logging
 import math
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Self, AsyncIterator
 
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
@@ -290,6 +290,39 @@ class S3Client:
                 crc64nvme=res.get("ChecksumCRC64NVME"),
             ))
         return ret
+
+    def stream_object(self, s3path: S3Paths) -> AsyncIterator[bytes]:
+        """
+        Stream an object from S3.
+        
+        Note that the S3Paths input must contain only a single path.
+        """
+        if len(_not_falsy(s3path, "s3path")) > 1:
+            raise ValueError("Only one path is allowed")
+        return self._stream_object_generator(s3path)
+    
+    async def _stream_object_generator(self, s3path: S3Paths) -> AsyncIterator[bytes]:
+        # internal helper returns the raw response
+        # we can't use the _run_commands helper method here since the client needs to stay
+        # open while the result is streamed
+        try: 
+            async with self._client() as client:
+                buk, key, path = next(s3path.split_paths(include_full_path=True))
+                async def go(client, buk=buk, key=key):
+                    return await client.get_object(Bucket=buk, Key=key)
+                go.path = path
+                res = await self._fnc_wrapper(client, go)
+                body = res["Body"]
+                try:
+                    while True:
+                        chunk = await body.read(1024*1024)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    body.close()
+        except ValueError as e:
+            raise S3ClientConnectError(f"s3 connect failed: {e}") from e
 
     async def download_objects_to_file(
         self,

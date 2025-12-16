@@ -423,6 +423,93 @@ async def _download_objects_to_file_fail(
 
 
 @pytest.mark.asyncio
+async def test_stream_object(minio):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    await minio.upload_file("test-bucket//test_file", b"imsounique")
+    await minio.upload_file(
+        "test-bucket/big_test_file",
+        b"abcdefghij" * 600000,
+        2,  # 12MB total
+    )
+
+    s3c = await _client(minio)
+    asynciter = s3c.stream_object(S3Paths(["test-bucket/test_file"]))
+    data = b"".join([chunk async for chunk in asynciter])
+    assert data == b"imsounique"
+    
+    asynciter = s3c.stream_object(S3Paths(["test-bucket/big_test_file"]))
+    data = b"".join([chunk async for chunk in asynciter])
+    assert data == b"abcdefghij" * 600000 * 2
+
+
+@pytest.mark.asyncio
+async def test_stream_object_fail_bad_input(minio):
+    s3c = await _client(minio)
+
+    await _stream_object_fail(s3c, None, ValueError("s3path is required"))
+    await _stream_object_fail(s3c, S3Paths(["foo/bar", "baz/bat"]), ValueError(
+        "Only one path is allowed"
+    ))
+
+
+@pytest.mark.asyncio
+async def test_stream_object_fail_bad_connection(minio):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    await minio.upload_file("test-bucket//test_file", b"imsounique")
+    
+    s3c = await S3Client.create(
+        f"localhost:{minio.port}", minio.access_key, minio.secret_key, skip_connection_check=True
+    )
+    await _stream_object_fail(s3c, S3Paths(["foo/bar"]), S3ClientConnectError(
+        f"s3 connect failed: Invalid endpoint: localhost:{minio.port}"
+    ))
+
+
+@pytest.mark.asyncio
+async def test_stream_object_fail_no_object(minio):
+    await minio.clean()
+    await minio.create_bucket("fail-bucket")
+    await minio.upload_file("fail-bucket/foo/bar", b"foo")
+    
+    testset = {
+        "fake-bucket/foo/bar": "The path 'fake-bucket/foo/bar' was not found on the s3 system",
+        "fail-bucket/foo/baz": "The path 'fail-bucket/foo/baz' was not found on the s3 system",
+    }
+    cli = await _client(minio)
+    for k, v in testset.items():
+        await _stream_object_fail(cli, S3Paths([k]), S3PathNotFoundError(v))
+
+
+@pytest.mark.asyncio
+async def test_stream_object_fail_unauthed(minio, minio_unauthed_user):
+    # Will probably want to refactor these tests so they can be generically be applied to
+    # any endpoint
+    await minio.clean()
+    await minio.create_bucket("fail-bucket")
+    await minio.upload_file("fail-bucket/foo/bar", b"foo")
+    
+    user, pwd = minio_unauthed_user
+    s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
+    await _stream_object_fail(
+        s3c, S3Paths(["fail-bucket/foo/bar"]),
+        S3PathInaccessibleError(
+            "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+        )
+    )
+
+
+async def _stream_object_fail(
+    cli: S3Client, path: S3Paths, expected: Exception, print_stacktrace=False
+):
+    with pytest.raises(Exception) as got:
+        res = cli.stream_object(path)
+        [chunk async for chunk in res]
+    assert_exception_correct(got.value, expected, print_stacktrace)
+
+
+@pytest.mark.asyncio
 async def test_upload_objects_from_file(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
