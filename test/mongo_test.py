@@ -90,10 +90,18 @@ async def test_indexes(mongo, mondb):
         "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
         "_update_time_-1": {"key": [("_update_time", -1)], "v": 2},
         "user_1__update_time_-1": {"key": [("user", 1), ("_update_time", -1)], "v": 2},
+        "job_input.cluster_1__update_time_-1": {
+            "v": 2,
+            "key": [("job_input.cluster", 1), ("_update_time", -1)]
+        },
         "state_1__update_time_-1": {"v": 2, "key": [("state", 1), ("_update_time", -1)]},
         "user_1_state_1__update_time_-1": {
             "v": 2,
             "key": [("user", 1), ("state", 1), ("_update_time", -1)]
+        },
+        "user_1_job_input.cluster_1__update_time_-1": {
+            "v": 2,
+            "key": [("user", 1), ("job_input.cluster", 1), ("_update_time", -1)]
         },
         "transition_times.time_-1": {
             "v": 2,

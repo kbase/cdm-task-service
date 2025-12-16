@@ -78,7 +78,7 @@ async def run_container(
         volumes=volumes,
         detach=True,
         tty=False,
-        remove=False,
+        remove=False,  # Don't remove immediately to ensure logs are written
     )
 
     try:

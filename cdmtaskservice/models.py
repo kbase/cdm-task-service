@@ -33,7 +33,7 @@ from cdmtaskservice.timestamp import utcdatetime
 
 # WARNNING: Model field names also define field names in the MOngo database.
 # As such, field names cannot change without creating a mapping for field names in the mongo
-# layer, or data will not be returned correclty and corruption of old datq may occur.
+# layer, or data will not be returned correctly and corruption of old data may occur.
 # The strings below are used in the mongo interface to define fields and indexes.
 # They must match with the field names in the models.
 
@@ -42,6 +42,7 @@ FLD_IMAGE_DIGEST = "digest"
 FLD_IMAGE_TAG = "tag"
 FLD_JOB_USER = "user"
 FLD_JOB_JOB_INPUT = "job_input"
+FLD_JOB_INPUT_CLUSTER = "cluster"
 FLD_JOB_INPUT_INPUT_FILES = "input_files"
 FLD_JOB_INPUT_RUNTIME = "runtime"
 FLD_JOB_STATE_TRANSITION_ID = "trans_id"

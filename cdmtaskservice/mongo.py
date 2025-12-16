@@ -85,19 +85,30 @@ class MongoDAO:
             ),
         ])
         timefield = f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_COMMON_STATE_TRANSITION_TIME}"
+        clusterfield = f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_CLUSTER}"
+        # hold off on making compound indexes with cluster and state until it's clear we need them
+        # for now let the query optimizer choose the best one 
         # Only need and want a single unique index for jobs so they can be sharded
         await self._col_jobs.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
-            # find & sort jobs by transition time (admin only) (job sharing may require changes)1
+            # find & sort jobs by transition time (admin only) (job sharing may require changes)
             IndexModel([(_FLD_UPDATE_TIME, DESCENDING)]),
             # find jobs by current state and state transition time (admin only)
             IndexModel([(models.FLD_COMMON_STATE, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
+            # find jobs by  cluster and state transition time (admin only)
+            IndexModel([(clusterfield, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
             # find jobs by user and state transition time
             IndexModel([(models.FLD_JOB_USER, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
             # find jobs by user, current state and state transition time
             IndexModel([
                 (models.FLD_JOB_USER, ASCENDING),
                 (models.FLD_COMMON_STATE, ASCENDING),
+                (_FLD_UPDATE_TIME, DESCENDING)
+            ]),
+            # find jobs by user, cluster, and state transition time
+            IndexModel([
+                (models.FLD_JOB_USER, ASCENDING),
+                (clusterfield, ASCENDING),
                 (_FLD_UPDATE_TIME, DESCENDING)
             ]),
             # find jobs with unsent updates
@@ -318,6 +329,7 @@ class MongoDAO:
     async def list_jobs(
         self,
         user: str | None = None,
+        site: sites.Cluster | None = None,
         state: models.JobState | None = None,
         after: datetime.datetime | None = None,
         before: datetime.datetime | None = None,
@@ -327,6 +339,7 @@ class MongoDAO:
         List jobs.
         
         user - filter jobs by user.
+        site - filter jobs by the compute site.
         state - filter jobs by the job's current state.
         after - filter jobs to jobs that entered the current state after the given time, inclusive.
         before - filter jobs to jobs that entered the current state before the given time,
@@ -341,6 +354,8 @@ class MongoDAO:
         query = {}
         if user:
             query[models.FLD_JOB_USER] = user
+        if site:
+            query[f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_CLUSTER}"] = site.value
         if state:
             query[models.FLD_COMMON_STATE] = state.value
         if timequery:

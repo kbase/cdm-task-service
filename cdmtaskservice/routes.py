@@ -202,20 +202,24 @@ class ListJobsResponse(BaseModel):
     jobs: Annotated[list[models.JobPreview], Field(description="The jobs")]
 
 
-_ANN_JOB_STATE = Annotated[models.JobState, Query(
+_ANN_JOB_SITE = Annotated[sites.Cluster | None, Query(
+    description="Filter jobs by the site where the job ran."
+)] 
+
+_ANN_JOB_STATE = Annotated[models.JobState | None, Query(
     description="Filter jobs by the state of the job."
 )]
-_ANN_JOB_AFTER = Annotated[AwareDatetime, Query(
+_ANN_JOB_AFTER = Annotated[AwareDatetime | None, Query(
     openapi_examples={"isodate": {"value": "2024-10-24T22:35:40Z"}},
     description="Filter jobs where the last update time is newer than the provided date, "
         + "inclusive",
 )]
-_ANN_JOB_BEFORE = Annotated[AwareDatetime, Query(
+_ANN_JOB_BEFORE = Annotated[AwareDatetime | None, Query(
     openapi_examples={"isodate": {"value": "2024-10-24T22:35:59.999Z"}},
     description="Filter jobs where the last update time is older than the provided date, "
         + "exclusive",
 )]
-_ANN_JOB_LIMIT = Annotated[int, Query(
+_ANN_JOB_LIMIT = Annotated[int | None, Query(
     openapi_examples={"max value": {"value": 1000}},
     description="The maximum number of jobs to return",
     ge=1,
@@ -232,6 +236,7 @@ _ANN_JOB_LIMIT = Annotated[int, Query(
 )
 async def list_jobs(
     r: Request,
+    cluster: _ANN_JOB_SITE = None,
     state: _ANN_JOB_STATE = None,
     after: _ANN_JOB_AFTER = None,
     before: _ANN_JOB_BEFORE = None,
@@ -241,6 +246,7 @@ async def list_jobs(
     job_state = app_state.get_app_state(r).job_state
     return ListJobsResponse(jobs=await job_state.list_jobs(
         user=user.user,
+        site=cluster,
         state=state,
         after=after,
         before=before,
@@ -630,6 +636,7 @@ async def list_jobs_admin(
         max_length=100,
         pattern=r"^[a-z][a-z\d_]*$",
     )] = None,
+    cluster: _ANN_JOB_SITE = None,
     state: _ANN_JOB_STATE = None,
     after: _ANN_JOB_AFTER = None,
     before: _ANN_JOB_BEFORE = None,
@@ -643,6 +650,7 @@ async def list_jobs_admin(
     job_state = app_state.get_app_state(r).job_state
     return ListJobsResponse(jobs=await job_state.list_jobs(
         user=user,
+        site=cluster,
         state=state,
         after=after,
         before=before,
