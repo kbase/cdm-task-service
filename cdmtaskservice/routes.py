@@ -8,13 +8,13 @@ import logging
 from fastapi import (
     APIRouter,
     Depends,
+    Path as FastPath,
     Request,
     Response,
     status,
     Query,
-    Path as FastPath
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from kbase.auth import InvalidUserError
 from pathlib import Path
 from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
@@ -336,6 +336,61 @@ async def get_job_exit_codes(
     return ExitCodes(exit_codes=await flow.get_exit_codes(job))
 
 
+_ANN_CONTAINER_NUMBER = Annotated[int, FastPath(
+    openapi_examples={"container_num": {"value": 2}},
+    description="The container / subjob number.",
+    ge=0,
+)]
+
+
+@ROUTER_JOBS.get(
+    "/{job_id}/log/{container_num}/stdout",
+    response_class=StreamingResponse,
+    summary="Get a job's stdout logs",
+    description="Get the stdout stream from a job container. "
+        + "Only the submitting user may view the logs."
+)
+async def get_job_stdout(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    container_num: _ANN_CONTAINER_NUMBER,
+    user: CTSUser=Depends(_AUTH),
+) -> StreamingResponse:
+    return await get_logs(r, job_id, container_num, user)
+
+
+@ROUTER_JOBS.get(
+    "/{job_id}/log/{container_num}/stderr",
+    response_class=StreamingResponse,
+    summary="Get a job's stderr logs",
+    description="Get the stderr stream from a job container. "
+        + "Only the submitting user may view the logs."
+)
+async def get_job_stderr(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    container_num: _ANN_CONTAINER_NUMBER,
+    user: CTSUser=Depends(_AUTH),
+) -> StreamingResponse:
+    return await get_logs(r, job_id, container_num, user, stderr=True)
+
+
+async def get_logs(
+    r: Request,
+    job_id: str,
+    container_num: int,
+    user: CTSUser,
+    stderr: bool = False,
+) -> StreamingResponse:
+    jobstate = app_state.get_app_state(r).job_state
+    filegen, filename = await jobstate.stream_job_logs(job_id, container_num, user, stderr=stderr)
+    return StreamingResponse(
+        filegen,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
 _ANN_IMAGE_ID = Annotated[str, FastPath(
     openapi_examples={"image with digest": {
         "value": "ghcr.io/kbase/collections:checkm2_0.1.6"
@@ -653,13 +708,6 @@ async def get_job_containers(
 ) -> SubJobs:
     sjs = await _get_containers(r, job_id, user)
     return SubJobs(subjobs=sjs)
-
-
-_ANN_CONTAINER_NUMBER = Annotated[int, FastPath(
-    openapi_examples={"container_num": {"value": 2}},
-    description="The container / subjob number.",
-    ge=0,
-)]
 
 
 @ROUTER_ADMIN.get(
@@ -1131,7 +1179,7 @@ async def update_refdata(
         + "for running HTCondor jobs.",
     response_class=FileResponse,
 )
-async def get_condor_executable(r: Request):
+async def get_condor_executable(r: Request) -> FileResponse:
     file = app_state.get_app_state(r).condor_exe_path
     return FileResponse(file, filename=Path(localfiles.CONDOR_EXE_PATH).name)
 
@@ -1142,7 +1190,7 @@ async def get_condor_executable(r: Request):
     description="Not for general use.\n\nGets the code archive file for external job execution.",
     response_class=FileResponse,
 )
-async def get_code_archive(r: Request):
+async def get_code_archive(r: Request) -> FileResponse:
     file = app_state.get_app_state(r).code_archive_path
     return FileResponse(file, filename=Path(localfiles.CODE_ARCHIVE_PATH).name)
 

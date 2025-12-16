@@ -4,7 +4,9 @@ Manages job state.
 
 import datetime
 import logging
+from pathlib import Path
 import uuid
+from typing import AsyncIterator
 
 from cdmtaskservice import logfields
 from cdmtaskservice import models
@@ -23,6 +25,7 @@ from cdmtaskservice.exceptions import (
 )
 from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
+from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 from cdmtaskservice.mongo import MongoDAO, IllegalAdminMetaError
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client, S3PathInaccessibleError
@@ -277,6 +280,35 @@ class JobState:
         )
         return job
     
+    async def stream_job_logs(
+        self,
+        job_id: str,
+        container_num: int,
+        user: CTSUser,
+        stderr: bool = False
+    ) -> tuple[AsyncIterator[bytes], str]:
+        """
+        Stream the container logs from a job.
+        
+        job_id - the job's ID.
+        container_num - the container number for which to retrieve logs.
+        user - the user requesting the logs.
+        stderr - return the stderr logs instead of the stdout logs.
+        
+        Returns a tuple of a generator that will stream the logfile and the name of the file.
+        """
+        job = await self.get_job(job_id, user)
+        if not job.logpath:
+            raise NoJobLogsError(f"Job ID {job_id} has no logs available")
+        s3outpath, s3errpath = get_filenames_for_container(container_num)
+        if container_num >= job.job_input.num_containers:
+            raise IllegalParameterError(
+                f"Container number must be < {job.job_input.num_containers} for job {job_id}"
+            )
+        filename = s3errpath if stderr else s3outpath
+        s3path = S3Paths([str(Path(job.logpath) / filename)])
+        return self._s3.stream_object(s3path), filename
+    
     async def list_jobs(
         self,
         # can't be a KBaseUser since it may be provided by an admin as a parameter
@@ -344,3 +376,7 @@ class JobState:
             )
         except IllegalAdminMetaError as e:
             raise IllegalParameterError(str(e)) from e
+
+
+class NoJobLogsError(Exception):
+    """ Raised when logs for a job are unavailable. """
