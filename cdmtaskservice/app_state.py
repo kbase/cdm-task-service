@@ -301,7 +301,7 @@ async def _register_nersc_job_flows(
     coman: CoroutineWrangler
 ) -> JAWSFlowProvider:
     # This is only useful for testing with other processes that just want to pull job records
-    # but not start or run jobs or only run NERSC jobs. As such it's undocumented.
+    # but not start or run jobs or only run KBase jobs. As such it's undocumented.
     if os.environ.get("KBCTS_SKIP_NERSC") == "true":
         logr.info("KBCTS_SKIP_NERSC env var is 'true', skipping NERSC and JAWS startup")
         return None
@@ -334,7 +334,7 @@ async def _register_kbase_job_flow(
     coman: CoroutineWrangler
 ):
     # This is only useful for testing with other processes that just want to pull job records
-    # but not start or run jobs or only run KBase jobs. As such it's undocumented.
+    # but not start or run jobs or only run NERSC jobs. As such it's undocumented.
     if os.environ.get("KBCTS_SKIP_KBASE") == "true":
         logr.info("KBCTS_SKIP_KBASE env var is 'true', skipping KBase startup")
         return None
