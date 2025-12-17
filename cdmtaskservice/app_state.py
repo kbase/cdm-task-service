@@ -199,9 +199,6 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         refdata_service_role=cfg.refdata_service_role,
     )
     logr.info("Done")
-    jaws_job_flows = None
-    mongocli = None
-    kafka_notifier = None
     try:
         coman = CoroutineWrangler()
         dest.register("coroutine manager", coman.destroy)
@@ -227,7 +224,9 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         jaws_job_flows = await _register_nersc_job_flows(
             logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
         )
-        await _register_kbase_job_flow(dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman)
+        await _register_kbase_job_flow(
+            logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
+        )
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
         images = Images(mongodao, imginfo, refdata)
@@ -302,7 +301,7 @@ async def _register_nersc_job_flows(
     coman: CoroutineWrangler
 ) -> JAWSFlowProvider:
     # This is only useful for testing with other processes that just want to pull job records
-    # but not start or run jobs or only run KBase jobs. As such it's undocumented.
+    # but not start or run jobs or only run NERSC jobs. As such it's undocumented.
     if os.environ.get("KBCTS_SKIP_NERSC") == "true":
         logr.info("KBCTS_SKIP_NERSC env var is 'true', skipping NERSC and JAWS startup")
         return None
@@ -325,6 +324,7 @@ async def _register_nersc_job_flows(
 
 
 async def _register_kbase_job_flow(
+    logr: logging.Logger,
     dest: ResourceDestructor,
     cfg: CDMTaskServiceConfig,
     flowman: JobFlowManager,
@@ -333,6 +333,11 @@ async def _register_kbase_job_flow(
     kafka_notifier: KafkaNotifier,
     coman: CoroutineWrangler
 ):
+    # This is only useful for testing with other processes that just want to pull job records
+    # but not start or run jobs or only run KBase jobs. As such it's undocumented.
+    if os.environ.get("KBCTS_SKIP_KBASE") == "true":
+        logr.info("KBCTS_SKIP_KBASE env var is 'true', skipping KBase startup")
+        return None
     kbase_provider = await KBaseFlowProvider.create(
         cfg.get_condor_client_config(),
         mongodao,

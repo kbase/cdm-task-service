@@ -89,7 +89,7 @@ KBASE = ComputeSite(
         "The DOE Systems Biology Knowledge Base compute systems.",
         "The number of nodes may be adjusted up or down to support the needs of KBase "
         + "as a whole.",
-        "Queue times are typically somewhere between Lawrencium and NERSC."
+        "Queue times are highly dependent on the nodes available and user demand."
     ]
 )
 

@@ -204,8 +204,7 @@ class ListJobsResponse(BaseModel):
 
 _ANN_JOB_SITE = Annotated[sites.Cluster | None, Query(
     description="Filter jobs by the site where the job ran."
-)] 
-
+)]
 _ANN_JOB_STATE = Annotated[models.JobState | None, Query(
     description="Filter jobs by the state of the job."
 )]
