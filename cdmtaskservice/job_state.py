@@ -313,6 +313,7 @@ class JobState:
         self,
         # can't be a KBaseUser since it may be provided by an admin as a parameter
         user: str | None = None,
+        site: sites.Cluster | None = None,
         state: models.JobState | None = None,
         after: datetime.datetime | None = None,
         before: datetime.datetime | None = None,
@@ -322,6 +323,7 @@ class JobState:
         List jobs in the system.
         
         user - filter the jobs by a specific user.
+        site - filter jobs by the compute site.
         state - filter the jobs by the given state.
         after - filter jobs to jobs that entered the current state after the given time, inclusive.
         before - filter jobs to jobs that entered the current state before the given time,
@@ -334,6 +336,7 @@ class JobState:
             raise IllegalParameterError("Limit must be between 1 and 1000 inclusive")
         return await self._mongo.list_jobs(
             user=user,
+            site=site,
             state=state,
             after=after,
             before=before,
