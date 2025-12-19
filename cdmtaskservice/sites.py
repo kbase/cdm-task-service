@@ -102,6 +102,18 @@ CLUSTER_TO_SITE = {
 """ A mapping of compute clusters to their site information. """
 
 
+CLUSTER_TO_EXECUTION_TYPE = {
+    Cluster.PERLMUTTER_JAWS: False,
+    Cluster.LAWRENCIUM_JAWS: False,
+    Cluster.KBASE: True,
+}
+"""
+A mapping of compute clusters to their job container management type.
+
+True - managed by this service
+False - managed by an external service (e.g. JAWS)
+"""
+
 MAX_CPUS = max([cl.cpus_per_node for cl in CLUSTER_TO_SITE.values()])
 """
 The maximum number of cpus that can be requested for a container across all clusters.

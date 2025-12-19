@@ -166,13 +166,6 @@ class NERSCJAWSRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
-    async def get_exit_codes(self, job: models.Job) -> list[int | None]:
-        """
-        Get the exit codes of the containers / subjobs for a job.
-        """
-        ecs = await self._mongo.get_exit_codes_for_standard_job(_not_falsy(job, "job").id)
-        return ecs if ecs else [None] * job.job_input.num_containers
-
     async def get_job_external_runner_status(
         self,
         job: models.AdminJobDetails,
@@ -359,7 +352,7 @@ class NERSCJAWSRunner(JobFlow):
     async def _upload_complete(self, job: models.AdminJobDetails):
         try:
             await self._mongo.save_exit_codes_for_standard_job(
-                job.id, [8] * job.job_input.num_containers
+                job.id, [0] * job.job_input.num_containers
             )
             checksums = await self._nman.get_uploaded_JAWS_files(job)
             if not checksums:

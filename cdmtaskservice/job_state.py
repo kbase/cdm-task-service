@@ -280,6 +280,25 @@ class JobState:
         )
         return job
     
+    async def get_job_exit_codes(self, job_id: str, user: CTSUser, as_admin: bool = False
+    ) -> list[int | None]:
+        """
+        Get the container exit codes for a job.
+        
+        job_id - the job ID.
+        user - the user requesting the exit codes.
+        as_admin - True if the user should always have access to the job.
+        
+        Returns a list of the exit codes, some or all of which may be None if the container hasn't
+        exited.
+        """
+        job = await self.get_job(job_id, user, as_admin)
+        containers_self_managed = sites.CLUSTER_TO_EXECUTION_TYPE[job.job_input.cluster]
+        if containers_self_managed:
+            return await self._mongo.get_exit_codes_for_subjobs(job.id)
+        ecs = await self._mongo.get_exit_codes_for_standard_job(job.id)
+        return ecs if ecs else [None] * job.job_input.num_containers
+    
     async def stream_job_logs(
         self,
         job_id: str,
