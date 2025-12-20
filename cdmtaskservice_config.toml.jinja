@@ -20,7 +20,7 @@ has_nersc_account_role = "{{ KBCTS_HAS_NERSC_ACCOUNT_ROLE or "HAS_NERSC_ACCOUNT"
 # and update job state.
 external_executor_role = "{{ KBCTS_EXTERNAL_EXECUTOR_ROLE or "CTS_EXTERNAL_EXECUTOR" }}"
 
-# KBase auth2 custom role that signifies a request is coming from a user representing an
+# KBase auth2 custom role that signifies a request is coming from a user representing a
 # refdata service. Used by refdata servers to get and update refdata state.
 refdata_service_role = "{{ KBCTS_REFDATA_SERVICE_ROLE or "CTS_REFDATA_SERVICE" }}"
 
@@ -133,7 +133,7 @@ executable_url_override = "{{ KBCTS_HTC_EXE_URL_OVERRIDE or "" }}"
 refserver_url = "{{ KBCTS_REFDATA_SERVER_URL or "" }}"
 
 # The token to use when communicating with the refdata server. The token must have the role
-# defined in the Authentication section of the standard server configuration that allows use
+# defined in the Authentication section of the refdata server configuration that allows use
 # of the refdata server.
 refserver_token = "{{ KBCTS_REFDATA_SERVER_TOKEN or "" }}"
 
