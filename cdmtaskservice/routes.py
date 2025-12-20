@@ -335,10 +335,8 @@ async def get_job_exit_codes(
     job_id: _ANN_JOB_ID,
     user: CTSUser=Depends(_AUTH),
 ) -> ExitCodes:
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
-    return ExitCodes(exit_codes=await flow.get_exit_codes(job))
+    jobstate = app_state.get_app_state(r).job_state
+    return ExitCodes(exit_codes=await jobstate.get_job_exit_codes(job_id, user))
 
 
 _ANN_CONTAINER_NUMBER = Annotated[int, FastPath(
@@ -688,10 +686,8 @@ async def get_job_exit_codes_admin(
     user: CTSUser=Depends(_AUTH),
 ) -> ExitCodes:
     _ensure_admin(user, "Only service administrators can view other users' job details.")
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
-    return ExitCodes(exit_codes=await flow.get_exit_codes(job))
+    jobstate = app_state.get_app_state(r).job_state
+    return ExitCodes(exit_codes=await jobstate.get_job_exit_codes(job_id, user, as_admin=True))
 
 
 class SubJobs(BaseModel):
@@ -740,6 +736,8 @@ async def _get_containers(
     user: CTSUser,
     container_num: int | None = None,
 ) -> models.SubJob | list[models.SubJob]:
+    # TODO CODE could use same strategy as exit codes to allow getting state w/o flow availble.
+    #           Since admin only don't worry about it for now
     _ensure_admin(user, "Only service administrators get container state.")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, user, as_admin=True)

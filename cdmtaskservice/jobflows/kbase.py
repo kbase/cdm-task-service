@@ -145,12 +145,6 @@ class KBaseRunner(JobFlow):
             return await self._mongo.get_subjob(job_id, container_num)
         return await self._mongo.get_subjobs(job_id)
 
-    async def get_exit_codes(self, job: models.Job) -> list[int | None]:
-        """
-        Get the exit codes of the containers / subjobs for a job.
-        """
-        return await self._mongo.get_exit_codes_for_subjobs(_not_falsy(job, "job").id)
-
     async def get_job_external_runner_status(
         self,
         job: models.AdminJobDetails,
