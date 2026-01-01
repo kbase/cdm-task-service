@@ -10,7 +10,7 @@ dependencies = [
     "aiohttp==3.12.9",
     "aiokafka==0.12.0",
     "async-lru==2.0.5",
-    "awscrt==0.27.2",
+    "awscrt==0.30.0",
     "bidict==0.23.1",
     "cacheout==0.16.0",
     "docker==7.1.0",
