@@ -31,7 +31,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "boto3==1.37.3",
-    "ipython==9.3.0",
+    "ipython==9.8.0",
     "kafka-python==2.2.10",
     "pymongo==4.13.0",
     "pytest==8.4.0",
