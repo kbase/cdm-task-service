@@ -34,7 +34,7 @@ dev = [
     "ipython==9.3.0",
     "kafka-python==2.2.10",
     "pymongo==4.13.0",
-    "pytest==8.4.0",
+    "pytest==9.0.2",
     "pytest-asyncio==1.0.0",
     "pytest-cov==6.1.1",
 ]
