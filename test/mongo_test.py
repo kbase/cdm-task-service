@@ -1,6 +1,7 @@
 
 from bson.son import SON
 import datetime
+import re
 from pymongo.errors import BulkWriteError, DuplicateKeyError
 import pytest
 from typing import Coroutine, Callable, Any
@@ -272,8 +273,28 @@ async def test_update_job_fail(mondb):
     )
 
 
+@pytest.mark.asyncio
+async def test_update_job_and_subjob_fail_update_to_error(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+    await mc.initialize_subjobs([_BASESUBJOB1])
+    u = error("admin error here")
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    tid = "1"
+    
+    for state in models.JobState.terminal_states():
+        mondb.jobs.update_one({}, {"$set": {"state": state.value}})
+        mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
+        await fail_update_job(mc, "foo", u, dt, tid, NoSuchJobError(
+            "No job with ID 'foo' not in states ['complete', 'error'] exists"
+        ))
+        await fail_update_subjob(mc, "bar", 0, u, dt, NoSuchSubJobError(
+            "No job with ID 'bar' and subjob ID 0 not in states ['complete', 'error'] exists")
+        )
+
+
 async def fail_update_job(mc, job_id, update, dt, tid, expected):
-    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$"):
         await mc.update_job_state(job_id, update, dt, tid)
 
 
@@ -487,7 +508,7 @@ async def test_update_subjob_fail(mondb):
 
 
 async def fail_update_subjob(mc, job_id, subjob_id, update, dt, expected):
-    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$"):
         await mc.update_subjob_state(job_id, subjob_id, update, dt)
 
 

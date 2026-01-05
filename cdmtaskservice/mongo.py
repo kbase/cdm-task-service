@@ -375,6 +375,46 @@ class MongoDAO:
             jobs.append(models.JobPreview(**self._clean_doc(j)))
         return jobs
 
+    def _update_job_state_query(
+        self,
+        job_id: str,
+        time: datetime.datetime,
+        update: JobUpdate,
+        subjob_id: int | None = None,
+    ) -> dict[str, Any]:
+        query = {
+            models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
+            _FLD_UPDATE_TIME: {"$lte": _not_falsy(time, "time")},
+        }
+        if update.current_state:
+            query[models.FLD_COMMON_STATE] = update.current_state.value
+        if update.disallowed_current_states:
+            query[models.FLD_COMMON_STATE] = {"$nin": [
+                s.value for s in update.disallowed_current_states
+            ]}
+        if subjob_id is not None:
+            query[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
+        return query
+
+    def _update_job_state_err(
+        self,
+        job_id: str,
+        update: JobUpdate,
+        subjob_id: int | None = None,
+    ):
+        statestr = ""
+        if update.current_state:
+            statestr = f"in state {update.current_state.value} "
+        if update.disallowed_current_states:
+            statestr = "not in states " + str(
+                sorted([s.value for s in update.disallowed_current_states])
+            ) + " "
+        if subjob_id is not None:
+            raise NoSuchSubJobError(
+                f"No job with ID '{job_id}' and subjob ID {subjob_id} {statestr}exists"
+            )
+        raise NoSuchJobError(f"No job with ID '{job_id}' {statestr}exists")
+
     async def _update_job_state(
         self,
         col: AsyncIOMotorCollection,
@@ -390,14 +430,7 @@ class MongoDAO:
             jbfld, ispush = self._FIELD_TO_KEY_AND_PUSH[fld]
             target = push if ispush else set_
             target[jbfld] = val
-        query = {
-            models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
-            _FLD_UPDATE_TIME: {"$lte": _not_falsy(time, "time")},
-        }
-        if update.current_state:
-            query[models.FLD_COMMON_STATE] = update.current_state.value
-        if subjob_id is not None:
-            query[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
+        query = self._update_job_state_query(job_id, time, update, subjob_id)
         transition = {
             models.FLD_COMMON_STATE_TRANSITION_STATE: update.new_state.value,
             models.FLD_COMMON_STATE_TRANSITION_TIME: time,
@@ -422,12 +455,7 @@ class MongoDAO:
             # This doesn't account for missing matches due to a too-early `time` argument,
             # but that generally shouldn't happen unless someone is deliberately being a pain
             # YAGNI for now, improve later if necessary
-            cs = f"in state {update.current_state.value} " if update.current_state else ""
-            if subjob_id is not None:
-                raise NoSuchSubJobError(
-                    f"No job with ID '{job_id}' and subjob ID {subjob_id} {cs}exists"
-                )
-            raise NoSuchJobError(f"No job with ID '{job_id}' {cs}exists")
+            self._update_job_state_err(job_id, update, subjob_id)
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"

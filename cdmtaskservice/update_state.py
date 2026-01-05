@@ -75,14 +75,19 @@ class Update(Generic[T]):
     def __init__(self):
         self._new_state = None
         self._current_state = None
+        self._disallowed_current_states = []
         self._fields = {}
     
-    def _set_new_state(self, new_state: str) -> Self:
+    def _set_new_state(self, new_state: T) -> Self:
         self._new_state = new_state
         return self
     
-    def _set_current_state(self, current_state: str) -> Self:
+    def _set_current_state(self, current_state: T) -> Self:
         self._current_state = current_state
+        return self
+    
+    def _set_disallowed_current_states(self, disallowed_states: set[T]) -> Self:
+        self._disallowed_current_states = disallowed_states
         return self
 
     def _set_fields(self, fields: dict[UpdateField, Any]) -> Self:
@@ -96,10 +101,23 @@ class Update(Generic[T]):
             raise ValueError("A programming error occurred, new state must be present")
         return self._new_state
 
+    def _check_current_state(self):
+        if self._current_state and self._disallowed_current_states:
+            raise ValueError(
+                "Cannot set current state and disallowed current states simultaneously"
+            ) 
+
     @property
     def current_state(self) -> T | None:
+        self._check_current_state()
         """ Get the expected current state of the process, if any. """
         return self._current_state
+
+    @property
+    def disallowed_current_states(self) -> set[T]:
+        """ Get the disallowed states for the process, if any. """
+        self._check_current_state()
+        return self._disallowed_current_states
 
     @property
     def update_fields(self) -> dict[UpdateField, Any]:
@@ -348,7 +366,10 @@ def error(
         flds[UpdateField.CPU_FACTOR] = _check_num(cpu_factor, "cpu_factor", minimum=0)
     if max_memory is not None:
         flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
-    return JobUpdate()._set_new_state(models.JobState.ERROR)._set_fields(flds)
+    return JobUpdate(
+        )._set_new_state(models.JobState.ERROR
+        )._set_disallowed_current_states(models.JobState.terminal_states()
+        )._set_fields(flds)
 
 
 ####################
