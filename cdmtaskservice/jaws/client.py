@@ -56,7 +56,7 @@ class JAWSClient:
             raise ValueError(
                 f"JAWS client expected user {config.user} for token, but got {user}"
             )
-        logging.getLogger(__name__).info(f"Initialized JAWS client with user {user}")
+        cli._logr.info(f"Initialized JAWS client with user {user}")
         return cli
     
     def __init__(self, url: str, token: str):
@@ -68,6 +68,7 @@ class JAWSClient:
             base_url=url,
             headers={"Authorization": f"Bearer {_require_string(token, 'token')}"}
         )
+        self._logr = logging.getLogger(__name__)
 
     async def _get(self, url, params=None) -> dict[str, Any]:
         return await self._req("GET", url, params=params)
@@ -81,11 +82,18 @@ class JAWSClient:
             # don't worry too much about exceptions. Expand later if needed
             # May need to add retries
             # May need to to add some sort of down notification or detection
-            res.raise_for_status()
             if res.ok:  # assume here that if we get a 2XX we get JSON. Fix if necessary
                 return await res.json()
-            else:
-                raise ValueError("not sure how this is possible, how exciting")
+            try:
+                json = await res.json()
+            except Exception as e:
+                self._logr.exception(f"JAWS error response:\n{await res.text()}")
+                raise JAWSClientError("Got non-JSON error response from JAWS") from e
+            # Assume here we're talking to jaws
+            err = json["detail"]["error"]
+            if "too late to cancel" in err:
+                raise JAWSJobCanceledError("Job is canceled")
+            res.raise_for_status()
 
     async def _user(self) -> str:
         res = await self._get("user")
@@ -119,6 +127,9 @@ class JAWSClient:
         """ Cancel a job. """
         try:
             return await self._put(f"run/{_require_string(run_id, 'run_id')}/cancel")
+        except JAWSJobCanceledError:
+            self._logr.info(f"JAWS job {run_id} is already canceled - noop")
+            # do nothing
         except aiohttp.client_exceptions.ClientResponseError as e:
             # TODO JAWS handle 400 when job is already cancelled
             if e.status == 404:
@@ -159,5 +170,13 @@ def result(job: dict[str, Any]) -> JAWSResult:
     return _JAWS_RES_TO_ENUM[job["result"]]
 
 
-class NoSuchJAWSJobError(Exception):
+class JAWSClientError(Exception):
+    """ General class for JAWS client errors. """
+
+
+class NoSuchJAWSJobError(JAWSClientError):
     """ Thrown when a a jaws run ID does not exist. """
+
+
+class JAWSJobCanceledError(JAWSClientError):
+    """ Raised when a job is in the canceled state and the operatoin is therefore illegal. """
