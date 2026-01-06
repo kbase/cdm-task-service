@@ -131,7 +131,6 @@ class JAWSClient:
             self._logr.info(f"JAWS job {run_id} is already canceled - noop")
             # do nothing
         except aiohttp.client_exceptions.ClientResponseError as e:
-            # TODO JAWS handle 400 when job is already cancelled
             if e.status == 404:
                 raise NoSuchJAWSJobError(run_id) from e
             raise

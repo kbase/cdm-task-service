@@ -6,8 +6,9 @@ import docker
 from functools import lru_cache
 import logging
 from pathlib import Path
+import signal
 import threading
-from typing import Awaitable
+from typing import Awaitable, Callable
 
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
 
@@ -21,23 +22,21 @@ def _get_client():
 def _stream_logs(
     container: docker.models.containers.Container, stdout_path: Path, stderr_path: Path
 ):
-    # Stream stderr in a background thread
-    def stream_err():
-        with stderr_path.open("wb") as f_err:
-            for chunk in container.logs(stdout=False, stderr=True, stream=True, follow=True):
-                f_err.write(chunk)
-                f_err.flush()
+    # Stream logs in a background threads to avoid blocking main thread and signals
+    def stream_file(path: Path, stdout: bool):
+        with path.open("wb") as f:
+            for chunk in container.logs(stdout=stdout, stderr=not stdout, stream=True, follow=True):
+                f.write(chunk)
+                f.flush()
 
-    err_thread = threading.Thread(target=stream_err, daemon=True)
-    err_thread.start()
-
-    # Stream stdout in the main thread
-    with stdout_path.open("wb") as f_out:
-        for chunk in container.logs(stdout=True, stderr=False, stream=True, follow=True):
-            f_out.write(chunk)
-            f_out.flush()
-
-    err_thread.join()  # ensure stderr is done
+    threads = [
+        threading.Thread(target=stream_file, args=(stdout_path, True), daemon=True),
+        threading.Thread(target=stream_file, args=(stderr_path, False), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
 
 async def run_container(
@@ -48,7 +47,8 @@ async def run_container(
     command: list[str] | None = None,
     env: dict[str, str] | None = None,
     mounts: dict[str, str] | None = None,
-    post_start_callback: Awaitable[None] | None = None
+    post_start_callback: Awaitable[None] | None = None,
+    sigterm_callback: Callable[[int], None] | None = None,
 ):
     """
     Run a container and wait for it to complete.
@@ -61,6 +61,9 @@ async def run_container(
     mounts - a map from host mount path to container mount path to provide to the container
     post_start_callback - an awaitable that will be awaited when the container has started but
         before streaming logs.
+    sigterm_callback - a callable that will be called if a SIGTERM or SIGINT is sent to the
+        process, after a stop signal is sent to the docker container. The argument is the signal
+        number.
     """
     _require_string(image, "image")
     _not_falsy(stdout_path, "stdout_path")
@@ -80,8 +83,24 @@ async def run_container(
         tty=False,
         remove=False,  # Don't remove immediately to ensure logs are written
     )
+    
+    def cleanup(signum, frame):
+        logr.info(f"Got signum {signum}")
+        if container:
+            logr.info(f"Stopping container {container.short_id}")
+            try:
+                container.stop(timeout=10)
+                logr.info(f"Stopped container {container.short_id}")
+            except Exception as e:
+                logr.exception(f"Failed to stop container: {e}")
+        # Probably the right way to do this is to turn this into a class and add a stop()
+        # method or something, but this is internal only code for now and this way is faster.
+        # If needed move the signal catching out of here and make the class.
+        sigterm_callback(signum)
 
     try:
+        signal.signal(signal.SIGTERM, cleanup)
+        signal.signal(signal.SIGINT, cleanup)
         logr.info(f"Container started: {container.short_id}")
         if post_start_callback:
             await post_start_callback

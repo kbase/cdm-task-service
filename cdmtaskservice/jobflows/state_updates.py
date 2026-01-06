@@ -105,7 +105,7 @@ class JobFlowStateUpdates:
         
         job_id - the job to update.
         update - the update to apply.
-        update_time - the timestamp for the update
+        update_time - the timestamp for the update, defaulting to now.
         """
         _require_string(job_id, "job_id")
         _not_falsy(update, "update")

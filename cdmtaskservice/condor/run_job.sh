@@ -81,4 +81,4 @@ echo "Python version: $(uv run python --version)"
 
 export PYTHONPATH=.
 
-uv run python cdmtaskservice/externalexecution/main.py
+exec uv run python cdmtaskservice/externalexecution/main.py

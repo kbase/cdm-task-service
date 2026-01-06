@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+import sys
 import time
 import traceback
 from typing import TextIO, Any
@@ -256,7 +257,8 @@ Local relative path: {loc}
             mounts=mounts,
             command=self._args.args,
             env=self._args.env,
-            post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
+            post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED),
+            sigterm_callback=lambda signum: sys.exit(128 + signum)
         )
         self._logr.info(f"Container exited with code {exit_code}")
         return exit_code
