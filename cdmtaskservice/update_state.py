@@ -1,6 +1,8 @@
 """
 Contains enums and classes to represent various ways in which a job or refdata staging process
 might be updated.
+
+The functions in the class effectively encode the FSM of job state transitions.
 """
 
 from enum import StrEnum, auto
@@ -275,6 +277,48 @@ def complete(
         )._set_new_state(models.JobState.COMPLETE
         )._set_fields(flds
     )
+
+
+####################
+### Canceling states
+####################
+
+
+def canceling() -> JobUpdate:
+    """ Update a job's state to the process of canceling the job. """
+    return JobUpdate(
+        )._set_disallowed_current_states(
+            models.JobState.terminal_states() | models.JobState.canceling_states()
+        )._set_new_state(models.JobState.CANCELING
+    )
+
+
+def canceled(
+    cpu_hours: float = None,
+    cpu_factor: float = None,
+    max_memory: int = None,
+) -> JobUpdate:
+    """
+    Set a job to the canceled state.
+    
+    cpu_hours - the job cpu hours, if available.
+    cpu_factor - the job's cpu usage factor, if available.
+    max_memory - the maximum memory used by the job in bytes, if available.
+    """
+    # There are 3 repetitions of this that are pretty similar. Make a dataclass maybe?
+    flds = {}
+    if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
+        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
+    if cpu_factor is not None:
+        flds[UpdateField.CPU_FACTOR] = _check_num(cpu_factor, "cpu_factor", minimum=0)
+    if max_memory is not None:
+        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
+    return JobUpdate(
+        )._set_current_state(models.JobState.CANCELING
+        )._set_new_state(models.JobState.CANCELED
+        )._set_fields(flds
+    )
+
 
 ####################
 ### Error states

@@ -67,13 +67,21 @@ async def _get_job_update_fail(md, job, state, expected):
 
 @pytest.mark.asyncio
 async def test_get_job_update_fail_single_states():
-    for s in list(models.JobState):
+    for s in set(models.JobState) - models.JobState.canceling_states():
         await _run_get_job_fail(s, {s: (0, None)}, ValueError(
             f"You reported that a subjob transitioned to state {s.value} but no subjobs are "
             + "in that state"
         ))
         await _run_get_job_fail(s, {s: (4, _T2)}, ValueError(
             "More subjobs found (4) than containers (3)"
+        ))
+
+
+@pytest.mark.asyncio
+async def test_get_job_update_fail_canceling_states():
+    for s in models.JobState.canceling_states():
+        await _run_get_job_fail(s, {s: (0, None)}, ValueError(
+            "Subjobs cannot transition to the canceling states."
         ))
 
 
