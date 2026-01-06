@@ -183,6 +183,8 @@ services:
       - ./docker_compose/htcondor/submit_test_script:/opt/submit_test_script
       - ./docker_compose/htcondor/start_condor_and_gen_token.sh:/opt/start_condor_and_gen_token.sh
       - ./docker_compose/htcondor/condor_config.local:/etc/condor/condor_config.local
+      - ./docker_compose/htcondor/signal_test.py:/signal_test.py
+      - ./docker_compose/htcondor/signal_test.sh:/signal_test.sh
       - condor-token:/etc/condor/tokens.d   # shared token directory
       - /var/run/docker.sock:/var/run/docker.sock
     # for some reason the script is failing without the `sh`, not sure why
