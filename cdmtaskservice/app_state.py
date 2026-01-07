@@ -356,7 +356,9 @@ def get_app_state(r: Request) -> AppState:
     """
     Get the application state from a request.
     """
-    return _get_app_state_from_app(r.app)
+    if not r.app.state._cdmstate:
+        raise ValueError("App state has not been initialized")
+    return r.app.state._cdmstate
 
 
 async def destroy_app_state(app: FastAPI):
@@ -366,12 +368,6 @@ async def destroy_app_state(app: FastAPI):
     await app.state._destroyable.destruct()
     # https://docs.aiohttp.org/en/stable/client_advanced.html#graceful-shutdown
     await asyncio.sleep(0.250)
-
-
-def _get_app_state_from_app(app: FastAPI) -> AppState:
-    if not app.state._cdmstate:
-        raise ValueError("App state has not been initialized")
-    return app.state._cdmstate
 
 
 def set_request_user(r: Request, user: CTSUser | None, token: str | None):

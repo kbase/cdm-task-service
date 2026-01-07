@@ -235,7 +235,8 @@ class JobState:
         self,
         job_id: str,
         user: CTSUser,
-        as_admin: bool = False
+        as_admin: bool = False,
+        admin_details: bool = False,
     ) -> models.Job | models.AdminJobDetails:
         """
         Get a job based on its ID. If the provided user doesn't match the job's owner,
@@ -245,9 +246,13 @@ class JobState:
         user - the user requesting the job.
         as_admin - True if the user should always have access to the job and should access
             additional job details.
+        admin_details - True if the user should access additional job details, but not have
+            special access to the job.
         """
         _not_falsy(user, "user")
-        job = await self._mongo.get_job(_require_string(job_id, "job_id"), as_admin=as_admin)
+        job = await self._mongo.get_job(
+            _require_string(job_id, "job_id"), as_admin=as_admin or admin_details
+        )
         if not as_admin and job.user != user.user:
             # reveals the job ID exists in the system but I don't see a problem with that
             raise UnauthorizedError(f"User {user.user} may not access job {job_id}")

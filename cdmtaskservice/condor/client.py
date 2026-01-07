@@ -67,6 +67,7 @@ _JOB_STATE = [
     "HoldReasonCode",
     "VacateReason",
     "VacateReasonCode",
+    "WantGracefulRemoval",
 ]
 _FAIR_SHARE = ["ConcurrencyLimits", "AccountingGroup"]
 _TIME = [
@@ -130,14 +131,15 @@ def condor_job_stats(job_classads_as_dict: list[dict[str, Any]], requested_cpus:
     _check_num(requested_cpus, "requested_cpus")
     # Seems like condor uses MiB, although docs aren't great
     # https://htcondor.readthedocs.io/en/24.x/man-pages/condor_submit.html?utm_source=chatgpt.com#request_memory
-    max_mem = max([c[_AD_MEM] for c in job_classads_as_dict]) * 1024 * 1024
+    mems = [c[_AD_MEM] for c in job_classads_as_dict if _AD_MEM in c]
+    max_mem = max(mems) * 1024 * 1024 if mems else None
     cpu_sec = 0
     committed_time = 0
     for c in job_classads_as_dict:
-        cpu_sec += c[_AD_CPU_USER] + c[_AD_CPU_SYS]
-        committed_time += c[_AD_COMMITTED_TIME]
+        cpu_sec += (c.get(_AD_CPU_USER) or 0) + (c.get(_AD_CPU_SYS) or 0)
+        committed_time += (c.get(_AD_COMMITTED_TIME) or 0)
     cpufactor = cpu_sec / (committed_time * requested_cpus) if committed_time else None
-    return cpu_sec / 3600.0, cpufactor, max_mem
+    return cpu_sec / 3600.0 if cpu_sec else None, cpufactor, max_mem
 
 
 class CondorClient:
@@ -223,6 +225,7 @@ class CondorClient:
             "request_cpus": str(job.job_input.cpus),
             "request_memory": mem,
             # request_disk needed?
+            "want_graceful_removal": True,  # send a sigterm to the job, allowing cleanup
 
             # Fair share stuff - this is way too hard to test. Eventually just check it
             # shows up in the job classad
@@ -256,8 +259,6 @@ class CondorClient:
         jobres = await asyncio.to_thread(self._schedd.submit, sub, itemdata=iter(itemdata))
         return jobres.cluster()
     
-    # TODO CANCEL_JOB for condor
-
     def _classad_to_dict(self, ca: ClassAd) -> dict[str, Any]:
         ret = {}
         for k in _RETURNED_JOB_ADS:
@@ -328,3 +329,16 @@ class CondorClient:
         running = [self._classad_to_dict(ad) for ad in id2ad.values()]
         complete = [self._classad_to_dict(ad) for ad in complete_job_ads]
         return running, complete
+
+    async def cancel_job(self, cluster_id: int):
+        """
+        Cancel a job by its cluster ID.
+        
+        If the job is complete, held, or non-existant this is a noop.
+        """
+        _check_num(cluster_id, "cluster_id")
+        await asyncio.to_thread(  # don't block the event loop
+            self._schedd.act,
+            htcondor2.JobAction.Remove,
+            f"ClusterId == {cluster_id}"
+        )
