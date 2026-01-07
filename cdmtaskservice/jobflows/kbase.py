@@ -183,6 +183,7 @@ class KBaseRunner(JobFlow):
         if _not_falsy(job, "job").state != models.JobState.CREATED:
             raise InvalidJobStateError("Job must be in the created state")
         # Could check that the s3 and job paths / etags match... YAGNI
+        cluster_id = None
         try:
             cluster_id = await self._condor.run_job(job)
             # It's theoretically possible that all the containers could transition to
@@ -195,6 +196,13 @@ class KBaseRunner(JobFlow):
                 job.id, update_state.submitted_htcondor_download(cluster_id)
             )
         except Exception as e:
+            if cluster_id:
+                try:
+                    await self._condor.cancel_job(cluster_id)
+                except Exception:
+                    self._logr.exception(
+                        "Error canceling Condor job after exception in start routine"
+                    )
             await self._updates.handle_exception(e, job.id, "starting condor run for")
 
     async def download_complete(self, job: models.AdminJobDetails):
@@ -229,6 +237,8 @@ class KBaseRunner(JobFlow):
             update_state.submitted_error_processing(),
     }
     
+    # the cancel states are deliberately not included. Subjobs should not transition to
+    # canceling, only the main job
     _SUBJOB_STATE_TO_UPDATE_FUNC = {
         **_COMMON_STATE_TO_UPDATE_FUNC,
         models.JobState.UPLOAD_SUBMITTING: lambda update:
@@ -359,6 +369,33 @@ class KBaseRunner(JobFlow):
             cpu_factor=cpu_factor,
             max_memory=max_mem
         ))
+        
+    async def cancel_job(self, job: models.AdminJobDetails):
+        """ Cancel a job. """
+        _not_falsy(job, "job")
+        # If we can't talk to mongo there's not much we can do
+        await self._updates.update_job_state(job.id, update_state.canceling())
+        await self._coman.run_coroutine(self._cancel_job(job))
+        
+    async def _cancel_job(self, job: models.AdminJobDetails):
+        _not_falsy(job, "job")
+        try:
+            # refresh the job state in case it changed after passing it to the cancel_job method
+            job = await self._mongo.get_job(job.id, as_admin=True)
+            cpu_hours = None
+            cpu_factor = None
+            max_mem = None
+            if job.htcondor_details and job.htcondor_details.cluster_id:
+                # assume there's only one job in the list for now
+                await self._condor.cancel_job(job.htcondor_details.cluster_id[-1])
+                cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
+            await self._updates.update_job_state(job.id, update_state.canceled(
+                cpu_hours=cpu_hours,
+                cpu_factor=cpu_factor,
+                max_memory=max_mem
+            ))
+        except Exception as e:
+            await self._updates.handle_exception(e, job.id, "canceling")
 
     async def _get_condor_stats(self, job: models.AdminJobDetails) -> tuple[float, float, int]:
         attempts = 0
