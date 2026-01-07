@@ -63,13 +63,31 @@ def test_job_input_fail_too_many_containers():
 
 
 def test_job_state_terminal_states():
-    assert models.JobState.terminal_states() == {models.JobState.ERROR, models.JobState.COMPLETE}
+    assert models.JobState.terminal_states() == {
+        models.JobState.ERROR, models.JobState.COMPLETE, models.JobState.CANCELED
+    }
 
 
 def test_job_state_is_terminal():
     expected = {s: False for s in list(models.JobState)}
     expected[models.JobState.COMPLETE] = True
     expected[models.JobState.ERROR] = True
+    expected[models.JobState.CANCELED] = True
     
     for s, term in expected.items():
         assert s.is_terminal() is term
+
+
+def test_job_state_canceling_states():
+    assert models.JobState.canceling_states() == {
+        models.JobState.CANCELING, models.JobState.CANCELED
+    }
+
+
+def test_job_state_is_canceling():
+    expected = {s: False for s in list(models.JobState)}
+    expected[models.JobState.CANCELING] = True
+    expected[models.JobState.CANCELED] = True
+    
+    for s, term in expected.items():
+        assert s.is_canceling() is term

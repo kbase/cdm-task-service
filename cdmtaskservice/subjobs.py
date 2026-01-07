@@ -72,6 +72,8 @@ async def get_job_update(
     _not_falsy(md, "md")
     _not_falsy(job, "job")
     st = _not_falsy(subjob_transition, "subjob_transition")
+    if st.is_canceling():
+        raise ValueError("Subjobs cannot transition to the canceling states.")
     js = models.JobState
     if st in {js.CREATED, js.DOWNLOAD_SUBMITTED, js.JOB_SUBMITTING, js.JOB_SUBMITTED}:
         stcount = (await md.have_subjobs_reached_state(job.id, st))[st]
@@ -86,6 +88,5 @@ async def get_job_update(
             md, job, st, js.UPLOAD_SUBMITTED, js.ERROR_PROCESSING_SUBMITTED
         )
     if st.is_terminal():
-        # TODO CANCEL_JOBS will need to do something different here
         return await _check_equiv_states_complete(md, job, st, js.COMPLETE, js.ERROR)
     raise ValueError("Seems like someone added a state without updating this method, oops")

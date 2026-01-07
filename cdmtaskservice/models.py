@@ -809,18 +809,29 @@ class JobState(str, Enum):
     UPLOAD_SUBMITTING = "upload_submitting"
     UPLOAD_SUBMITTED = "upload_submitted"
     COMPLETE = "complete"
+    CANCELING = "canceling"
+    CANCELED = "canceled"
     ERROR_PROCESSING_SUBMITTING = "error_processing_submitting"
     ERROR_PROCESSING_SUBMITTED = "error_processing_submitted"
     ERROR = "error"
     
     @classmethod
     def terminal_states(cls) -> set[Self]:
-        """Return the list of terminal states."""
-        return {cls.COMPLETE, cls.ERROR}
+        """ Return the set of terminal states. """
+        return {cls.COMPLETE, cls.ERROR, cls.CANCELED}
 
     def is_terminal(self) -> bool:
-        """Return True if this state is a terminal state."""
+        """ Return True if this state is a terminal state. """
         return self in self.terminal_states()
+    
+    @classmethod
+    def canceling_states(cls) -> set[Self]:
+        """ Return the set of states in the canceling flow. """
+        return {cls.CANCELING, cls.CANCELED}
+    
+    def is_canceling(self) -> bool:
+        """ Return True if this state is one of the canceling flow states. """
+        return self in self.canceling_states()
 
 
 class JobStateTransition(BaseModel):
