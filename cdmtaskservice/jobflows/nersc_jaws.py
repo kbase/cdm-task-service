@@ -42,6 +42,8 @@ from cdmtaskservice.update_state import (
     submitting_upload,
     submitted_nersc_upload,
     complete,
+    canceling,
+    canceled,
     submitting_error_processing,
     submitted_nersc_error_processing,
     error,
@@ -102,6 +104,7 @@ class NERSCJAWSRunner(JobFlow):
         self._callback_root = _require_string(service_root_url, "service_root_url")
         self._on_refdata_complete = on_refdata_complete
         self._updates = JobFlowStateUpdates(self.CLUSTER, self._mongo, _not_falsy(kafka, "kafka"))
+        self._logr = logging.getLogger(__name__)
     
     async def _get_transfer_result(
         self,
@@ -123,7 +126,7 @@ class NERSCJAWSRunner(JobFlow):
             errcls = InvalidReferenceDataStateError if refdata else InvalidJobStateError
             raise errcls(f"{op} task is not complete")
         elif res.state == TransferState.FAIL:
-            logging.getLogger(__name__).error(
+            self._logr.error(
                 f"{op} failed for {'refdata' if refdata else 'job'}.",
                 extra={
                     logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id,
@@ -237,15 +240,31 @@ class NERSCJAWSRunner(JobFlow):
         await self._coman.run_coroutine(self._submit_jaws_job(job))
     
     async def _submit_jaws_job(self, job: models.AdminJobDetails):
+        jaws_job_id = None
         try:
             # TODO PERF configure file download concurrency
             jaws_job_id = await self._nman.run_JAWS(job)
             # See notes above about adding the NERSC task id to the job
             await self._updates.update_job_state(job.id, submitted_jaws_job(jaws_job_id))
+        except Exception as e:
+            if jaws_job_id:
+                try:
+                    await self._jaws.cancel(jaws_job_id)
+                except Exception:
+                    self._logr.exception(
+                        "Error canceling JAWS job after exception in start routine"
+                    )
+            await self._updates.handle_exception(e, job.id, "starting JAWS job for")
+            return
+        # after this, don't want to cancel JAWS job if a failure happens
+        try:
+            # could add a coroutine input that checks if the CTS job
+            # is canceled and stops polling - YAGNI for now, just wait
+            # until the JAWS job ends
             jaws_info = await poll_jaws(self._jaws, job.id, jaws_job_id)
             await self._job_complete(job, jaws_info)
         except Exception as e:
-            await self._updates.handle_exception(e, job.id, "starting JAWS job for")
+            await self._updates.handle_exception(e, job.id, "monitoring JAWS job for")
 
     async def job_complete(self, job: models.AdminJobDetails):
         """
@@ -274,11 +293,24 @@ class NERSCJAWSRunner(JobFlow):
             )
             await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
         elif res == jaws_client.JAWSResult.CANCELED:
-            await self._updates.update_job_state(job.id, error(
-                "JAWS reported the job as canceled",
-                user_error="The job was unexpectedly canceled",
-            ))
-            
+            # TODO CANCEL in some cases canceled JAWS jobs will have a result of null instead of
+            #             canceled. In most cases the CTS job will have already reached the
+            #             canceled state and so the SYSTEM_ERROR block below will just log an
+            #             error, but it's possible the job could go to an errored state.
+            #             See 
+            # https://code.jgi.doe.gov/dsi/advanced-analysis/jaws/jaws-support/-/issues/320
+            #             If that gets fixed, great. If not, check the JAWS job log to see if it
+            #             was canceled.
+            # if we can't talk to mongo there's not much we can do here
+            # Could add retries in the mongo wrapper
+            # refresh job state as it might have changed
+            job = await self._mongo.get_job_status(job.id)
+            if not job.state.is_canceling():
+                await self._updates.update_job_state(job.id, error(
+                    "JAWS reported the job as canceled",
+                    user_error="The job was unexpectedly canceled",
+                ))
+            # otherwise do nothing, let the canceling routine handle things
         elif res == jaws_client.JAWSResult.SYSTEM_ERROR:
             # there's no way to force a jaws system error that I'm aware of, will need to
             # test via unit tests
@@ -378,6 +410,24 @@ class NERSCJAWSRunner(JobFlow):
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "completing")
 
+    async def cancel_job(self, job: models.AdminJobDetails):
+        """ Cancel a job. """
+        _not_falsy(job, "job")
+        # If we can't talk to mongo there's not much we can do
+        await self._updates.update_job_state(job.id, canceling())
+        await self._coman.run_coroutine(self._cancel_job(job))
+        
+    async def _cancel_job(self, job: models.AdminJobDetails):
+        _not_falsy(job, "job")
+        try:
+            # refresh state as it might have changed since it was passed to the cancel_job method
+            job = await self._mongo.get_job(job.id, as_admin=True)
+            if job.jaws_details and job.jaws_details.run_id:
+                # assume only 1 run ID for now.
+                await self._jaws.cancel(job.jaws_details.run_id[-1]) 
+            await self._updates.update_job_state(job.id, canceled())
+        except Exception as e:
+            await self._updates.handle_exception(e, job.id, "canceling")
 
     async def error_log_upload_complete(self, job: models.AdminJobDetails):
         """
