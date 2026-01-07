@@ -394,6 +394,24 @@ async def get_logs(
     )
 
 
+@ROUTER_JOBS.put(
+    "/{job_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Cancel a job",
+    description="Cancel a job."
+)
+async def cancel_job(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    user: CTSUser=Depends(_AUTH),
+):
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user, admin_details=True)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    await flow.cancel_job(job)
+
+
 _ANN_IMAGE_ID = Annotated[str, FastPath(
     openapi_examples={"image with digest": {
         "value": "ghcr.io/kbase/collections:checkm2_0.1.6"
@@ -771,6 +789,25 @@ async def get_job_runner_status(
     job = await appstate.job_state.get_job(job_id, user, as_admin=True)
     flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
     return await flow.get_job_external_runner_status(job, container_number=container_number)
+
+
+@ROUTER_ADMIN.put(
+    "/jobs/{job_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Cancel any job",
+    description="Cancel any job."
+)
+async def cancel_job_admin(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can cancel any job.")
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    await flow.cancel_job(job)
 
 
 class UpdateAdminMeta(BaseModel):
