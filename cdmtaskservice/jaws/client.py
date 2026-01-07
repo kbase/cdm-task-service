@@ -116,6 +116,22 @@ class JAWSClient:
         res["updated"] = _add_tz(res["updated"])
         return res
     
+    async def logs(self, run_id: str) -> list[tuple[str, str, datetime.datetime, str]]:
+        """ Get the logs from a JAWS run. """
+        try:
+            res = await self._get(
+                f"run/{_require_string(run_id, 'run_id')}/run_log",
+                params={"local_tz": "UTC"}
+            )
+        except aiohttp.client_exceptions.ClientResponseError as e:
+            if e.status == 404:
+                raise NoSuchJAWSJobError(run_id) from e
+            raise
+        data = res["data"]
+        for d in data:
+            d[2] = _add_tz(d[2])
+        return data
+    
     async def is_site_up(self, site: str) -> bool:
         """ Check whether a JAWS site is up. """
         res = await self._get(f"status/{_require_string(site, 'site')}")
