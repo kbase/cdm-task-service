@@ -4,12 +4,13 @@ Manages refdata at remote sites.
 
 import uuid
 
-from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import ChecksumMismatchError, IllegalParameterError
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
+from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
+from cdmtaskservice import sites
 from cdmtaskservice.s3.client import S3Client
 from cdmtaskservice.s3.paths import S3Paths, validate_path
 from cdmtaskservice.s3.remote import UNPACK_FILE_EXTENSIONS
@@ -92,8 +93,8 @@ class Refdata:
                 )]
             ))
         if not statuses:
-            # TODO REFDATA add a way to restart refdata staging and just save to mongo
-            #              to be restarted later
+            # TODO REFDATA add a way to automatically restart refdata staging and just save
+            #              to mongo to be restarted later
             raise ValueError("No job flows are available")
         rd = models.ReferenceData(
             id=str(uuid.uuid4()),  # TODO TEST for testing we'll need to set up a mock for this
@@ -111,6 +112,36 @@ class Refdata:
             # Pass in the meta to avoid potential race conditions w/ etag changes
             await self._coman.run_coroutine(flow.stage_refdata(rd, meta))
         return rd
+    
+    async def recover_refdata(self, refdata_id: str, cluster: sites.Cluster):
+        """
+        Recover extant refdata.
+        Currently only handles the case where there is no record for a site in the reference
+        data structure.
+        
+        refdata_id - the reference data ID.
+        cluster - the site to recover.
+        """
+        _require_string(refdata_id, "refdata_id")
+        update = models.ReferenceDataStatus(
+            cluster=_not_falsy(cluster, "cluster"),
+            state=models.ReferenceDataState.CREATED,
+            transition_times=[models.RefDataStateTransition(
+                state=models.ReferenceDataState.CREATED, time=utcdatetime()
+            )],
+        )
+        rd = await self.get_refdata_by_id(refdata_id)
+        rd.statuses.append(update)
+        meta = (await self._s3.get_object_meta(S3Paths([rd.file])))[0]
+        # don't update db until other error throwing lines are executed
+        if meta.crc64nvme != rd.crc64nvme:
+            raise ChecksumMismatchError(
+                f"The CRC64/NMVE checksum for the path {rd.file}' has changed: "
+                + f"recorded refdata is '{rd.crc64nvme}', path is '{meta.crc64nvme}'"
+            )
+        flow = await self._flowman.get_flow(cluster)  # ensure flow is available before updating db
+        await self._mongo.add_refdata_site(refdata_id, update)
+        await self._coman.run_coroutine(flow.stage_refdata(rd, meta))
 
     async def get_refdata(self) -> list[models.ReferenceData]:
         """

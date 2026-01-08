@@ -841,6 +841,29 @@ class MongoDAO:
                 f"A reference data record for S3 path {refdata.file} already exists"
             )
 
+    async def add_refdata_site(self, refdata_id: str, rds: models.ReferenceDataStatus):
+        """
+        Add a new site to an existing reference data record.
+        
+        refdata_id - the ID of the refdata to modify.
+        rds - the information for the new site.
+        """
+        s = _not_falsy(rds, "rds").model_dump()
+        s[_FLD_UPDATE_TIME] = rds.transition_times[-1].time
+        result = await self._col_refdata.update_one(
+            {
+                "id": _require_string(refdata_id, "refdata_id"),
+                # Only match if cluster doesn't exist
+                "statuses.cluster": {"$ne": rds.cluster.value}
+            },
+            {"$push": {"statuses": s}}
+        )
+        if not result.matched_count:
+            raise NoSuchReferenceDataError(
+                f"No reference data with ID '{refdata_id}' without cluster "
+                + f"{rds.cluster.value} exists"
+            )
+
     async def get_refdata(self) -> list[models.ReferenceData]:
         """
         Get reference data in the service in no particular order. At most 1000 are returned.
