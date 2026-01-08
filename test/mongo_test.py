@@ -665,6 +665,27 @@ async def test_refdata_redundant_update_time(mondb):
     # check that the update time is set correctly
     refd = await mondb.refdata.find_one({"id": "foo"})
     assert refd["statuses"][0]["_update_time"] == dt
+    
+    # check that adding a new site to refdata adds the update time correctly
+    rds = models.ReferenceDataStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.ReferenceDataState.CREATED,
+        transition_times=[models.RefDataStateTransition(
+            state=models.ReferenceDataState.CREATED,
+            time=_SAFE_TIME
+        )],
+    )
+    await mc.add_refdata_site("foo", rds)
+    
+    # Check roundtrip works
+    rd.statuses.append(rds)
+    got = await mc.get_refdata_by_id("foo")
+    assert got == rd
+    
+    # check that the update time is set correctly fir both sites
+    refd = await mondb.refdata.find_one({"id": "foo"})
+    assert refd["statuses"][0]["_update_time"] == dt
+    assert refd["statuses"][1]["_update_time"] == _SAFE_TIME
 
 
 @pytest.mark.asyncio

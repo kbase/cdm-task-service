@@ -890,6 +890,28 @@ async def get_refdata_admin(
     return await refdata.get_refdata_by_id(refdata_id, as_admin=True)
 
 
+@ROUTER_ADMIN.put(
+    "/refdata/{refdata_id}/{cluster}/recover",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Recover stalled refdata",
+    description="Recover a reference data staging process. Currently only handles the "
+        + "case where a site does not exist in the refdata data structure. May be "
+        + "extended in the future to cover other cases."
+)
+async def recover_refdata(
+    r: Request,
+    refdata_id: _ANN_REFDATA_ID,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which recovery will be attempted.."
+    )],
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can recover refdata.")
+    refdata = app_state.get_app_state(r).refdata
+    await refdata.recover_refdata(refdata_id, cluster)
+
+
 @ROUTER_ADMIN.delete(
     "/refdata/{refdata_id}/{cluster}/clean",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -911,7 +933,7 @@ async def clean_refdata(
     )] = False,
     user: CTSUser=Depends(_AUTH),
 ):
-    _ensure_admin(user, "Only service administrators can clean jobs.")
+    _ensure_admin(user, "Only service administrators can clean refdata.")
     appstate = app_state.get_app_state(r)
     refdata = await appstate.refdata.get_refdata_by_id(refdata_id, as_admin=True)
     flow = await appstate.jobflow_manager.get_flow(cluster)
@@ -1165,7 +1187,7 @@ async def _callback_handling(
     "/external_exec/jobs/{job_id}/container/{container_num}/update/{new_state}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    summary="Update a container's state.",
+    summary="Update a container's state",
     description="Not for general use.\n\nUpdate a container / subjob's state.",
 )
 async def update_container(
@@ -1190,7 +1212,7 @@ async def update_container(
     "/external_exec/refdata/{refdata_id}/{cluster}/update/{new_state}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    summary="Update refdata state.",
+    summary="Update refdata state",
     description="Not for general use.\n\nUpdate refdata state for a cluster.",
 )
 async def update_refdata(
@@ -1228,7 +1250,7 @@ async def get_condor_executable(r: Request) -> FileResponse:
 
 @ROUTER_EXTERNAL_EXEC.get(
     f"/{localfiles.CODE_ARCHIVE_PATH}",
-    summary="Get the code archive.",
+    summary="Get the code archive",
     description="Not for general use.\n\nGets the code archive file for external job execution.",
     response_class=FileResponse,
 )
