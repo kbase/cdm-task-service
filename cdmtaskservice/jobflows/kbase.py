@@ -319,7 +319,7 @@ class KBaseRunner(JobFlow):
 
     async def _error_job(self, job: models.AdminJobDetails):
         cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
-        exit_codes = await self.get_exit_codes(job)
+        exit_codes = await self._mongo.get_exit_codes_for_subjobs(job.id)
         # if any exit codes are present and > 0, a container failed. Exit codes can be None
         # if the container never ran
         err_exit = set(exit_codes) - {0, None}
