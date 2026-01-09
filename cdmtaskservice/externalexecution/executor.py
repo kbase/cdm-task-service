@@ -244,9 +244,12 @@ Local relative path: {loc}
             str(output): job.job_input.params.output_mount_point,
         }
         if job.image.refdata_id:
-            mounts[
-                str(Path(self._cfg.refdata_host_path) / job.image.refdata_id)
-            ] = job.get_refdata_mount_point()
+            host_mount = str(Path(self._cfg.refdata_host_path) / job.image.refdata_id)
+            mounts[host_mount] = job.get_refdata_mount_point()
+            self._logr.info(
+                f"Mounting host refdata at '{host_mount}' to '{job.get_refdata_mount_point()}' "
+                + "in container"
+            )
         self._logr.info(
             f"Starting image {job.image.name_with_digest} with command:\n{self._args.args}"
         )
