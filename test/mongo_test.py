@@ -108,21 +108,28 @@ async def test_indexes(mongo, mondb):
             "v": 2,
             "key": [("transition_times.time", -1)],
             "partialFilterExpression": SON([("transition_times.notif_sent", False)])
-        }
+        },
+        "cleaned_1_state_1__update_time_1": {
+            "v": 2,
+            "key": [("cleaned", 1), ( "state", 1), ( "_update_time", 1)],
+            "partialFilterExpression": SON(
+                [("cleaned", False), ("state", SON([("$in", ["canceled", "complete", "error"])]))]
+            ),
+        },
     }
     subjobindex = mongo.client[MONGO_TEST_DB]["subjobs"].index_information()
     assert subjobindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
-        'id_1_sub_id_1': {'key': [('id', 1), ('sub_id', 1)], 'unique': True, 'v': 2},
-        'id_1_transition_times.state_1_transition_times._retry_1': {
-            'key': [('id', 1), ('transition_times.state', 1), ('transition_times._retry', 1)],
-            'v': 2
+        "id_1_sub_id_1": {"key": [("id", 1), ("sub_id", 1)], "unique": True, "v": 2},
+        "id_1_transition_times.state_1_transition_times._retry_1": {
+            "key": [("id", 1), ("transition_times.state", 1), ("transition_times._retry", 1)],
+            "v": 2
         }
     }
     ecindex = mongo.client[MONGO_TEST_DB]["exitcodes"].index_information()
     assert ecindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
-        'id_1': {'key': [('id', 1)], 'unique': True, 'v': 2},
+        "id_1": {"key": [("id", 1)], "unique": True, "v": 2},
     }
     refindex = mongo.client[MONGO_TEST_DB]["refdata"].index_information()
     assert refindex == {
@@ -154,6 +161,120 @@ async def test_job_basic_roundtrip(mondb):
 
     got = await mc.get_job("foo", as_admin=True)
     assert got == _BASEJOB
+
+
+@pytest.mark.asyncio
+async def test_set_job_clean(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+    
+    got = await mc.get_job("foo", as_admin=True)
+    assert got.cleaned is False
+    
+    await mc.set_job_clean("foo")
+    expected = _BASEJOB.model_copy(deep=True)
+    expected.cleaned = True
+    
+    got = await mc.get_job("foo", as_admin=True)
+    assert got == expected
+
+
+@pytest.mark.asyncio
+async def test_set_job_clean_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+    
+    await _set_job_clean_fail(mc, None, ValueError("job_id is required"))
+    await _set_job_clean_fail(mc, "   \t   ", ValueError("job_id is required"))
+    await _set_job_clean_fail(mc, "whoop", NoSuchJobError("No job with ID 'whoop' exists"))
+
+
+async def _set_job_clean_fail(mc, job_id, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.set_job_clean(job_id)
+
+
+@pytest.mark.asyncio
+async def test_process_dirty_jobs(mondb):
+    mc = await MongoDAO.create(mondb)
+    current = datetime.datetime(
+        year=2026, month=2, day=10, hour=14, minute=30, second=54, tzinfo=datetime.UTC
+    )
+    older_than = current - datetime.timedelta(days=30)  # much newer than _SAFE_TIME
+    
+    # Shouldn't be found due to non-terminal states
+    for state in set(models.JobState) - models.JobState.terminal_states():
+        running_state = _BASEJOB.model_copy(deep=True)
+        running_state.id = state.value
+        running_state.state = state  # don't worry about transition_times
+        await mc.save_job(running_state)
+    
+    cleaned = _BASEJOB.model_copy(deep=True)
+    cleaned.id = "cleaned"
+    cleaned.state = models.JobState.COMPLETE
+    cleaned.cleaned = True  # shouldn't be found due to cleaned state
+    await mc.save_job(cleaned)
+    
+    new = _BASEJOB.model_copy(deep=True)
+    new.id = "new"
+    new.state = models.JobState.ERROR
+    new.transition_times.append(models.AdminJobStateTransition(
+        state=models.JobState.ERROR,
+        time=older_than,  # shouldn't be found due to date = older_than
+        trans_id="trans1",
+        notif_sent=False,
+    ))
+    await mc.save_job(new)
+    
+    # save jobs expected to be found, 1 per terminal state
+    found_comp = _BASEJOB.model_copy(deep=True)
+    found_comp.id = "found_comp"
+    found_comp.state = models.JobState.COMPLETE
+    found_comp.transition_times.append(models.AdminJobStateTransition(
+        state=models.JobState.COMPLETE,
+        time=older_than - datetime.timedelta(seconds=1),
+        trans_id="trans1",
+        notif_sent=False,
+    ))
+    await mc.save_job(found_comp)
+    
+    found_err = _BASEJOB.model_copy(deep=True)
+    found_err.id = "found_err"
+    found_err.state = models.JobState.ERROR
+    await mc.save_job(found_err)
+    
+    found_cncl = _BASEJOB.model_copy(deep=True)
+    found_cncl.id = "found_cncl"
+    found_cncl.state = models.JobState.CANCELED
+    await mc.save_job(found_cncl)
+    
+    found = {}
+    async def collect(job):
+        found[job.id] = job
+    await mc.process_dirty_jobs(older_than, collect)
+    
+    # debugging help
+    assert found.keys() == {"found_cncl", "found_err", "found_comp"}
+    assert found == {"found_cncl": found_cncl, "found_err": found_err, "found_comp": found_comp}
+    
+    # test noop
+    found.clear()
+    await mc.process_dirty_jobs(_SAFE_TIME, collect)
+    assert found.keys() == set() 
+
+
+@pytest.mark.asyncio
+async def test_process_dirty_jobs_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await _process_dirty_jobs_fail(
+        mc, None, lambda: print("foo"), ValueError("older_than is required")
+    )
+    await _process_dirty_jobs_fail(mc, _SAFE_TIME, None, ValueError("operation is required"))
+
+
+async def _process_dirty_jobs_fail(mc, older_than, op, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.process_dirty_jobs(older_than, op)
 
 
 @pytest.mark.asyncio

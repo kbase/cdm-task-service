@@ -979,6 +979,8 @@ class NERSCManager:
         Remove any files at NERSC associated with the job other than files managed by
         JAWS.
         
+        If any files do not exist they are silently ignored.
+        
         Note that running this method on a job that is not in a terminal state may result in
         undefined behavior.
         
