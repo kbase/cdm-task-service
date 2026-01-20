@@ -6,9 +6,11 @@ An minimal async client for the JAWS central server.
 
 
 import aiohttp
+import aiohttp_socks
 import datetime
 from enum import Enum
 import logging
+import os
 from typing import Any
 
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
@@ -64,11 +66,16 @@ class JAWSClient:
         if not url.endswith("/"):
             url += "/"
         url += "api/v2/"
-        self._sess = aiohttp.ClientSession(
-            base_url=url,
-            headers={"Authorization": f"Bearer {_require_string(token, 'token')}"}
-        )
+        headers = {"Authorization": f"Bearer {_require_string(token, 'token')}"}
         self._logr = logging.getLogger(__name__)
+        pxurl = os.environ.get("JAWS_HTTPS_PROXY")
+        if pxurl:
+            # just used for testing so not advertised for now
+            self._logr.info(f"Using proxy {pxurl}")
+            proxy = aiohttp_socks.ProxyConnector.from_url(pxurl)
+            self._sess = aiohttp.ClientSession(base_url=url, headers=headers, connector=proxy)
+        else:
+            self._sess = aiohttp.ClientSession(base_url=url, headers=headers)
 
     async def _get(self, url, params=None) -> dict[str, Any]:
         return await self._req("GET", url, params=params)
