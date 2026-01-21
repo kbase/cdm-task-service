@@ -236,6 +236,14 @@ container_s3_log_dir = "{{ KBCTS_CONTAINER_S3_LOG_DIR or "" }}"
 # the number of CPUs * the number of containers * the time per container.
 max_cpu_hours = {{ KBCTS_JOB_MAX_CPU_HOURS or 100 }}
 
+# How often the job cleaning code that removes transient files from completed jobs should be run
+# in hours.
+# Currently this cleans up various manifests and job results at NERSC.
+clean_frequency_hours = {{ KBCTS_JOB_CLEAN_FREQUENCY_HOURS or 24 }}
+
+# How old jobs must be before they're cleaned in days.
+clean_age_days = {{ KBCTS_CLEAN_AGE_DAYS or 30 }}
+
 [Kafka]
 
 # The Kafka boostrap servers in standard Kafka format

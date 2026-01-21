@@ -22,6 +22,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import UnavailableResourceError
 from cdmtaskservice.image_remote_lookup import DockerImageInfo
 from cdmtaskservice.images import Images
+from cdmtaskservice.flow_cleaner import FlowCleaner
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.jaws_flows_provider import JAWSFlowProvider
 from cdmtaskservice.jobflows.kbase import KBaseFlowProvider, KBaseRunner
@@ -84,6 +85,8 @@ class CTSAppState(AppState):
     """ The job flow manager class. """
     kafka_checker: KafkaChecker
     """ The Kafka state checker class. """
+    flow_cleaner: FlowCleaner
+    """ The flow cleaner class. """
     condor_exe_path: Path
     """ The local path to the executable file for use when running jobs with HTCondor. """ 
     code_archive_path: Path
@@ -227,6 +230,15 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         await _register_kbase_job_flow(
             logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
         )
+        logr.info("Initializing flow cleaner...")
+        flowclean =  FlowCleaner(
+            mongodao,
+            flowman,
+            datetime.timedelta(days=cfg.clean_age_days),
+            datetime.timedelta(hours=cfg.clean_frequency_hours)
+        )
+        dest.register("flow cleaner", flowclean.close)
+        logr.info("Done")
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
         images = Images(mongodao, imginfo, refdata)
@@ -255,6 +267,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             images=images,
             jobflow_manager=flowman,
             kafka_checker=kc,
+            flow_cleaner=flowclean,
             condor_exe_path=_get_local_path(cfg.condor_exe_path),
             code_archive_path=_get_local_path(cfg.code_archive_path),
         )

@@ -37,9 +37,7 @@ from cdmtaskservice.timestamp import utcdatetime
 
 
 # TODO FEATURE cleanup files:
-#                  * jaws results
 #                  * refdata d/l manifest & result files in scratch
-#                  * various job files in scratch
 #                  * refdata jaws transfer notification files when implemented for lawrencium
 #                  * refdata not associated with images, need to keep the refdata mongo doc
 #                       around since it's associdated with jobs, and could be used to restage

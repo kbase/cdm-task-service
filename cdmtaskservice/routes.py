@@ -854,7 +854,7 @@ async def update_job_admin_meta(
     response_class=Response,
     summary="Clean up after a job",
     description="Remove any job related files managed by this service at the remote compute site. "
-        + "The job must be in a terminal state."
+        + "The job must be in a terminal state. If the job is already cleaned this is a noop."
 )
 async def clean_job(
     r: Request,
@@ -868,8 +868,7 @@ async def clean_job(
     _ensure_admin(user, "Only service administrators can clean jobs.")
     appstate = app_state.get_app_state(r)
     job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
-    await flow.clean_job(job, force=force)
+    await appstate.flow_cleaner.clean_job(job, user, force=force)
 
 
 @ROUTER_ADMIN.get(
