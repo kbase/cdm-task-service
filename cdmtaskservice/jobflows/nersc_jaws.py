@@ -477,6 +477,8 @@ class NERSCJAWSRunner(JobFlow):
         """
         Clean up job files at the remote compute site.
         
+        If any files do not exist they are silently ignored.
+        
         job - the job to clean up.
         force - perform the clean up even if the job isn't in a terminal state. This may cause
             undefined behavior.

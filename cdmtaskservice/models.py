@@ -73,6 +73,7 @@ FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
 FLD_COMMON_ID = "id"
 FLD_COMMON_STATE = "state"
 FLD_COMMON_TRANS_TIMES = "transition_times"
+FLD_COMMON_CLEANED = "cleaned"
 FLD_COMMON_ERROR = "error"
 FLD_COMMON_ADMIN_ERROR = "admin_error"
 FLD_COMMON_TRACEBACK = "traceback"
@@ -1054,6 +1055,10 @@ class AdminJobDetails(Job):
         ]],
         description="A list of job state transitions."
     )]
+    cleaned: Annotated[bool, Field(
+        description="Whether any job intermediate data has been cleaned up. E.g. "
+            + "JAWS results directories, download / upload manifests and results, etc."
+    )] = False
     nersc_details: NERSCDetails | None = None
     jaws_details: JAWSDetails | None = None
     htcondor_details: HTCondorDetails | None = None
