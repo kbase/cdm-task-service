@@ -77,7 +77,7 @@ services:
       - KBCTS_JOB_MAX_CPU_HOURS=200
       - KBCTS_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KBCTS_KAFKA_TOPIC_JOBS=cts-jobs
-      - KBCTS_SERVICE_ROOT_URL=https://cdm_task_service:5000
+      - KBCTS_SERVICE_ROOT_URL=http://cdm_task_service:5000
       - KBCTS_SERVICE_GROUP=local_development
     volumes:
       - ./tmp_creds:/creds
