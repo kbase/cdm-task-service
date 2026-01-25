@@ -52,6 +52,7 @@ def mondb(mongo) -> AsyncIOMotorDatabase:
     yield mcli[MONGO_TEST_DB]
 
     mcli.close()
+    time.sleep(1)  # causes mongo connect failures after 32 tests otherwise
 
 
 @pytest.fixture(scope="module")

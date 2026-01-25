@@ -85,7 +85,7 @@ class Refdata:
         # TDOO REFDATA if a cluster isn't available, need a way to start staging later
         clusters = await self._flowman.list_usable_clusters()
         for c in  clusters:
-            statuses.append(models.ReferenceDataStatus(
+            statuses.append(models.AdminReferenceDataStatus(
                 cluster=c,
                 state=models.ReferenceDataState.CREATED,
                 transition_times=[models.RefDataStateTransition(
@@ -96,7 +96,7 @@ class Refdata:
             # TODO REFDATA add a way to automatically restart refdata staging and just save
             #              to mongo to be restarted later
             raise ValueError("No job flows are available")
-        rd = models.ReferenceData(
+        rd = models.AdminReferenceData(
             id=str(uuid.uuid4()),  # TODO TEST for testing we'll need to set up a mock for this
             file=s3_path,
             crc64nvme=meta.crc64nvme,
@@ -123,7 +123,7 @@ class Refdata:
         cluster - the site to recover.
         """
         _require_string(refdata_id, "refdata_id")
-        update = models.ReferenceDataStatus(
+        update = models.AdminReferenceDataStatus(
             cluster=_not_falsy(cluster, "cluster"),
             state=models.ReferenceDataState.CREATED,
             transition_times=[models.RefDataStateTransition(

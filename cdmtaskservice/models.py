@@ -1105,9 +1105,15 @@ class ReferenceDataState(str, Enum):
     DOWNLOAD_SUBMITTED = "download_submitted"
     COMPLETE = "complete"
     ERROR = "error"
+    
+    @classmethod
+    def terminal_states(cls) -> set[Self]:
+        """ Return the set of terminal states. """
+        return {cls.COMPLETE, cls.ERROR}
 
-
-REFDATA_TERMINAL_STATES = {ReferenceDataState.COMPLETE, ReferenceDataState.ERROR}
+    def is_terminal(self) -> bool:
+        """ Return True if this state is a terminal state. """
+        return self in self.terminal_states()
 
 
 class RefDataStateTransition(BaseModel):
@@ -1155,12 +1161,17 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
     administrators.
     """
     # This is an outgoing structure only so we don't add validators
+    cleaned: Annotated[bool, Field(
+        description="Whether any refdata intermediate data has been cleaned up. E.g. "
+            + "download manifests and results, etc."
+    )] = False
     nersc_download_task_id: Annotated[list[str] | None, Field(
+        default_factory=list,
         description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
             + "instance to NERSC. Note that task details only persist for ~10 minutes past "
             + "completion in the SFAPI. Multiple tasks indicate job retries after failures. "
             + "Only present if the refdata is being downloaded to NERSC."
-    )] = None
+    )]
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "

@@ -126,7 +126,7 @@ class MongoDAO:
                 partialFilterExpression={
                     models.FLD_COMMON_CLEANED: False,
                     models.FLD_COMMON_STATE: {
-                        '$in': sorted([s.value for s in models.JobState.terminal_states()])
+                        "$in": sorted([s.value for s in models.JobState.terminal_states()])
                     }
                 },
             ),
@@ -157,6 +157,20 @@ class MongoDAO:
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
             # Non unique as files can be overwritten
             IndexModel([(models.FLD_REFDATA_FILE, ASCENDING)]),
+            # Find refdata that needs cleaning
+            IndexModel(
+                [
+                    (f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_CLEANED}", ASCENDING),
+                    (f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_STATE}", ASCENDING),
+                    (f"{models.FLD_REFDATA_STATUSES}.{_FLD_UPDATE_TIME}", ASCENDING)
+                ],
+                partialFilterExpression={
+                    f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_CLEANED}": False,
+                    f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_STATE}": {"$in":
+                        sorted([s.value for s in models.ReferenceDataState.terminal_states()])
+                    },
+                },
+            ),
         ])
 
     async def initialize_sites(self, sites: Iterable[sites.Cluster]):
@@ -863,7 +877,7 @@ class MongoDAO:
                 ret[s] = (0, None)
         return ret
 
-    async def save_refdata(self, refdata: models.ReferenceData):
+    async def save_refdata(self, refdata: models.AdminReferenceData):
         """ Save reference data state. Reference data IDs are expected to be unique."""
         # don't bother checking for duplicate key exceptions since the service is supposed
         # to ensure unique IDs
@@ -886,7 +900,7 @@ class MongoDAO:
                 f"A reference data record for S3 path {refdata.file} already exists"
             )
 
-    async def add_refdata_site(self, refdata_id: str, rds: models.ReferenceDataStatus):
+    async def add_refdata_site(self, refdata_id: str, rds: models.AdminReferenceDataStatus):
         """
         Add a new site to an existing reference data record.
         
@@ -953,6 +967,51 @@ class MongoDAO:
     def _to_refdata(self, doc: dict[str, Any], as_admin: bool = False):
         doc = self._clean_doc(doc)
         return models.AdminReferenceData(**doc) if as_admin else models.ReferenceData(**doc)
+
+    async def set_refdata_clean(self, cluster: sites.Cluster, refdata_id: str):
+        """ Set a site's refdata cleaned state to true. """
+        elemquery = {models.FLD_REFDATA_CLUSTER: _not_falsy(cluster, "cluster").value}
+        query = {
+            models.FLD_COMMON_ID: _require_string(refdata_id, "refdata_id"),
+            models.FLD_REFDATA_STATUSES: {"$elemMatch": elemquery},
+        }
+        update = {"$set": {
+            f"{models.FLD_REFDATA_STATUSES}.$.{models.FLD_COMMON_CLEANED}": True
+        }}
+        res = await self._col_refdata.update_one(query, update)
+        if not res.matched_count:
+            raise NoSuchReferenceDataError(
+                f"No reference data with ID '{refdata_id}' for cluster {cluster.value} exists"
+            )
+    
+    async def process_dirty_refdata(
+            self,
+            older_than: datetime.datetime,
+            operation: Callable[[models.AdminReferenceData], Awaitable[None]]):
+        """
+        Find refdata where, for at least one site
+        * the last update time was older than the older_than argument
+        * the cleaned flag is false
+        * the refdata state is one of the terminal states
+    
+        and pass the refdata to the operation argument, which must be an async function.
+    
+        Note that some sites in the refdata may not meet the criteria for cleaning; it is up
+        to the calling code to determine which sites should be cleaned. At least one is
+        guaranteed to be ready for cleaning.
+        """
+        _not_falsy(older_than, "older_than")
+        _not_falsy(operation, "operation")
+        query = {models.FLD_REFDATA_STATUSES: {"$elemMatch": {
+            models.FLD_COMMON_CLEANED: False,
+            models.FLD_COMMON_STATE: {"$in": [
+                s.value for s in models.ReferenceDataState.terminal_states()
+            ]},
+            _FLD_UPDATE_TIME: {"$lt": older_than},
+        }}}
+        async for j in self._col_refdata.find(query):
+            await operation(self._to_refdata(j, as_admin=True))
+
 
     async def _update_refdata_state(
         self,

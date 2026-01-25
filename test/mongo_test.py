@@ -8,7 +8,12 @@ from typing import Coroutine, Callable, Any
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
-from cdmtaskservice.mongo import MongoDAO, NoSuchJobError, NoSuchSubJobError
+from cdmtaskservice.mongo import (
+    MongoDAO,
+    NoSuchJobError,
+    NoSuchReferenceDataError,
+    NoSuchSubJobError,
+)
 from cdmtaskservice.update_state import (
     error,
     submitted_download,
@@ -135,7 +140,15 @@ async def test_indexes(mongo, mondb):
     assert refindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
-        "file_1": {"v": 2, "key": [("file", 1)]}
+        "file_1": {"v": 2, "key": [("file", 1)]},
+        "statuses.cleaned_1_statuses.state_1_statuses._update_time_1": {
+            "v": 2,
+            "key": [("statuses.cleaned", 1), ("statuses.state", 1), ("statuses._update_time", 1)],
+            "partialFilterExpression": SON([
+                ("statuses.cleaned", False),
+                ("statuses.state", SON([("$in", ["complete", "error"])]))
+            ]),
+        },
     }
     imgindex = mongo.client[MONGO_TEST_DB]["images"].index_information()
     assert imgindex == {
@@ -740,13 +753,13 @@ async def test_refdata_redundant_update_time(mondb):
     # Tests that an internal update time field is set correctly when performing actions
     # on refdata. Does not test other refdata saving / updating code.
     mc = await MongoDAO.create(mondb)
-    rd = models.ReferenceData(
+    rd = models.AdminReferenceData(
         registered_by="yermum",
         registered_on=_SAFE_TIME,
         id="foo",
         file="bucket/key",
         unpack=False,
-        statuses=[models.ReferenceDataStatus(
+        statuses=[models.AdminReferenceDataStatus(
             cluster=sites.Cluster.PERLMUTTER_JAWS,
             state=models.ReferenceDataState.CREATED,
             transition_times=[models.RefDataStateTransition(
@@ -758,7 +771,7 @@ async def test_refdata_redundant_update_time(mondb):
     await mc.save_refdata(rd)
 
     # check refdata roundtripping works
-    got = await mc.get_refdata_by_id("foo")
+    got = await mc.get_refdata_by_id("foo", as_admin=True)
     assert got == rd
     
     # check that the update time is set correctly
@@ -773,7 +786,7 @@ async def test_refdata_redundant_update_time(mondb):
         submitted_nersc_refdata_download("ntid"),
         dt,
     )
-    got = await mc.get_refdata_by_id("foo")
+    got = await mc.get_refdata_by_id("foo", as_admin=True)
     
     # check expected refdata structure
     rd.statuses[0].state = models.ReferenceDataState.DOWNLOAD_SUBMITTED
@@ -781,6 +794,7 @@ async def test_refdata_redundant_update_time(mondb):
         state=models.ReferenceDataState.DOWNLOAD_SUBMITTED,
         time=dt,
     ))
+    rd.statuses[0].nersc_download_task_id = ["ntid"]
     assert got == rd
     
     # check that the update time is set correctly
@@ -788,7 +802,7 @@ async def test_refdata_redundant_update_time(mondb):
     assert refd["statuses"][0]["_update_time"] == dt
     
     # check that adding a new site to refdata adds the update time correctly
-    rds = models.ReferenceDataStatus(
+    rds = models.AdminReferenceDataStatus(
         cluster=sites.Cluster.KBASE,
         state=models.ReferenceDataState.CREATED,
         transition_times=[models.RefDataStateTransition(
@@ -800,7 +814,7 @@ async def test_refdata_redundant_update_time(mondb):
     
     # Check roundtrip works
     rd.statuses.append(rds)
-    got = await mc.get_refdata_by_id("foo")
+    got = await mc.get_refdata_by_id("foo", as_admin=True)
     assert got == rd
     
     # check that the update time is set correctly fir both sites
@@ -1023,3 +1037,189 @@ async def _fail_process_jobs_with_unsent_updates(
 ):
     with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
         await mc.process_jobs_with_unsent_updates(processor, older_than)
+
+
+@pytest.mark.asyncio
+async def test_set_refdata_clean(mondb):
+    mc = await MongoDAO.create(mondb)
+    rd = models.AdminReferenceData(
+        registered_by="yermum",
+        registered_on=_SAFE_TIME,
+        id="foo",
+        file="bucket/key",
+        unpack=False,
+        statuses=[
+            models.AdminReferenceDataStatus(
+                cluster=sites.Cluster.PERLMUTTER_JAWS,
+                state=models.ReferenceDataState.CREATED,
+                transition_times=[
+                    models.RefDataStateTransition(
+                        state=models.ReferenceDataState.CREATED,
+                        time=_SAFE_TIME
+                    ),
+                ],
+            ),
+            models.AdminReferenceDataStatus(
+                cluster=sites.Cluster.KBASE,
+                state=models.ReferenceDataState.ERROR,
+                transition_times=[
+                    models.RefDataStateTransition(
+                        state=models.ReferenceDataState.CREATED,
+                        time=_SAFE_TIME
+                    ),
+                    models.RefDataStateTransition(
+                        state=models.ReferenceDataState.ERROR,
+                        time=_SAFE_TIME
+                    ),
+                ],
+            ),
+        ],
+    )
+    await mc.save_refdata(rd)
+    
+    got = await mc.get_refdata_by_id("foo", as_admin=True)
+    assert [r.cleaned for r in got.statuses] == [False, False]
+    
+    await mc.set_refdata_clean(sites.Cluster.KBASE, "foo")
+    rd.statuses[1].cleaned = True
+    got = await mc.get_refdata_by_id("foo", as_admin=True)
+    assert got == rd
+    
+    await mc.set_refdata_clean(sites.Cluster.PERLMUTTER_JAWS, "foo")
+    rd.statuses[0].cleaned = True
+    got = await mc.get_refdata_by_id("foo", as_admin=True)
+    assert got == rd
+
+
+@pytest.mark.asyncio
+async def test_set_refdata_clean_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    rd = models.AdminReferenceData(
+        registered_by="yermum",
+        registered_on=_SAFE_TIME,
+        id="foo",
+        file="bucket/key",
+        unpack=False,
+        statuses=[
+            models.AdminReferenceDataStatus(
+                cluster=sites.Cluster.PERLMUTTER_JAWS,
+                state=models.ReferenceDataState.CREATED,
+                transition_times=[
+                    models.RefDataStateTransition(
+                        state=models.ReferenceDataState.CREATED,
+                        time=_SAFE_TIME
+                    ),
+                ],
+            ),
+        ],
+    )
+    await mc.save_refdata(rd)
+    
+    k = sites.Cluster.KBASE
+    p = sites.Cluster.PERLMUTTER_JAWS
+    await _fail_set_refdata_clean(mc, None, p, ValueError("refdata_id is required"))
+    await _fail_set_refdata_clean(mc, "  \t   ", p, ValueError("refdata_id is required"))
+    await _fail_set_refdata_clean(mc, "foo", None, ValueError("cluster is required"))
+    await _fail_set_refdata_clean(mc, "bar", p, NoSuchReferenceDataError(
+        "No reference data with ID 'bar' for cluster perlmutter-jaws exists"
+    ))
+    await _fail_set_refdata_clean(mc, "foo", k, NoSuchReferenceDataError(
+        "No reference data with ID 'foo' for cluster kbase exists"
+    ))
+
+
+async def _fail_set_refdata_clean(
+    mc: MongoDAO, refdata_id: str, cluster: sites.Cluster, expected: Exception,
+):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.set_refdata_clean(cluster, refdata_id)
+
+
+@pytest.mark.asyncio
+async def test_process_dirty_refdata(mondb):
+    mc = await MongoDAO.create(mondb)
+    current = datetime.datetime(
+        year=2026, month=2, day=10, hour=14, minute=30, second=54, tzinfo=datetime.UTC
+    )
+    older_than = current - datetime.timedelta(days=30)  # much newer than _SAFE_TIME
+    orig = models.AdminReferenceData(
+        registered_by="yermum",
+        registered_on=_SAFE_TIME,
+        id="foo",
+        file="bucket/key",
+        unpack=False,
+        statuses=[
+            models.AdminReferenceDataStatus(
+                cluster=sites.Cluster.PERLMUTTER_JAWS,
+                state=models.ReferenceDataState.ERROR,
+                transition_times=[
+                    models.RefDataStateTransition(
+                        state=models.ReferenceDataState.CREATED,
+                        time=older_than
+                    ),
+                ],
+            ),
+            models.AdminReferenceDataStatus(
+                cluster=sites.Cluster.KBASE,
+                state=models.ReferenceDataState.COMPLETE,
+                transition_times=[
+                    models.RefDataStateTransition(
+                        state=models.ReferenceDataState.DOWNLOAD_SUBMITTED,
+                        time=older_than
+                    ),
+                ],
+            ),
+        ],
+    )
+    
+    rd = orig.model_copy(deep=True, update={"id": "toonew"})
+    await mc.save_refdata(rd)  # shouldn't be found due to date = older_than
+    
+    # Shouldn't be found due to non-terminal states
+    for state in set(models.ReferenceDataState) - models.ReferenceDataState.terminal_states():
+        rd = rd.model_copy(deep=True, update={"id": state.value, "file": "bucket/" + state.value})
+        rd.statuses[0].state=state
+        rd.statuses[0].transition_times[0].time = _SAFE_TIME
+        await mc.save_refdata(rd)
+    
+    rd = rd.model_copy(deep=True, update={"id": "cleaned", "file": "bucket/cleaned"})
+    rd.statuses[1].transition_times[0].time = _SAFE_TIME
+    rd.statuses[1].cleaned = True
+    await mc.save_refdata(rd)  # shouldn't be found due to cleaned state
+    
+    # save refdata expected to be found, 1 per terminal state
+    comp = orig.model_copy(deep=True, update={"id": "found_comp", "file": "bucket/comp"})
+    comp.statuses[1].transition_times[0].time = older_than - datetime.timedelta(seconds=1)
+    await mc.save_refdata(comp)
+    
+    err= orig.model_copy(deep=True, update={"id": "found_err", "file": "bucket/err"})
+    err.statuses[0].transition_times[0].time = older_than - datetime.timedelta(seconds=1)
+    await mc.save_refdata(err)
+    
+    found = {}
+    async def collect(refdata):
+        found[refdata.id] = refdata
+    await mc.process_dirty_refdata(older_than, collect)
+    
+    # debugging help
+    assert found.keys() == {"found_err", "found_comp"}
+    assert found == {"found_comp": comp, "found_err": err}
+    
+    # test noop
+    found.clear()
+    await mc.process_dirty_refdata(_SAFE_TIME, collect)
+    assert found.keys() == set() 
+
+
+@pytest.mark.asyncio
+async def test_process_dirty_refdata_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await _process_dirty_refdata_fail(
+        mc, None, lambda: print("foo"), ValueError("older_than is required")
+    )
+    await _process_dirty_refdata_fail(mc, _SAFE_TIME, None, ValueError("operation is required"))
+
+
+async def _process_dirty_refdata_fail(mc, older_than, op, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.process_dirty_refdata(older_than, op)
