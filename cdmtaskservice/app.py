@@ -36,11 +36,9 @@ from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
 
 
-# TODO FEATURE cleanup files:
-#                  * refdata d/l manifest & result files in scratch
-#                  * refdata jaws transfer notification files when implemented for lawrencium
-#                  * refdata not associated with images, need to keep the refdata mongo doc
-#                       around since it's associdated with jobs, and could be used to restage
+# TODO FEATURE cleanup refdata files no longer linked to images. Need to have race condition
+#              ccotrol, need to keep the refdata mongo doc around since it's associated with
+#              jobs, and could be used to restage
 # TODO FEATURE GPU support
 # TODO FEATURE job restarts / recovery (automatic?)
 # TODO FEATURE refdata restarts / recovery (automatic?)
