@@ -918,7 +918,8 @@ async def recover_refdata(
     summary="Clean up refdata staging files",
     description="Remove refdata staging related files managed by this service at the remote "
         + "compute site. The refdata staging must be in a terminal state.\n\n"
-        + "The refdata itself and NERSC -> LRC transfer triggering files are not removed."
+        + "The refdata itself and NERSC -> LRC transfer triggering files are not removed. "
+        + "If the refdata is already cleaned this is a noop."
 )
 async def clean_refdata(
     r: Request,
@@ -935,8 +936,7 @@ async def clean_refdata(
     _ensure_admin(user, "Only service administrators can clean refdata.")
     appstate = app_state.get_app_state(r)
     refdata = await appstate.refdata.get_refdata_by_id(refdata_id, as_admin=True)
-    flow = await appstate.jobflow_manager.get_flow(cluster)
-    await flow.clean_refdata(refdata, force=force)
+    await appstate.flow_cleaner.clean_refdata(refdata, cluster, user, force=force)
 
 
 @ROUTER_ADMIN.put(

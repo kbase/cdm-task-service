@@ -119,4 +119,8 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         """
         Do nothing. Refdata is staged at NERSC; there is nothing to clean up at LRC.
         """
+        # May want to delete the file that gets written @ NERSC to tell JAWS to transfer the
+        # refdata from NERSC -> LRC and the file JAWS writes when it's done, but they're both tiny
+        # and are in the same directory structure as the refdata itself
+        # YAGNI for now
         pass # Intentionally do nothing 

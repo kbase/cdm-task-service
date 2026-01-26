@@ -100,8 +100,8 @@ class CDMTaskServiceConfig:
     container_s3_log_dir: str - where to store container logs in S3.
     job_max_cpu_hours: float - the maximum number of cpu hours per job.
     clean_frequency_hours: int - how often the job cleaning code that removes transient files
-        from completed jobs should be run in hours.
-    clean_age_days: int - jow old jobs must be before they're cleaned in days.
+        from completed jobs and refdata should be run in hours.
+    clean_age_days: int - jow old jobs and refdata must be before they're cleaned in days.
     kafka_bootstrap_servers: str - the Kafka bootstrap servers in standard format.
     kafka_topic_jobs: str - the Kafka topic where job updates will be published.
     kafka_startup_unsent_delay_min: int | None - if present, indicates that unsent Kafka job
@@ -373,8 +373,8 @@ class CDMTaskServiceConfig:
             f"Allowed S3 paths: {self.allowed_s3_paths}",
             f"Directory in S3 for container logs: {self.container_s3_log_dir}",
             f"Max CPU hours per job: {self.job_max_cpu_hours}",
-            f"Job clean frequency, hours: {self.clean_frequency_hours}",
-            f"Job clean age, days: {self.clean_age_days}",
+            f"Job/refdata clean frequency, hours: {self.clean_frequency_hours}",
+            f"Job/refdata clean age, days: {self.clean_age_days}",
             f"Kafka bootstrap servers: {self.kafka_boostrap_servers}",
             f"Kafka jobs topic: {self.kafka_topic_jobs}",
             f"Kafka unsent messages startup send delay: {self.kafka_startup_unsent_delay_min}",
