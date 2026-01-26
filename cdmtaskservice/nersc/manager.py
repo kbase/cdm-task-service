@@ -1002,6 +1002,8 @@ class NERSCManager:
         Remove any files at NERSC associat4ed with staging the reference data. Does not remove
         the reference data itself or the NERSC -> LRC sync notification file read by JAWS.
         
+        If any files do not exist they are silently ignored.
+        
         Note that running this method on reference data where staging is not in a terminal
         state may result in undefined behavior.
         """

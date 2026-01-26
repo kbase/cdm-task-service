@@ -50,7 +50,7 @@ class MongoController:
         if self._outfile:
             self._outfile.close()
         if delete_temp_files and self.temp_dir:
-            shutil.rmtree(self.temp_dir)
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def clear_database(self, db_name, drop_indexes=False):
         if drop_indexes:

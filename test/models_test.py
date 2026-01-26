@@ -91,3 +91,18 @@ def test_job_state_is_canceling():
     
     for s, term in expected.items():
         assert s.is_canceling() is term
+
+
+def test_refdata_state_terminal_states():
+    assert models.ReferenceDataState.terminal_states() == {
+        models.ReferenceDataState.ERROR, models.ReferenceDataState.COMPLETE
+    }
+
+
+def test_refdata_state_is_terminal():
+    expected = {s: False for s in list(models.ReferenceDataState)}
+    expected[models.ReferenceDataState.COMPLETE] = True
+    expected[models.ReferenceDataState.ERROR] = True
+    
+    for s, term in expected.items():
+        assert s.is_terminal() is term
