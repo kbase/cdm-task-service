@@ -153,6 +153,7 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
         logr.info("Initializing CTS refdata client... ")
         refcli = await CTSRefdataClient.create(cfg.cts_root_url, cfg.cts_refdata_token)
         dest.register("CTS refdata client", refcli.close())
+        logr.info("Done")
         refman = RefdataManager(
             refcli,
             s3cfg.get_internal_client(),

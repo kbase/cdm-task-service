@@ -96,7 +96,7 @@ class CDMRefdataServiceConfig:
             "\n*** Service Configuration ***",
             f"Authentication URL: {self.auth_url}",
             f"Authentication full admin roles: {self.auth_full_admin_roles}",
-            f"Authentiation CTS role: {self.auth_cts_role}",
+            f"Authentication CTS role: {self.auth_cts_role}",
             f"S3 URL: {self.s3_url}",
             f"S3 access key: {self.s3_access_key}",
             "S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT",

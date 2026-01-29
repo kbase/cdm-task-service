@@ -46,7 +46,7 @@ async def run_container(
     *,
     command: list[str] | None = None,
     env: dict[str, str] | None = None,
-    mounts: dict[str, str] | None = None,
+    mounts: dict[str, tuple[str, bool]] | None = None,
     post_start_callback: Awaitable[None] | None = None,
     sigterm_callback: Callable[[int], None] | None = None,
 ):
@@ -58,7 +58,9 @@ async def run_container(
     stderr_path - a file where stderr logs should be streamed.
     command - a command to provide to the container.
     env - a map from environment variable to environment value to provide to the container
-    mounts - a map from host mount path to container mount path to provide to the container
+    mounts - mounting directives for the container. A map from the host mount path to a tuple of
+        * the container mount path
+        * A boolean denoting whether the mounts should be read write (True) or just read (False)
     post_start_callback - an awaitable that will be awaited when the container has started but
         before streaming logs.
     sigterm_callback - a callable that will be called if a SIGTERM or SIGINT is sent to the
@@ -72,7 +74,10 @@ async def run_container(
 
     client = _get_client()
     mounts = mounts or {}
-    volumes = {host: {"bind": container, "mode": "rw"} for host, container in mounts.items()}
+    volumes = {
+        host: {"bind": container, "mode": "rw" if rw else "ro"}
+        for host, (container, rw) in mounts.items()
+    }
 
     container = client.containers.run(
         image=image,

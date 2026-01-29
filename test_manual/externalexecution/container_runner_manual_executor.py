@@ -11,6 +11,11 @@ STDERR = Path("./stderr.txt")
 
 ARGS = ["python", "/opt/tester.py", "-s", "1000"]
 
+MOUNTS = {
+    str(Path("~/github/kbase/cdm-task-service/mount_test_rw").expanduser()): ("/rw", True),
+    str(Path("~/github/kbase/cdm-task-service/mount_test_ro").expanduser()): ("/ro", False)
+}
+
 logging.basicConfig(level=logging.INFO)
 
 async def start_cb():
@@ -23,6 +28,7 @@ async def main():
         STDOUT,
         STDERR,
         command=ARGS,
+        mounts=MOUNTS,
         post_start_callback=start_cb(),
         sigterm_callback=lambda signum: print(f"exited: {signum}")
     )
