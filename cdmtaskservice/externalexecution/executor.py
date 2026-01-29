@@ -245,7 +245,7 @@ Local relative path: {loc}
             str(output): (job.job_input.params.output_mount_point, True),
         }
         if job.image.refdata_id:
-            host_mount = str(Path(self._cfg.refdata_host_path) / job.image.refdata_id)
+            host_mount = str(Path(self._cfg.refdata_host_path)) # / job.image.refdata_id)
             # Don't allow refdata write
             mounts[host_mount] = (job.get_refdata_mount_point(), False)
             self._logr.info(
