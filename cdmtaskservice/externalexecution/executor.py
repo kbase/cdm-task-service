@@ -240,12 +240,14 @@ Local relative path: {loc}
             input_ = replace / relative_in
             output = replace / relative_out 
         mounts = {
-            str(input_): job.job_input.params.input_mount_point,
-            str(output): job.job_input.params.output_mount_point,
+            # if people want to write to their input directory, ok
+            str(input_): (job.job_input.params.input_mount_point, True),
+            str(output): (job.job_input.params.output_mount_point, True),
         }
         if job.image.refdata_id:
             host_mount = str(Path(self._cfg.refdata_host_path) / job.image.refdata_id)
-            mounts[host_mount] = job.get_refdata_mount_point()
+            # Don't allow refdata write
+            mounts[host_mount] = (job.get_refdata_mount_point(), False)
             self._logr.info(
                 f"Mounting host refdata at '{host_mount}' to '{job.get_refdata_mount_point()}' "
                 + "in container"
