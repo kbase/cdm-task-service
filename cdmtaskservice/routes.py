@@ -139,7 +139,7 @@ class WhoAmI(BaseModel):
 
 
 @ROUTER_GENERAL.get(
-    "/whoami/",
+    "/whoami",
     response_model=WhoAmI,
     summary="Who am I? What does it all mean?",
     description="Information about the current user."
@@ -177,7 +177,7 @@ class Sites(BaseModel):
 
 
 @ROUTER_SITES.get(
-    "/sites/",
+    "/sites",
     response_model=Sites,
     summary="Available compute sites",
     description="Information about the sites available for running jobs."
@@ -227,7 +227,7 @@ _ANN_JOB_LIMIT = Annotated[int | None, Query(
 
 
 @ROUTER_JOBS.get(
-    "/",
+    "",
     response_model=ListJobsResponse,
     response_model_exclude_none=True,
     summary="List jobs",
@@ -259,7 +259,7 @@ class SubmitJobResponse(BaseModel):
 
 
 @ROUTER_JOBS.post(
-    "/",
+    "",
     response_model=SubmitJobResponse,
     summary="Submit a job",
     description="Submit a job to the system.\n\n"
@@ -433,7 +433,7 @@ class Images(BaseModel):
 
 
 @ROUTER_IMAGES.get(
-    "/",
+    "",
     response_model=Images,
     response_model_exclude_none=True,
     summary="Get images",
@@ -473,7 +473,7 @@ class RefData(BaseModel):
 
 
 @ROUTER_REFDATA.get(
-    "/",
+    "",
     response_model=RefData,
     response_model_exclude_none=True,
     summary="Get reference data information",
@@ -715,7 +715,7 @@ class SubJobs(BaseModel):
 
 
 @ROUTER_ADMIN.get(
-    "/jobs/{job_id}/container/",
+    "/jobs/{job_id}/container",
     response_model=SubJobs,
     response_model_exclude_none=True,
     summary="Get state for all containers",
