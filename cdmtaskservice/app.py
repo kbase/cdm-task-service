@@ -12,6 +12,7 @@ import uuid
 from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.security.utils import get_authorization_scheme_param
@@ -200,8 +201,24 @@ def create_app():
             "5XX": {"model": models_errors.ServerError}
         }
     )
+
+    # middleware forms a stack - last registered runs first on input, last on output
     app.add_middleware(GZipMiddleware)
     app.add_middleware(_AppMiddleWare)
+    app.add_middleware(
+        CORSMiddleware,
+        # TODO CONFIG make configurable, hardcoded for now
+        allow_origins=[
+            "https://hub.dev.berdl.kbase.us",
+            "https://hub.stage.berdl.kbase.us",
+            "https://hub.berdl.kbase.us",
+            "https://kbase.us",
+            "https://narrative.kbase.us",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.include_router(routes.ROUTER_GENERAL)
     app.include_router(routes.ROUTER_SITES)
     app.include_router(routes.ROUTER_JOBS)
@@ -252,6 +269,7 @@ def create_refdata_app():
     )
     app.add_middleware(GZipMiddleware)
     app.add_middleware(_AppMiddleWare)
+    # This server is not expected to be exposed to the world so no CORS middleware
     app.include_router(routes.ROUTER_GENERAL)
     app.include_router(refroutes.ROUTER_REFDATA)
 
