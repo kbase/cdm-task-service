@@ -418,11 +418,8 @@ async def test_update_job_and_subjob_fail_update_to_error(mondb):
     tid = "1"
     
     for state in models.JobState.terminal_states():
-        mondb.jobs.update_one({}, {"$set": {"state": state.value}})
-        mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
-        # In GHA tests seem to fail if we don't wait slightly for an update?
-        # Seems like it shouldn't be necessary
-        time.sleep(1)
+        await mondb.jobs.update_one({}, {"$set": {"state": state.value}})
+        await mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
         await fail_update_job(mc, "foo", u, dt, tid, NoSuchJobError(
             "No job with ID 'foo' not in states ['canceled', 'complete', 'error'] exists"
         ))
