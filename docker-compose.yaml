@@ -82,6 +82,7 @@ services:
     volumes:
       - ./tmp_creds:/creds
       - condor-token:/etc/condor/tokens.d
+      - ./test_manual:/cts/test_manual
 
   cdm_refdata_service:
     build:

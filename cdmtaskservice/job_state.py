@@ -20,6 +20,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
     ChecksumMismatchError,
     IllegalParameterError,
+    InvalidJobStateError,
     InvalidReferenceDataStateError,
     UnauthorizedError,
 )
@@ -333,6 +334,22 @@ class JobState:
         s3path = S3Paths([str(Path(job.logpath) / filename)])
         return self._s3.stream_object(s3path), filename
     
+    async def resend_job_notification(self, job_id: str, user: CTSUser, state: models.JobState):
+        """
+        Resend a notification for a job. This can be useful if the previous notification was
+        not processed due to an error.
+        
+        It is expected that only admins use this method.
+        """
+        _not_falsy(state, "state")
+        job = await self.get_job(job_id, user, as_admin=True)
+        # TODO RETRIES if we allow retries this will need more thought
+        #              Maybe ok as is since newer transitions will overwrite older ones?
+        tt = {tt.state: tt for tt in job.transition_times}.get(state)
+        if not tt:
+            raise InvalidJobStateError(f"Job {job.id} never passed through state {state.value}")
+        await self._kafka.update_job_state(job.id, state, tt.time, tt.trans_id)
+
     async def list_jobs(
         self,
         # can't be a KBaseUser since it may be provided by an admin as a parameter

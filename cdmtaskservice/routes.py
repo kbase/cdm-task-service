@@ -848,6 +848,28 @@ async def update_job_admin_meta(
     )
 
 
+@ROUTER_ADMIN.put(
+    "/jobs/{job_id}/notify",
+    summary="Resend job notifications",
+    description="**WARNING**: calling this method will likely cause duplicate notifications to " +
+        "be sent for the job status change.\n\nResend a job status change notification.",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def resend_notifcation(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    # making this a query so it can be omitted in future if we want to send notifications for
+    # all states
+    state: Annotated[models.JobState, Query(
+        description="The state for which a notification will be resent."
+    )],
+    admin: CTSUser=Depends(_AUTH),
+):
+    _ensure_admin(admin, "Only service administrators can resend noticiations.")
+    job_state = app_state.get_app_state(r).job_state
+    await job_state.resend_job_notification(job_id, admin, state)
+
+
 @ROUTER_ADMIN.delete(
     "/jobs/{job_id}/clean",
     status_code=status.HTTP_204_NO_CONTENT,
