@@ -417,8 +417,8 @@ async def test_update_job_and_subjob_fail_update_to_error(mondb):
     tid = "1"
     
     for state in models.JobState.terminal_states():
-        mondb.jobs.update_one({}, {"$set": {"state": state.value}})
-        mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
+        await mondb.jobs.update_one({}, {"$set": {"state": state.value}})
+        await mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
         await fail_update_job(mc, "foo", u, dt, tid, NoSuchJobError(
             "No job with ID 'foo' not in states ['canceled', 'complete', 'error'] exists"
         ))
