@@ -4,7 +4,6 @@ import datetime
 import re
 from pymongo.errors import BulkWriteError, DuplicateKeyError
 import pytest
-import time
 from typing import Coroutine, Callable, Any
 
 from cdmtaskservice import models
