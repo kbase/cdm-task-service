@@ -351,7 +351,9 @@ _ANN_CONTAINER_NUMBER = Annotated[int, FastPath(
     response_class=StreamingResponse,
     summary="Get a job's stdout logs",
     description="Get the stdout stream from a job container. "
-        + "Only the submitting user may view the logs."
+        + "Only the submitting user may view the logs.\n\n"
+        + "Note that only jobs that have gone through the error processing stages will have logs. "
+        + "If this is the case, the `logpath` field in the job record will be populated."
 )
 async def get_job_stdout(
     r: Request,
@@ -367,7 +369,9 @@ async def get_job_stdout(
     response_class=StreamingResponse,
     summary="Get a job's stderr logs",
     description="Get the stderr stream from a job container. "
-        + "Only the submitting user may view the logs."
+        + "Only the submitting user may view the logs.\n\n"
+        + "Note that only jobs that have gone through the error processing stages will have logs. "
+        + "If this is the case, the `logpath` field in the job record will be populated."
 )
 async def get_job_stderr(
     r: Request,
