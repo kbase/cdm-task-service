@@ -422,6 +422,12 @@ async def _download_objects_to_file_fail(
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
+async def _stream_and_assert(s3c, file_path, expected, seek=None, length=None):
+    asynciter = s3c.stream_object(S3Paths([file_path]), seek=seek, length=length)
+    data = b"".join([chunk async for chunk in asynciter])
+    assert data == expected
+
+
 @pytest.mark.asyncio
 async def test_stream_object(minio):
     await minio.clean()  # couldn't get this to work as a fixture
@@ -434,13 +440,17 @@ async def test_stream_object(minio):
     )
 
     s3c = await _client(minio)
-    asynciter = s3c.stream_object(S3Paths(["test-bucket/test_file"]))
-    data = b"".join([chunk async for chunk in asynciter])
-    assert data == b"imsounique"
-    
-    asynciter = s3c.stream_object(S3Paths(["test-bucket/big_test_file"]))
-    data = b"".join([chunk async for chunk in asynciter])
-    assert data == b"abcdefghij" * 600000 * 2
+    await _stream_and_assert(s3c, "test-bucket/test_file", b"imsounique")
+    await _stream_and_assert(s3c, "test-bucket/big_test_file", b"abcdefghij" * 600000 * 2)
+
+    # Test with seek only - "imsounique"[5:] = "nique"
+    await _stream_and_assert(s3c, "test-bucket/test_file", b"nique", seek=5)
+
+    # Test with length only - "imsounique"[:5] = "imsou"
+    await _stream_and_assert(s3c, "test-bucket/test_file", b"imsou", length=5)
+
+    # Test with both seek and length - "imsounique"[3:8] = "ouniq"
+    await _stream_and_assert(s3c, "test-bucket/test_file", b"ouniq", seek=3, length=5)
 
 
 @pytest.mark.asyncio
@@ -451,6 +461,22 @@ async def test_stream_object_fail_bad_input(minio):
     await _stream_object_fail(s3c, S3Paths(["foo/bar", "baz/bat"]), ValueError(
         "Only one path is allowed"
     ))
+
+    # Test with invalid seek values
+    await _stream_object_fail(
+        s3c, S3Paths(["foo/bar"]), ValueError("seek must be >= 0"), seek=-1
+    )
+    await _stream_object_fail(
+        s3c, S3Paths(["foo/bar"]), ValueError("seek must be >= 0"), seek=-100
+    )
+
+    # Test with invalid length values
+    await _stream_object_fail(
+        s3c, S3Paths(["foo/bar"]), ValueError("length must be >= 1"), length=0
+    )
+    await _stream_object_fail(
+        s3c, S3Paths(["foo/bar"]), ValueError("length must be >= 1"), length=-1
+    )
 
 
 @pytest.mark.asyncio
@@ -501,10 +527,10 @@ async def test_stream_object_fail_unauthed(minio, minio_unauthed_user):
 
 
 async def _stream_object_fail(
-    cli: S3Client, path: S3Paths, expected: Exception, print_stacktrace=False
+    cli: S3Client, path: S3Paths, expected: Exception, seek=None, length=None, print_stacktrace=False
 ):
     with pytest.raises(Exception) as got:
-        res = cli.stream_object(path)
+        res = cli.stream_object(path, seek=seek, length=length)
         [chunk async for chunk in res]
     assert_exception_correct(got.value, expected, print_stacktrace)
 

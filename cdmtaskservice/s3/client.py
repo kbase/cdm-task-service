@@ -291,25 +291,46 @@ class S3Client:
             ))
         return ret
 
-    def stream_object(self, s3path: S3Paths) -> AsyncIterator[bytes]:
+    def stream_object(
+        self, s3path: S3Paths, seek: int | None = None, length: int | None = None
+    ) -> AsyncIterator[bytes]:
         """
         Stream an object from S3.
-        
+
         Note that the S3Paths input must contain only a single path.
+
+        s3path - the path of the object to stream.
+        seek - the byte offset in the file from which to start reading.
+        length - the number of bytes to read from the file.
         """
         if len(_not_falsy(s3path, "s3path")) > 1:
             raise ValueError("Only one path is allowed")
-        return self._stream_object_generator(s3path)
+        if seek is not None:  # TODO CODE add an optional param to _check_num
+            _check_num(seek, "seek", minimum=0)
+        if length is not None:
+            _check_num(length, "length", minimum=1)
+        return self._stream_object_generator(s3path, seek=seek, length=length)
     
-    async def _stream_object_generator(self, s3path: S3Paths) -> AsyncIterator[bytes]:
+    async def _stream_object_generator(
+        self, s3path: S3Paths, seek: int | None = None, length: int | None = None
+    ) -> AsyncIterator[bytes]:
         # internal helper returns the raw response
         # we can't use the _run_commands helper method here since the client needs to stay
         # open while the result is streamed
-        try: 
+        try:
             async with self._client() as client:
                 buk, key, path = next(s3path.split_paths(include_full_path=True))
                 async def go(client, buk=buk, key=key):
-                    return await client.get_object(Bucket=buk, Key=key)
+                    kwargs = {"Bucket": buk, "Key": key}
+                    # Build Range header if seek or length is specified
+                    if seek is not None or length is not None:
+                        start = seek if seek is not None else 0
+                        if length is not None:
+                            end = start + length - 1
+                            kwargs["Range"] = f"bytes={start}-{end}"
+                        else:
+                            kwargs["Range"] = f"bytes={start}-"
+                    return await client.get_object(**kwargs)
                 go.path = path
                 res = await self._fnc_wrapper(client, go)
                 body = res["Body"]

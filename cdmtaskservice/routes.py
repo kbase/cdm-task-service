@@ -344,6 +344,14 @@ _ANN_CONTAINER_NUMBER = Annotated[int, FastPath(
     description="The container / subjob number.",
     ge=0,
 )]
+_ANN_LOG_SEEK = Annotated[int, Query(
+    description="The byte offset in the file from which to start reading.",
+    ge=0,
+)]
+_ANN_LOG_LENGTH = Annotated[int, Query(
+    description="The number of bytes to read from the file.",
+    ge=1,
+)]
 
 
 @ROUTER_JOBS.get(
@@ -360,8 +368,10 @@ async def get_job_stdout(
     job_id: _ANN_JOB_ID,
     container_num: _ANN_CONTAINER_NUMBER,
     user: CTSUser=Depends(_AUTH),
+    seek: _ANN_LOG_SEEK = None,
+    length: _ANN_LOG_LENGTH = None,
 ) -> StreamingResponse:
-    return await get_logs(r, job_id, container_num, user)
+    return await get_logs(r, job_id, container_num, user, seek=seek, length=length)
 
 
 @ROUTER_JOBS.get(
@@ -378,8 +388,10 @@ async def get_job_stderr(
     job_id: _ANN_JOB_ID,
     container_num: _ANN_CONTAINER_NUMBER,
     user: CTSUser=Depends(_AUTH),
+    seek: _ANN_LOG_SEEK = None,
+    length: _ANN_LOG_LENGTH = None,
 ) -> StreamingResponse:
-    return await get_logs(r, job_id, container_num, user, stderr=True)
+    return await get_logs(r, job_id, container_num, user, stderr=True, seek=seek, length=length)
 
 
 async def get_logs(
@@ -388,9 +400,13 @@ async def get_logs(
     container_num: int,
     user: CTSUser,
     stderr: bool = False,
+    seek: int | None = None,
+    length: int | None = None,
 ) -> StreamingResponse:
     jobstate = app_state.get_app_state(r).job_state
-    filegen, filename = await jobstate.stream_job_logs(job_id, container_num, user, stderr=stderr)
+    filegen, filename = await jobstate.stream_job_logs(
+        job_id, container_num, user, stderr=stderr, seek=seek, length=length
+    )
     return StreamingResponse(
         filegen,
         media_type="text/plain; charset=utf-8",
