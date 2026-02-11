@@ -310,16 +310,20 @@ class JobState:
         job_id: str,
         container_num: int,
         user: CTSUser,
-        stderr: bool = False
+        stderr: bool = False,
+        seek: int | None = None,
+        length: int | None = None,
     ) -> tuple[AsyncIterator[bytes], str]:
         """
         Stream the container logs from a job.
-        
+
         job_id - the job's ID.
         container_num - the container number for which to retrieve logs.
         user - the user requesting the logs.
         stderr - return the stderr logs instead of the stdout logs.
-        
+        seek - the byte offset in the file from which to start reading.
+        length - the number of bytes to read from the file.
+
         Returns a tuple of a generator that will stream the logfile and the name of the file.
         """
         job = await self.get_job(job_id, user)
@@ -332,7 +336,25 @@ class JobState:
             )
         filename = s3errpath if stderr else s3outpath
         s3path = S3Paths([str(Path(job.logpath) / filename)])
-        return self._s3.stream_object(s3path), filename
+
+        if seek is not None:
+            if seek < 0:
+                raise IllegalParameterError(
+                    f"Seek parameter must be >= 0, got {seek}"
+                )
+            # Only fetch file metadata if seek is non-zero
+            if seek > 0:
+                meta = await self._s3.get_object_meta(s3path)
+                if seek >= meta[0].size:
+                    raise IllegalParameterError(
+                        f"Seek parameter {seek} is >= file size {meta[0].size}"
+                    )
+        if length is not None and length < 1:
+            raise IllegalParameterError(
+                f"Length parameter must be >= 1, got {length}"
+            )
+
+        return self._s3.stream_object(s3path, seek=seek, length=length), filename
     
     async def resend_job_notification(self, job_id: str, user: CTSUser, state: models.JobState):
         """
