@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from unittest.mock import patch
 
+from cdmtaskservice.s3 import client
 from cdmtaskservice.s3.client import (
     S3BucketInaccessibleError,
     S3BucketNotFoundError,
@@ -25,6 +26,11 @@ from conftest import (
     assert_exception_correct,
     assert_close_to_now_sec,
 )
+
+
+@pytest.mark.asyncio
+async def test_max_s3_object_size():
+    assert client._MULTIPART_MAXIMUM_SIZE == 53687091200000  # 48.8 TiB
 
 
 @pytest.mark.asyncio
