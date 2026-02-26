@@ -35,6 +35,24 @@ added with minimal database retrofits and ideally not too much code refactoring.
 * CDM - the KBase Central Data Model
 * SFAPI - NERSC Superfaciltiy API
 
+## Update notes
+
+* This document was written as the initial design for the task service, and many things have
+  changed during implementation. The overall design description is still valid, but details
+  such as exact endpoints, data structures, or processes should not be taken as gospel.
+  * Instead see the OpenAPI documentation built into the server.
+* Instead of submitting jobs to SLURM directly, the task service submits jobs to the
+  [JGI JAWS](https://jaws-docs.jgi.doe.gov/en/latest/) service.
+* Lawrecium cluster support has been added via JAWS.
+* KBase hardware support has been added via support for submitting jobs directly to HTCondor.
+  * The execution model is significantly different than with JAWS based jobs as 
+    * The task service must track the state of each sub job rather than delegating
+      it to JAWS
+    * Each subjob is responsible for downloading and uploading its own S3 objects
+      rather than the task service coordinating transfer of all input and output files
+      at once before and after submitting the job to JAWS
+* The architecture diagram has been updated.
+
 ## Architecture
 
 The service is expected to handle
@@ -47,9 +65,9 @@ The service is expected to handle
 
 ### High Level / Cross Organization
 
-![High level architecture](design_high_level_arch.png "High level architecture")
+![High level architecture](design_high_level_arch_v2.png "High level architecture")
 
-### Sequence of operations
+### Sequence of operations - Permultter
 
 #### Server startup
 
@@ -1223,6 +1241,11 @@ Further approvals are via Github PR reviews.
 ### 1.3.5
 
 * Added `Parameters.environment` field.
+
+### 1.4.0
+
+* Added the `Update notes` section
+* Updated the architecture diagram with Lawrencium and HTCondor support.
 
 ## Appendices
 
