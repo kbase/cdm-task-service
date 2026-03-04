@@ -1,4 +1,6 @@
-FROM python:3.12.13-slim AS build
+ARG PYTHON_VERSION=3.12.13-slim
+
+FROM python:${PYTHON_VERSION} AS build
 
 ENV CRANE_VER=v0.20.2
 
@@ -15,12 +17,11 @@ RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$C
     && tar -zxvf go-containerregistry.tar.gz
 
 # Write the git commit for the service
-
 WORKDIR /git
 COPY .git /git
 RUN GITCOMMIT=$(git rev-parse HEAD) && echo "GIT_COMMIT=\"$GITCOMMIT\"" > /git/git_commit.py
 
-FROM python:3.12.13-slim
+FROM python:${PYTHON_VERSION}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tini curl \
