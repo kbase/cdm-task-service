@@ -4,7 +4,6 @@ FROM python:${PYTHON_VERSION} AS build
 
 ENV CRANE_VER=v0.20.2
 
-# Install curl, git, and crane
 RUN apt-get update && apt-get install -y --no-install-recommends curl git \
     && rm -rf /var/lib/apt/lists/*
 
