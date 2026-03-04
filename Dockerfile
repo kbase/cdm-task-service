@@ -11,10 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl git \
 WORKDIR /craneinstall
 
 # crane install docs: https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md
-RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz > go-containerregistry.tar.gz \
+# Note that the provenance verification step is broken, which wasted an hour or two of time
+# https://github.com/google/go-containerregistry/issues/1982
+RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz > go-containerregistry_Linux_x86_64.tar.gz \
     && curl -sL https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/checksums.txt > checksums.txt \
     && grep "go-containerregistry_Linux_x86_64.tar.gz" checksums.txt | sha256sum -c - \
-    && tar -zxvf go-containerregistry.tar.gz
+    && tar -zxvf go-containerregistry_Linux_x86_64.tar.gz
 
 # Write the git commit for the service
 WORKDIR /git
