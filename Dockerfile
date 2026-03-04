@@ -2,14 +2,16 @@ FROM python:3.12.13-slim AS build
 
 ENV CRANE_VER=v0.20.2
 
-# Install crane
+# Install curl and crane
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /craneinstall
 
 # crane install docs: https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md
 # Note that the provenance verification step is broken, which wasted an hour or two of time
 # https://github.com/google/go-containerregistry/issues/1982
-RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz > go-containerregistry.tar.gz \ 
+RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz > go-containerregistry.tar.gz \
     && tar -zxvf go-containerregistry.tar.gz
 
 # Write the git commit for the service
@@ -20,13 +22,13 @@ RUN GITCOMMIT=$(git rev-parse HEAD) && echo "GIT_COMMIT=\"$GITCOMMIT\"" > /git/g
 
 FROM python:3.12.13-slim
 
-RUN apt update \
-    && apt install -y tini \
-    && rm -rf /var/lib/apt/lists/* 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # install uv
 RUN pip install --upgrade pip && \
-    pip install uv	
+    pip install uv
 
 # install deps
 ARG UV_DEV_ARGUMENT=--no-dev
@@ -49,10 +51,8 @@ ENV KBCTS_CRANE_PATH=/cts/crane
 WORKDIR /cts
 
 # build the code archive
-
 RUN tar -czf cts.tgz --exclude="*/__pycache__*" cdmtaskservice -C /uvinstall .
 ENV KBCTS_CODE_ARCHIVE_PATH=/cts/cts.tgz
 ENV KBCTS_HTC_EXE_PATH=/cts/cdmtaskservice/condor/run_job.sh
 
 ENTRYPOINT ["tini", "--", "/cts/entrypoint.sh"]
-
