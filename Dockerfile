@@ -2,7 +2,6 @@ FROM python:3.12.13-slim AS build
 
 ENV CRANE_VER=v0.20.2
 
-# Install curl and crane
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
