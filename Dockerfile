@@ -15,7 +15,6 @@ RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$C
     && tar -zxvf go-containerregistry_Linux_x86_64.tar.gz
 
 
-    
 # Write the git commit for the service
 WORKDIR /git
 COPY .git /git
