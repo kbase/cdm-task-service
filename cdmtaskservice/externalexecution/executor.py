@@ -232,7 +232,8 @@ Local relative path: {loc}
         if job.job_input.params.declobber:
             output = output / str(self._cfg.container_number)
         # Needs to be global write since the job container user is unknown
-        output.mkdir(0x777, parents=True, exist_ok=True)
+        output.mkdir(0o777, parents=True, exist_ok=True)
+        output.chmod(0o777)  # bypass process umask
         if self._cfg.mount_prefix_override:
             prefix, replace = [Path(x) for x in self._cfg.mount_prefix_override.split(":")]
             relative_in = input_.relative_to(prefix)

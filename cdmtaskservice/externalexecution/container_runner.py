@@ -87,6 +87,8 @@ async def run_container(
         detach=True,
         tty=False,
         remove=False,  # Don't remove immediately to ensure logs are written
+        cap_drop=["ALL"],
+        security_opt=["no-new-privileges:true"],
     )
     
     def cleanup(signum, frame):
