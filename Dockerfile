@@ -20,7 +20,7 @@ COPY .git /git
 RUN GITCOMMIT=$(git rev-parse HEAD) && echo "GIT_COMMIT=\"$GITCOMMIT\"" > /git/git_commit.py
 
 
-FROM FROM python:3.12.13-slim
+FROM python:3.12.13-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tini \
