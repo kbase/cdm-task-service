@@ -383,7 +383,7 @@ requires-dist = [
     { name = "docker", specifier = "==7.1.0" },
     { name = "docker-image-py", specifier = "==0.1.13" },
     { name = "fastapi", extras = ["standard"], specifier = "==0.135.1" },
-    { name = "htcondor", specifier = "==25.6.1" },
+    { name = "htcondor", specifier = "==25.5.1" },
     { name = "jinja-cli", specifier = "==1.2.2" },
     { name = "kbase-auth-client", specifier = "==0.1.2" },
     { name = "marisa-trie", specifier = "==1.3.1" },
@@ -859,15 +859,15 @@ wheels = [
 
 [[package]]
 name = "htcondor"
-version = "25.6.1"
+version = "25.5.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a0/d6/a1fb1c7a152b85a6c4d435de677b7bdc85e8f98adbc96d6114f18f71f496/htcondor-25.6.1-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:b9a17c1eb824856df6f991664c5078d349a9d1be083248e483addaa1e43d3389", size = 49991947, upload-time = "2026-01-29T18:33:02.847Z" },
-    { url = "https://files.pythonhosted.org/packages/ac/6d/1883ea0313603a90b076733297042e8fada23a36820ae06ad8651074cd4c/htcondor-25.6.1-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:ab9fac4220244e1a9e3abc252da39fc14592a77ce33c054e487859496b740ed3", size = 51406629, upload-time = "2026-01-29T18:33:05.642Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/71/c4c4ccbd402739b227f86df3a894b073e98eff835cf3d66ee64a5db4b206/htcondor-25.6.1-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:ec02fdfa6c74bcb732e1a8e0878350ee258a006cf4d6bea16089cb09448d93ac", size = 49997182, upload-time = "2026-01-29T18:33:08.624Z" },
-    { url = "https://files.pythonhosted.org/packages/ac/92/50b95786369c841152c1d4f4d037c5dc570a05e583f41ea6a1789ff3af9f/htcondor-25.6.1-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:f929f0499d1361527fb40367ffa6b759f0868d7df9a6630b048f87f66fb8ceeb", size = 51416020, upload-time = "2026-01-29T18:33:11.554Z" },
-    { url = "https://files.pythonhosted.org/packages/c4/b6/ee18f74f39e582bb0d977853c9cf8c5a784d6c5fc6e8ecd1ca8cd8a1a450/htcondor-25.6.1-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:e7c4d256f88884b2252a8e21ef93747879eb59d1ddd0c7f1e6fd2940990f0cf9", size = 50001829, upload-time = "2026-01-29T18:33:14.357Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/bc/03199042b6919c5b9974fc47e75b2243807a091c3f6fc940587df94e38d9/htcondor-25.6.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:cd0e680b3d32e98d6e4a189c79f4d02f0cd5d5efce16f2ff013e9058bc586e92", size = 51414611, upload-time = "2026-01-29T18:33:17.215Z" },
+    { url = "https://files.pythonhosted.org/packages/91/ea/86ff396679063be97afc98e053c42e11ca0c1ae93c92f47c455f377e3ae3/htcondor-25.5.1-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:5508634f963d49613b2f3c37d428613faf8fcfed1a748dc1b1f647d0ff64b3a7", size = 49885899, upload-time = "2025-12-15T16:05:56.492Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/fa/d96b27271dbd1e541b786694925ab03b4c0371df33cceb361c609c2d6534/htcondor-25.5.1-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:8b06cdc2ff6c444a5099a5f177d451b6b1b0cf7dbd965f5b7a3a807e194221af", size = 51278343, upload-time = "2025-12-15T16:05:59.232Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/bf/361c0003087a1b82ec3df7118e965803e340e3606f6843df999d1d1b7195/htcondor-25.5.1-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:f29ab33e1ae6de41fad7506a499b5a62b1f59edbba5ec2d9ea35181fbed9a26c", size = 49895474, upload-time = "2025-12-15T16:06:02.114Z" },
+    { url = "https://files.pythonhosted.org/packages/37/b8/192ac922d6fed1cdb5e1d3b50e30fc985aaf77c826c86805d80c2fb00f44/htcondor-25.5.1-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:a80829a990ac6e94f4621cc15b208b227ebbc0740e246914cc92a8a527982c23", size = 51284589, upload-time = "2025-12-15T16:06:05.124Z" },
+    { url = "https://files.pythonhosted.org/packages/df/d6/32b2903fbff83d08dc3c52261329dce0ffac37af0ff8f63e748e28523c3d/htcondor-25.5.1-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:3f8e787f69cca4167fd71b43313ccb8e7658261d2be636ebec5004e568bfdd0d", size = 49895591, upload-time = "2025-12-15T16:06:08.872Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/f9/fa919692874b0bd1118d5a96c98caad24811801d16d6af4ae72d96ff5bd2/htcondor-25.5.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:2a28233563f59edcf37b00a580ee3284afbb858089d97f4154bcbc8b1f4e2548", size = 51284415, upload-time = "2025-12-15T16:06:11.649Z" },
 ]
 
 [[package]]
