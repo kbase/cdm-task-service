@@ -3,7 +3,7 @@ name = "cdm-task-service"
 version = "0.1.0"
 description = "CDM Task Service"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = "==3.12.13"
 
 dependencies = [
     "aiobotocore==3.2.1",
@@ -33,9 +33,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    # aiobotocore 3.1.2 cannot be installed with boto3 > 1.42.42
-    "boto3==1.42.42",
-    "ipython==9.9.0",
+    # aiobotocore 3.2.1 cannot be installed with boto3 > 1.42.61
+    "boto3==1.42.61",
+    "ipython==9.11.0",
     "kafka-python==2.3.0",
     "pymongo==4.16.0",
     "pytest==9.0.2",

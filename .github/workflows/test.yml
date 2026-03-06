@@ -17,11 +17,11 @@ on:
 jobs:
 
   task_service_tests:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         include:
-          - python-version: "3.12"
+          - python-version: "3.12.13"
             mongo: "mongodb-linux-x86_64-ubuntu2204-7.0.18"
             minio: "2025-02-07T23-21-09Z"  # minimum supported version
             mc: "2024-08-13T05-33-17Z"
@@ -42,7 +42,7 @@ jobs:
     - name: Install dependencies and set up test config
       shell: bash
       run: |
-        export CRANE_VER=v0.20.2
+        export CRANE_VER=v0.21.2
         export HOMEDIR=`pwd`
         
         # set up python dependencies
