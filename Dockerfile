@@ -1,6 +1,4 @@
-ARG PYTHON_VERSION=3.12.13-slim
-
-FROM python:${PYTHON_VERSION} AS build
+FROM python:3.12.13-slim AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl git \
     && rm -rf /var/lib/apt/lists/*
@@ -22,10 +20,10 @@ COPY .git /git
 RUN GITCOMMIT=$(git rev-parse HEAD) && echo "GIT_COMMIT=\"$GITCOMMIT\"" > /git/git_commit.py
 
 
-FROM python:${PYTHON_VERSION}
+FROM FROM python:3.12.13-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tini curl \
+    && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/*
 
 # install uv
