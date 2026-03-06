@@ -11,7 +11,7 @@ WORKDIR /craneinstall
 ENV CRANE_VER=v0.21.2
 ENV CRANE_SHA256=897e7c342db072ba76531246fc18fbf3e8e298688b6ecf98916770984b263866
 RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz > go-containerregistry_Linux_x86_64.tar.gz \
-    && [[ "$(sha256sum go-containerregistry_Linux_x86_64.tar.gz | cut -d' ' -f1)" == "$CRANE_SHA256" ]] || exit 1 \
+    && echo "$CRANE_SHA256 go-containerregistry_Linux_x86_64.tar.gz" | sha256sum -c - \
     && tar -zxvf go-containerregistry_Linux_x86_64.tar.gz
 
 
