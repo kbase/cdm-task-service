@@ -1,19 +1,18 @@
 FROM python:3.12.13-slim AS build
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl git \
-    && rm -rf /var/lib/apt/lists/*
+ENV CRANE_VER=v0.21.2
+ENV CRANE_SHA256=897e7c342db072ba76531246fc18fbf3e8e298688b6ecf98916770984b263866
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl git
 
 WORKDIR /craneinstall
 
 # crane install docs: https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md
 # Note that the provenance verification step is broken, which wasted an hour or two of time
 # https://github.com/google/go-containerregistry/issues/1982
-ENV CRANE_VER=v0.21.2
-ENV CRANE_SHA256=897e7c342db072ba76531246fc18fbf3e8e298688b6ecf98916770984b263866
-RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz > go-containerregistry_Linux_x86_64.tar.gz \
-    && echo "$CRANE_SHA256  go-containerregistry_Linux_x86_64.tar.gz" | sha256sum -c - \
-    && tar -zxvf go-containerregistry_Linux_x86_64.tar.gz
-
+RUN curl -sL https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz > go-containerregistry.tar.gz \
+    && echo "$CRANE_SHA256  go-containerregistry.tar.gz" | sha256sum --check \
+    && tar -zxvf go-containerregistry.tar.gz
 
 # Write the git commit for the service
 WORKDIR /git
@@ -32,11 +31,11 @@ RUN pip install --upgrade pip && \
     pip install uv
 
 # install deps
+ARG UV_DEV_ARGUMENT=--no-dev
 RUN mkdir /uvinstall
 WORKDIR /uvinstall
 COPY pyproject.toml uv.lock .python-version .
 ENV UV_PROJECT_ENVIRONMENT=/usr/local/
-ARG UV_DEV_ARGUMENT=--no-dev
 RUN uv sync --locked --inexact $UV_DEV_ARGUMENT
 
 # install the actual code
