@@ -82,6 +82,7 @@ _BASESUBJOB3.sub_id = 2
 
 @pytest.mark.asyncio
 async def test_indexes(mongo, mondb):
+    mongo.clear_database(MONGO_TEST_DB, drop_indexes=True)
     await MongoDAO.create(mondb)
     cols = mongo.client[MONGO_TEST_DB].list_collection_names()
     assert set(cols) == {"jobs", "refdata", "images", "sites", "subjobs", "exitcodes"}
