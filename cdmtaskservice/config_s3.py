@@ -83,6 +83,13 @@ class S3Config(BaseModel):
             raise ValueError("The clients have not yet been initialized")
         return self._s3_client
     
+    async def close(self):
+        """ Close any initialized S3 clients and release connections. """
+        if self._s3_client:
+            await self._s3_client.close()
+        if self._s3_external_client:
+            await self._s3_external_client.close()
+
     def get_external_client(self) -> S3Client:
         """
         Get an S3 client pointed at the external url.
