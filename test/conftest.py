@@ -4,6 +4,7 @@ Configure pytest fixtures and helper functions for this directory.
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 import pytest
+import pytest_asyncio
 import time
 import traceback
 
@@ -40,19 +41,18 @@ def mongo_serv() -> MongoController:
 
 @pytest.fixture
 def mongo(mongo_serv) -> MongoController:
-    mongo_serv.clear_database(MONGO_TEST_DB, drop_indexes=True)
+    mongo_serv.clear_database(MONGO_TEST_DB)
     
     yield mongo_serv
 
 
-@pytest.fixture()
-def mondb(mongo) -> AsyncIOMotorDatabase:
+@pytest_asyncio.fixture()
+async def mondb(mongo) -> AsyncIOMotorDatabase:
     mcli = AsyncIOMotorClient(f"mongodb://localhost:{mongo.port}", tz_aware=True)
 
     yield mcli[MONGO_TEST_DB]
 
     mcli.close()
-    time.sleep(1)  # causes mongo connect failures after 32 tests otherwise
 
 
 @pytest.fixture(scope="module")
