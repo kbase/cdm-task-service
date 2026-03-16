@@ -3,7 +3,9 @@ name = "cdm-task-service"
 version = "0.1.0"
 description = "CDM Task Service"
 readme = "README.md"
-requires-python = "==3.12.13"
+# Note - need to be flexible on the patch version here since the HTCondor workers may have
+# various versions of pip / uv
+requires-python = ">=3.12,<3.13"
 
 dependencies = [
     "aiobotocore==3.2.1",
