@@ -74,6 +74,8 @@ pip install --no-cache-dir uv
 mkdir -p $GLOBAL_CACHE_DIR/uv_cache
 export UV_CACHE_DIR=$GLOBAL_CACHE_DIR/uv_cache
 export XDG_DATA_HOME=$GLOBAL_CACHE_DIR/uv_data
+uv --version
+uv python list
 uv sync
 echo "Complete uv / deps install: $(date)"
 
