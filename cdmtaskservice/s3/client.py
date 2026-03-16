@@ -2,6 +2,11 @@
 An s3 client tailored for the needs of the CDM Task Service.
 
 Note the client is *not threadsafe* as the underlying aiobotocore session is not threadsafe.
+
+Warning: S3Client implements the async context manager protocol as a convenience for callers
+that own a dedicated instance. Do *not* use ``async with`` on a shared instance
+- the first coroutine to exit the block will close the
+underlying connection pool, breaking any concurrent users of the same client.
 """
 
 import aiofiles
@@ -86,8 +91,13 @@ class PresignedPost:
 class S3Client:
     """
     The S3 client.
-    
+
     Note the client is *not threadsafe* as the underlying aiobotocore session is not threadsafe.
+
+    Warning: the async context manager protocol (``async with``) is only safe when each caller
+    has exclusive ownership of the instance. Never use ``async with`` on a shared client — the
+    first coroutine to exit the block will close the connection pool for all concurrent callers.
+    Use ``close()`` to manage shared instance lifetime.
     """
     
     @classmethod
@@ -108,17 +118,30 @@ class S3Client:
         secret_key - the s3 secret key.
         config - Any client configuration options provided as a dictionary. See
             https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
-        skip_connetion_check - don't try to list_buckets while creating the client to check
+        skip_connection_check - don't try to list_buckets while creating the client to check
             the host and credentials are correct.
         insecure_ssl - skip ssl certificate checks.
         """
         s3c = S3Client(endpoint_url, access_key, secret_key, config, insecure_ssl)
+        # We manage the client lifecycle manually rather than using `async with` so that
+        # a single client (and its underlying aiohttp connection pool) can be held open and
+        # reused across many operations. Calling __aenter__ and __aexit__ directly on the
+        # same context manager object keeps the enter/exit symmetric and readable.
+        s3c._cli_ctx = s3c._new_client()
+        try:
+            s3c._cli = await s3c._cli_ctx.__aenter__()
+        except ValueError as e:
+            raise S3ClientConnectError(f"s3 connect failed: {e}") from e
         if not skip_connection_check:
-            async def list_buckets(client):
-                return await client.list_buckets()
-            await s3c._run_commands([list_buckets], 1)
+            try:
+                async def list_buckets(client):
+                    return await client.list_buckets()
+                await s3c._run_commands([list_buckets], 1)
+            except:
+                await s3c.close()
+                raise
         return s3c
-    
+
     def __init__(
         self,
         endpoint_url: str,
@@ -133,9 +156,10 @@ class S3Client:
         self._config = Config(**config) if config else None
         self._sess = get_session()
         self._insecure_ssl = insecure_ssl
-    
-    def _client(self):
-        # Creating a client seems to be pretty cheap, usually < 20ms.
+        self._cli_ctx = None
+        self._cli = None
+
+    def _new_client(self):
         return self._sess.create_client(
             "s3",
             endpoint_url=self._url,
@@ -144,6 +168,21 @@ class S3Client:
             config=self._config,
             verify=not self._insecure_ssl,
         )
+
+    async def __aenter__(self) -> Self:
+        # See class docstring for safe usage rules.
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
+    async def close(self):
+        """
+        Close the client and release connections.
+        """
+        # Calls __aexit__ on the same context manager object that __aenter__ was called on
+        # in create(), keeping the lifecycle symmetric.
+        await self._cli_ctx.__aexit__(None, None, None)
         
     async def _fnc_wrapper(self, client, func):
         try:
@@ -208,14 +247,11 @@ class S3Client:
                 return await coro
         results = []
         coros = []
-        try: 
-            async with self._client() as client:
-                async with asyncio.TaskGroup() as tg:
-                    for acall in async_client_callables:
-                        coros.append(self._fnc_wrapper(client, acall))
-                        results.append(tg.create_task(sem_coro(coros[-1])))
-        except ValueError as e:
-            raise S3ClientConnectError(f"s3 connect failed: {e}") from e
+        try:
+            async with asyncio.TaskGroup() as tg:
+                for acall in async_client_callables:
+                    coros.append(self._fnc_wrapper(self._cli, acall))
+                    results.append(tg.create_task(sem_coro(coros[-1])))
         except ExceptionGroup as eg:
             e = eg.exceptions[0]  # just pick one, essentially at random
             raise e from eg
@@ -237,7 +273,7 @@ class S3Client:
         async def write(client, buk=bucket):
             # apparently this is how you check write access to a bucket. Yuck
             await client.put_object(Bucket=buk, Key=_WRITE_TEST_FILENAME, Body="test")
-            await client.delete_object(Bucket=bucket, Key=_WRITE_TEST_FILENAME)
+            await client.delete_object(Bucket=buk, Key=_WRITE_TEST_FILENAME)
         write.write = True
         write.bucket = bucket
         await self._run_commands([write], 1)
@@ -315,36 +351,31 @@ class S3Client:
     async def _stream_object_generator(
         self, s3path: S3Paths, seek: int | None = None, length: int | None = None
     ) -> AsyncIterator[bytes]:
-        # internal helper returns the raw response
-        # we can't use the _run_commands helper method here since the client needs to stay
-        # open while the result is streamed
+        # internal helper; can't use _run_commands since the response body must stay open
+        # while streaming
+        buk, key, path = next(s3path.split_paths(include_full_path=True))
+        async def go(client, buk=buk, key=key):
+            kwargs = {"Bucket": buk, "Key": key}
+            # Build Range header if seek or length is specified
+            if seek is not None or length is not None:
+                start = seek if seek is not None else 0
+                if length is not None:
+                    end = start + length - 1
+                    kwargs["Range"] = f"bytes={start}-{end}"
+                else:
+                    kwargs["Range"] = f"bytes={start}-"
+            return await client.get_object(**kwargs)
+        go.path = path
+        res = await self._fnc_wrapper(self._cli, go)
+        body = res["Body"]
         try:
-            async with self._client() as client:
-                buk, key, path = next(s3path.split_paths(include_full_path=True))
-                async def go(client, buk=buk, key=key):
-                    kwargs = {"Bucket": buk, "Key": key}
-                    # Build Range header if seek or length is specified
-                    if seek is not None or length is not None:
-                        start = seek if seek is not None else 0
-                        if length is not None:
-                            end = start + length - 1
-                            kwargs["Range"] = f"bytes={start}-{end}"
-                        else:
-                            kwargs["Range"] = f"bytes={start}-"
-                    return await client.get_object(**kwargs)
-                go.path = path
-                res = await self._fnc_wrapper(client, go)
-                body = res["Body"]
-                try:
-                    while True:
-                        chunk = await body.read(1024*1024)
-                        if not chunk:
-                            break
-                        yield chunk
-                finally:
-                    body.close()
-        except ValueError as e:
-            raise S3ClientConnectError(f"s3 connect failed: {e}") from e
+            while True:
+                chunk = await body.read(1024*1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
 
     async def download_objects_to_file(
         self,
@@ -501,13 +532,12 @@ class S3Client:
         _not_falsy(paths, "paths")
         _check_num(expiration_sec, "expiration_sec")
         results = []
-        async with self._client() as client:
-            for buk, key in paths.split_paths():
-                results.append(await client.generate_presigned_url(
-                    "get_object",
-                    Params={"Bucket": buk, "Key": key},
-                    ExpiresIn=expiration_sec
-                ))
+        for buk, key in paths.split_paths():
+            results.append(await self._cli.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": buk, "Key": key},
+                ExpiresIn=expiration_sec
+            ))
         return results
     
     async def presign_post_urls(
@@ -529,14 +559,13 @@ class S3Client:
         _check_num(expiration_sec, "expiration_sec")
         crc64nvmes = crc64nvmes if crc64nvmes else [None] * len(paths)
         results = []
-        async with self._client() as client:
-            for (buk, key), crc in zip(paths.split_paths(), crc64nvmes):
-                args = {"Bucket": buk, "Key": key, "ExpiresIn": expiration_sec}
-                if crc:
-                    args["Fields"] = {"x-amz-checksum-crc64nvme": crc}
-                    args["Conditions"] = [{"x-amz-checksum-crc64nvme": crc}]
-                ret = await client.generate_presigned_post(**args)
-                results.append(PresignedPost(ret["url"], ret["fields"]))
+        for (buk, key), crc in zip(paths.split_paths(), crc64nvmes):
+            args = {"Bucket": buk, "Key": key, "ExpiresIn": expiration_sec}
+            if crc:
+                args["Fields"] = {"x-amz-checksum-crc64nvme": crc}
+                args["Conditions"] = [{"x-amz-checksum-crc64nvme": crc}]
+            ret = await self._cli.generate_presigned_post(**args)
+            results.append(PresignedPost(ret["url"], ret["fields"]))
         return results
 
 

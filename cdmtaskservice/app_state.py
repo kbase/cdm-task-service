@@ -149,6 +149,7 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
         s3cfg = cfg.get_s3_config()
         # ensure clients are working before we proceed
         await s3cfg.initialize_clients()
+        dest.register("S3 clients", s3cfg.close())
         logr.info("Done")
         logr.info("Initializing CTS refdata client... ")
         refcli = await CTSRefdataClient.create(cfg.cts_root_url, cfg.cts_refdata_token)
@@ -210,6 +211,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         s3cfg = cfg.get_s3_config()
         # ensure clients are working before we proceed
         await s3cfg.initialize_clients()
+        dest.register("S3 clients", s3cfg.close())
         logr.info("Done")
         await _check_paths(s3cfg.get_internal_client(), logr, cfg)
         logr.info("Initializing MongoDB client...")

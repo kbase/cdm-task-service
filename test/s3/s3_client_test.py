@@ -2,6 +2,7 @@
 Also look in test_manual for more tests.
 """
 
+from contextlib import asynccontextmanager
 import json
 import random
 from pathlib import Path
@@ -84,9 +85,9 @@ async def _create_fail(host, akey, skey, expected, config=None, print_stacktrace
 async def test_is_bucket_writeable(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    s3c = await _client(minio)
-    # should pass without exception
-    await s3c.is_bucket_writeable("test-bucket")
+    async with _client(minio) as s3c:
+        # should pass without exception
+        await s3c.is_bucket_writeable("test-bucket")
 
 # TODO TEST add tests for checking bucket format (None input etc.). For now just test functionality
 
@@ -95,10 +96,10 @@ async def test_is_bucket_writeable(minio):
 async def test_is_bucket_writeable_fail_no_bucket(minio):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
-    s3c = await _client(minio)
-    await _is_bucket_writeable_fail(s3c, "succeed-bucket", S3BucketNotFoundError(
-        "The bucket 'succeed-bucket' was not found on the s3 system")
-    )
+    async with _client(minio) as s3c:
+        await _is_bucket_writeable_fail(s3c, "succeed-bucket", S3BucketNotFoundError(
+            "The bucket 'succeed-bucket' was not found on the s3 system")
+        )
 
 
 @pytest.mark.asyncio
@@ -107,9 +108,9 @@ async def test_is_bucket_writeable_fail_unauthed(minio, minio_unauthed_user):
     await minio.create_bucket("fail-bucket")
     
     user, pwd = minio_unauthed_user
-    s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
-    await _is_bucket_writeable_fail(s3c, "fail-bucket", S3BucketInaccessibleError(
-        "Write access denied to bucket 'fail-bucket' on the s3 system"))
+    async with await S3Client.create(minio.host, user, pwd, skip_connection_check=True) as s3c:
+        await _is_bucket_writeable_fail(s3c, "fail-bucket", S3BucketInaccessibleError(
+            "Write access denied to bucket 'fail-bucket' on the s3 system"))
 
 
 @pytest.mark.asyncio
@@ -144,13 +145,12 @@ async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
         minio.run_mc("admin", "policy", "create", minio.mc_alias, polname, tf.name)
         minio.run_mc("admin", "policy", "attach", minio.mc_alias, polname, "--user", user)
     
-        s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
-        # check that reading works
-        await s3c.get_object_meta(S3Paths(["fail-bucket-readonly/test_file"]))
-    
-        await _is_bucket_writeable_fail(s3c, "fail-bucket-readonly", S3BucketInaccessibleError(
-            "Write access denied to bucket 'fail-bucket-readonly' on the s3 system"),
-        )
+        async with await S3Client.create(minio.host, user, pwd, skip_connection_check=True) as s3c:
+            # check that reading works
+            await s3c.get_object_meta(S3Paths(["fail-bucket-readonly/test_file"]))
+            await _is_bucket_writeable_fail(s3c, "fail-bucket-readonly", S3BucketInaccessibleError(
+                "Write access denied to bucket 'fail-bucket-readonly' on the s3 system"),
+            )
     finally:
         minio.run_mc("admin", "policy", "detach", minio.mc_alias, polname, "--user", user)
         minio.run_mc("admin", "policy", "rm", minio.mc_alias, polname)
@@ -170,8 +170,8 @@ async def test_get_object_meta_single_part_w_crc64nvme(minio):
     # test that leading /s in key are ignored
     await minio.upload_file("test-bucket///test_file", b"abcdefghij", crc64nvme="e/Vz6rUQ/+o=")
 
-    s3c = await _client(minio)
-    objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))
+    async with _client(minio) as s3c:
+        objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))
     assert len(objm) == 1
     _check_obj_meta(
         objm[0],
@@ -191,8 +191,8 @@ async def test_get_object_meta_multipart_and_insecure_ssl(minio):
 
     # There's not a lot to test with insecure ssl other than it doesn't break things
     # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
-    s3c = await _client(minio, insecure_ssl=True)
-    objm = await s3c.get_object_meta(S3Paths(["test-bucket/big_test_file"]))
+    async with _client(minio, insecure_ssl=True) as s3c:
+        objm = await s3c.get_object_meta(S3Paths(["test-bucket/big_test_file"]))
     assert len(objm) == 1
     _check_obj_meta(
         objm[0],
@@ -218,9 +218,9 @@ async def test_get_object_meta_mix_w_crc64nvme(minio):
     )
     await minio.upload_file("nice-bucket/test_file", b"abcdefghij")
     
-    s3c = await _client(minio)
-    objm = await s3c.get_object_meta(S3Paths(
-        ["nice-bucket/big_test_file", "nice-bucket/test_file"]))
+    async with _client(minio) as s3c:
+        objm = await s3c.get_object_meta(S3Paths(
+            ["nice-bucket/big_test_file", "nice-bucket/test_file"]))
     assert len(objm) == 2
     _check_obj_meta(
         objm[0],
@@ -240,16 +240,17 @@ async def test_get_object_meta_mix_w_crc64nvme(minio):
 
 @pytest.mark.asyncio
 async def test_get_object_meta_fail_no_paths(minio):
-    await _get_object_meta_fail(await _client(minio), None, ValueError("paths is required"))
+    async with _client(minio) as cli:
+        await _get_object_meta_fail(cli, None, ValueError("paths is required"))
 
 
 @pytest.mark.asyncio
 async def test_get_object_meta_fail_concurrency(minio):
     p = S3Paths(["foo/bar"])
-    cli = await _client(minio)
-    for c in [0, -1, -1000000]:
-        await _get_object_meta_fail(
-            cli, p, ValueError("concurrency must be >= 1"), concurrency=c)
+    async with _client(minio) as cli:
+        for c in [0, -1, -1000000]:
+            await _get_object_meta_fail(
+                cli, p, ValueError("concurrency must be >= 1"), concurrency=c)
 
 
 @pytest.mark.asyncio
@@ -262,8 +263,9 @@ async def test_get_object_meta_fail_no_object(minio):
         "fake-bucket/foo/bar": "The path 'fake-bucket/foo/bar' was not found on the s3 system",
         "fail-bucket/foo/baz": "The path 'fail-bucket/foo/baz' was not found on the s3 system",
     }
-    for k, v in testset.items():
-        await _get_object_meta_fail(await _client(minio), S3Paths([k]), S3PathNotFoundError(v))
+    async with _client(minio) as cli:
+        for k, v in testset.items():
+            await _get_object_meta_fail(cli, S3Paths([k]), S3PathNotFoundError(v))
 
 
 @pytest.mark.asyncio
@@ -275,13 +277,13 @@ async def test_get_object_meta_fail_unauthed(minio, minio_unauthed_user):
     await minio.upload_file("fail-bucket/foo/bar", b"foo")
     
     user, pwd = minio_unauthed_user
-    s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
-    await _get_object_meta_fail(
-        s3c, S3Paths(["fail-bucket/foo/bar"]),
-        S3PathInaccessibleError(
-            "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+    async with await S3Client.create(minio.host, user, pwd, skip_connection_check=True) as s3c:
+        await _get_object_meta_fail(
+            s3c, S3Paths(["fail-bucket/foo/bar"]),
+            S3PathInaccessibleError(
+                "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+            )
         )
-    )
 
 
 @pytest.mark.asyncio
@@ -298,14 +300,15 @@ async def test_get_object_meta_fail_concurrent_paths(minio):
         await minio.upload_file(f"fail-bucket/f{contents}", contents.encode())
         paths.append(f"fail-bucket/f{contents}" + ("fail" if i == fails_on else ""))
     
-    for con in [1, 2, 5, 10]:
-        await _get_object_meta_fail(
-            await _client(minio),
-            S3Paths(paths),
-            S3PathNotFoundError(
-                f"The path 'fail-bucket/f1000{fails_on}fail' was not found on the s3 system"),
-            concurrency=con
-        )
+    async with _client(minio) as cli:
+        for con in [1, 2, 5, 10]:
+            await _get_object_meta_fail(
+                cli,
+                S3Paths(paths),
+                S3PathNotFoundError(
+                    f"The path 'fail-bucket/f1000{fails_on}fail' was not found on the s3 system"),
+                concurrency=con
+            )
 
 
 async def _get_object_meta_fail(s3c, paths, expected, concurrency=1, print_stacktrace=False):
@@ -325,11 +328,11 @@ async def test_download_objects_to_file(minio, tmp_path):
         2,  # 12MB total
     )
 
-    s3c = await _client(minio)
-    await s3c.download_objects_to_file(
-        S3Paths(["test-bucket/test_file", "test-bucket/big_test_file"]),
-        [tmp_path / "somedir" / "tf1", tmp_path / "otherdir" / "tf2"]
-    )
+    async with _client(minio) as s3c:
+        await s3c.download_objects_to_file(
+            S3Paths(["test-bucket/test_file", "test-bucket/big_test_file"]),
+            [tmp_path / "somedir" / "tf1", tmp_path / "otherdir" / "tf2"]
+        )
     with open(tmp_path / "somedir" / "tf1", mode="rb") as f:
         assert f.read() == b"imsounique"
     with open(tmp_path / "otherdir" / "tf2", mode="rb") as f:
@@ -338,27 +341,27 @@ async def test_download_objects_to_file(minio, tmp_path):
 
 @pytest.mark.asyncio
 async def test_download_objects_to_file_fail_bad_paths(minio):
-    cli = await _client(minio)
     lp = [Path("foo")]
     s3p = S3Paths(["foo/bar"])
-    await _download_objects_to_file_fail(cli, None, lp, ValueError("s3paths is required"))
-    await _download_objects_to_file_fail(cli, s3p, None, ValueError("local_paths is required"))
-    await _download_objects_to_file_fail(cli, s3p, [], ValueError("local_paths is required"))
-    await _download_objects_to_file_fail(
-        cli, s3p, ["f", "t"], ValueError(
-            "The number of local paths must equal the number of S3 paths"
+    async with _client(minio) as cli:
+        await _download_objects_to_file_fail(cli, None, lp, ValueError("s3paths is required"))
+        await _download_objects_to_file_fail(cli, s3p, None, ValueError("local_paths is required"))
+        await _download_objects_to_file_fail(cli, s3p, [], ValueError("local_paths is required"))
+        await _download_objects_to_file_fail(
+            cli, s3p, ["f", "t"], ValueError(
+                "The number of local paths must equal the number of S3 paths"
+            )
         )
-    )
 
 
 @pytest.mark.asyncio
 async def test_download_objects_to_file_fail_concurrency(minio):
     p = S3Paths(["foo/bar"])
     lp = [Path("foo")]
-    cli = await _client(minio)
-    for c in [0, -1, -1000000]:
-        await _download_objects_to_file_fail(
-            cli, p, lp, ValueError("concurrency must be >= 1"), concurrency=c)
+    async with _client(minio) as cli:
+        for c in [0, -1, -1000000]:
+            await _download_objects_to_file_fail(
+                cli, p, lp, ValueError("concurrency must be >= 1"), concurrency=c)
 
 
 @pytest.mark.asyncio
@@ -371,10 +374,10 @@ async def test_download_objects_to_file_fail_no_object(minio, tmp_path):
         "fake-bucket/foo/bar": "The path 'fake-bucket/foo/bar' was not found on the s3 system",
         "fail-bucket/foo/baz": "The path 'fail-bucket/foo/baz' was not found on the s3 system",
     }
-    cli = await _client(minio)
     lp = [tmp_path / "foo"]
-    for k, v in testset.items():
-        await _download_objects_to_file_fail(cli, S3Paths([k]), lp, S3PathNotFoundError(v))
+    async with _client(minio) as cli:
+        for k, v in testset.items():
+            await _download_objects_to_file_fail(cli, S3Paths([k]), lp, S3PathNotFoundError(v))
 
 
 @pytest.mark.asyncio
@@ -386,13 +389,13 @@ async def test_download_objects_to_file_fail_unauthed(minio, minio_unauthed_user
     await minio.upload_file("fail-bucket/foo/bar", b"foo")
     
     user, pwd = minio_unauthed_user
-    s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
-    await _download_objects_to_file_fail(
-        s3c, S3Paths(["fail-bucket/foo/bar"]), [tmp_path / "foo"],
-        S3PathInaccessibleError(
-            "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+    async with await S3Client.create(minio.host, user, pwd, skip_connection_check=True) as s3c:
+        await _download_objects_to_file_fail(
+            s3c, S3Paths(["fail-bucket/foo/bar"]), [tmp_path / "foo"],
+            S3PathInaccessibleError(
+                "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+            )
         )
-    )
 
 
 @pytest.mark.asyncio
@@ -409,15 +412,16 @@ async def test_download_objects_to_file_fail_concurrent_paths(minio, tmp_path):
         await minio.upload_file(f"fail-bucket/f{contents}", contents.encode())
         paths.append(f"fail-bucket/f{contents}" + ("fail" if i == fails_on else ""))
     
-    for con in [1, 2, 5, 10]:
-        await _download_objects_to_file_fail(
-            await _client(minio),
-            S3Paths(paths),
-            [tmp_path / "foo"] * 10,
-            S3PathNotFoundError(
-                f"The path 'fail-bucket/f1000{fails_on}fail' was not found on the s3 system"),
-            concurrency=con
-        )
+    async with _client(minio) as cli:
+        for con in [1, 2, 5, 10]:
+            await _download_objects_to_file_fail(
+                cli,
+                S3Paths(paths),
+                [tmp_path / "foo"] * 10,
+                S3PathNotFoundError(
+                    f"The path 'fail-bucket/f1000{fails_on}fail' was not found on the s3 system"),
+                concurrency=con
+            )
 
 
 async def _download_objects_to_file_fail(
@@ -445,58 +449,44 @@ async def test_stream_object(minio):
         2,  # 12MB total
     )
 
-    s3c = await _client(minio)
-    await _stream_and_assert(s3c, "test-bucket/test_file", b"imsounique")
-    await _stream_and_assert(s3c, "test-bucket/big_test_file", b"abcdefghij" * 600000 * 2)
+    async with _client(minio) as s3c:
+        await _stream_and_assert(s3c, "test-bucket/test_file", b"imsounique")
+        await _stream_and_assert(s3c, "test-bucket/big_test_file", b"abcdefghij" * 600000 * 2)
 
-    # Test with seek only - "imsounique"[5:] = "nique"
-    await _stream_and_assert(s3c, "test-bucket/test_file", b"nique", seek=5)
+        # Test with seek only - "imsounique"[5:] = "nique"
+        await _stream_and_assert(s3c, "test-bucket/test_file", b"nique", seek=5)
 
-    # Test with length only - "imsounique"[:5] = "imsou"
-    await _stream_and_assert(s3c, "test-bucket/test_file", b"imsou", length=5)
+        # Test with length only - "imsounique"[:5] = "imsou"
+        await _stream_and_assert(s3c, "test-bucket/test_file", b"imsou", length=5)
 
-    # Test with both seek and length - "imsounique"[3:8] = "ouniq"
-    await _stream_and_assert(s3c, "test-bucket/test_file", b"ouniq", seek=3, length=5)
+        # Test with both seek and length - "imsounique"[3:8] = "ouniq"
+        await _stream_and_assert(s3c, "test-bucket/test_file", b"ouniq", seek=3, length=5)
 
 
 @pytest.mark.asyncio
 async def test_stream_object_fail_bad_input(minio):
-    s3c = await _client(minio)
+    async with _client(minio) as s3c:
+        await _stream_object_fail(s3c, None, ValueError("s3path is required"))
+        await _stream_object_fail(s3c, S3Paths(["foo/bar", "baz/bat"]), ValueError(
+            "Only one path is allowed"
+        ))
 
-    await _stream_object_fail(s3c, None, ValueError("s3path is required"))
-    await _stream_object_fail(s3c, S3Paths(["foo/bar", "baz/bat"]), ValueError(
-        "Only one path is allowed"
-    ))
+        # Test with invalid seek values
+        await _stream_object_fail(
+            s3c, S3Paths(["foo/bar"]), ValueError("seek must be >= 0"), seek=-1
+        )
+        await _stream_object_fail(
+            s3c, S3Paths(["foo/bar"]), ValueError("seek must be >= 0"), seek=-100
+        )
 
-    # Test with invalid seek values
-    await _stream_object_fail(
-        s3c, S3Paths(["foo/bar"]), ValueError("seek must be >= 0"), seek=-1
-    )
-    await _stream_object_fail(
-        s3c, S3Paths(["foo/bar"]), ValueError("seek must be >= 0"), seek=-100
-    )
+        # Test with invalid length values
+        await _stream_object_fail(
+            s3c, S3Paths(["foo/bar"]), ValueError("length must be >= 1"), length=0
+        )
+        await _stream_object_fail(
+            s3c, S3Paths(["foo/bar"]), ValueError("length must be >= 1"), length=-1
+        )
 
-    # Test with invalid length values
-    await _stream_object_fail(
-        s3c, S3Paths(["foo/bar"]), ValueError("length must be >= 1"), length=0
-    )
-    await _stream_object_fail(
-        s3c, S3Paths(["foo/bar"]), ValueError("length must be >= 1"), length=-1
-    )
-
-
-@pytest.mark.asyncio
-async def test_stream_object_fail_bad_connection(minio):
-    await minio.clean()  # couldn't get this to work as a fixture
-    await minio.create_bucket("test-bucket")
-    await minio.upload_file("test-bucket//test_file", b"imsounique")
-    
-    s3c = await S3Client.create(
-        f"localhost:{minio.port}", minio.access_key, minio.secret_key, skip_connection_check=True
-    )
-    await _stream_object_fail(s3c, S3Paths(["foo/bar"]), S3ClientConnectError(
-        f"s3 connect failed: Invalid endpoint: localhost:{minio.port}"
-    ))
 
 
 @pytest.mark.asyncio
@@ -509,9 +499,9 @@ async def test_stream_object_fail_no_object(minio):
         "fake-bucket/foo/bar": "The path 'fake-bucket/foo/bar' was not found on the s3 system",
         "fail-bucket/foo/baz": "The path 'fail-bucket/foo/baz' was not found on the s3 system",
     }
-    cli = await _client(minio)
-    for k, v in testset.items():
-        await _stream_object_fail(cli, S3Paths([k]), S3PathNotFoundError(v))
+    async with _client(minio) as cli:
+        for k, v in testset.items():
+            await _stream_object_fail(cli, S3Paths([k]), S3PathNotFoundError(v))
 
 
 @pytest.mark.asyncio
@@ -523,17 +513,18 @@ async def test_stream_object_fail_unauthed(minio, minio_unauthed_user):
     await minio.upload_file("fail-bucket/foo/bar", b"foo")
     
     user, pwd = minio_unauthed_user
-    s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
-    await _stream_object_fail(
-        s3c, S3Paths(["fail-bucket/foo/bar"]),
-        S3PathInaccessibleError(
-            "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+    async with await S3Client.create(minio.host, user, pwd, skip_connection_check=True) as s3c:
+        await _stream_object_fail(
+            s3c, S3Paths(["fail-bucket/foo/bar"]),
+            S3PathInaccessibleError(
+                "Read access denied to path 'fail-bucket/foo/bar' on the s3 system"
+            )
         )
-    )
 
 
 async def _stream_object_fail(
-    cli: S3Client, path: S3Paths, expected: Exception, seek=None, length=None, print_stacktrace=False
+    cli: S3Client, path: S3Paths, expected: Exception, seek=None, length=None,
+    print_stacktrace=False
 ):
     with pytest.raises(Exception) as got:
         res = cli.stream_object(path, seek=seek, length=length)
@@ -555,12 +546,16 @@ async def test_upload_objects_from_file(minio, tmp_path):
     with open(tmp_path / "dir2" / "17mibfile", mode="w") as f:
         f.write("0123456789abcdef" * 1114112)  # 17 MiB
 
-    s3c = await _client(minio)
-    await s3c.upload_objects_from_file(
-        S3Paths(["test-bucket/keydir/small", "test-bucket/8mib", "test-bucket/large/17mib"]),
-        [tmp_path / "smallfile", tmp_path / "dir1" / "8mibfile", tmp_path / "dir2" / "17mibfile"],
-        ["oYZB5jZwpls=", "KmOygu0KcUY=", "JMDFWLRWIdo="],
-    )
+    async with _client(minio) as s3c:
+        await s3c.upload_objects_from_file(
+            S3Paths(["test-bucket/keydir/small", "test-bucket/8mib", "test-bucket/large/17mib"]),
+            [
+                tmp_path / "smallfile",
+                tmp_path / "dir1" / "8mibfile",
+                tmp_path / "dir2" / "17mibfile"
+            ],
+            ["oYZB5jZwpls=", "KmOygu0KcUY=", "JMDFWLRWIdo="],
+        )
     
     await _check_object(
         minio,
@@ -608,91 +603,91 @@ async def _check_object(minio, bucket, key, crc, etag, content):
 
 @pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_bad_file_info(minio):
-    cli = await _client(minio)
     lp = [Path("foo")]
     s3p = S3Paths(["foo/bar"])
     crc = ["crchere"]
-    await _upload_objects_from_file_fail(cli, None, lp, crc, ValueError("s3paths is required"))
-    await _upload_objects_from_file_fail(
-        cli, s3p, None, crc, ValueError("local_paths is required")
-    )
-    await _upload_objects_from_file_fail(cli, s3p, [], crc, ValueError("local_paths is required"))
-    await _upload_objects_from_file_fail(
-        cli, s3p, lp, None, ValueError("base64_crc64nvmes is required")
-    )
-    await _upload_objects_from_file_fail(cli, s3p, lp, [], ValueError(
-        "base64_crc64nvmes is required"
-    ))
-    await _upload_objects_from_file_fail(cli, s3p, ["f", "t"], crc, ValueError(
-        "The number of local paths must equal the number of S3 paths"
-    ))
-    await _upload_objects_from_file_fail(cli, s3p, lp, ["c1", "c2"], ValueError(
-        "The number of local paths must equal the number of checksums"
-    ))
-    await _upload_objects_from_file_fail(cli, S3Paths(["foo/bar", "baz/b"]), lp, crc, ValueError(
-        "The number of local paths must equal the number of S3 paths"
-    ))
+    async with _client(minio) as cli:
+        await _upload_objects_from_file_fail(cli, None, lp, crc, ValueError("s3paths is required"))
+        await _upload_objects_from_file_fail(
+            cli, s3p, None, crc, ValueError("local_paths is required")
+        )
+        await _upload_objects_from_file_fail(
+            cli, s3p, [], crc, ValueError("local_paths is required")
+        )
+        await _upload_objects_from_file_fail(
+            cli, s3p, lp, None, ValueError("base64_crc64nvmes is required")
+        )
+        await _upload_objects_from_file_fail(cli, s3p, lp, [], ValueError(
+            "base64_crc64nvmes is required"
+        ))
+        await _upload_objects_from_file_fail(cli, s3p, ["f", "t"], crc, ValueError(
+            "The number of local paths must equal the number of S3 paths"
+        ))
+        await _upload_objects_from_file_fail(cli, s3p, lp, ["c1", "c2"], ValueError(
+            "The number of local paths must equal the number of checksums"
+        ))
+        await _upload_objects_from_file_fail(
+            cli, S3Paths(["foo/bar", "baz/b"]), lp, crc,
+            ValueError("The number of local paths must equal the number of S3 paths")
+        )
 
 
 @pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_concurrency(minio):
     p = S3Paths(["foo/bar"])
     lp = [Path("foo")]
-    cli = await _client(minio)
-    for c in [0, -1, -1000000]:
-        await _upload_objects_from_file_fail(
-            cli, p, lp, ["c"], ValueError("concurrency must be >= 1"), concurrency=c
-    )
+    async with _client(minio) as cli:
+        for c in [0, -1, -1000000]:
+            await _upload_objects_from_file_fail(
+                cli, p, lp, ["c"], ValueError("concurrency must be >= 1"), concurrency=c
+            )
 
 
 @pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_huge_file(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    cli = await _client(minio)
-    
     with open(tmp_path / "smallfile", mode="w") as f:
         f.write("foobar")
-    with patch("cdmtaskservice.s3.client._MULTIPART_MAXIMUM_SIZE", 5):
-        await _upload_objects_from_file_fail(
-            cli,
-            S3Paths(["foo/bar"]),
-            [tmp_path / "smallfile"],
-            ["oYZB5jZwpls="],
-            ValueError(f"File {tmp_path}/smallfile's size is greater than the S3 limit of 5")
-    )
+    async with _client(minio) as cli:
+        with patch("cdmtaskservice.s3.client._MULTIPART_MAXIMUM_SIZE", 5):
+            await _upload_objects_from_file_fail(
+                cli,
+                S3Paths(["foo/bar"]),
+                [tmp_path / "smallfile"],
+                ["oYZB5jZwpls="],
+                ValueError(f"File {tmp_path}/smallfile's size is greater than the S3 limit of 5")
+            )
 
 
 @pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_bad_crc(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    cli = await _client(minio)
-    
     with open(tmp_path / "smallfile", mode="w") as f:
         f.write("0123456789abcdef" * 589824)  # 9 MiB, force multipart
-    await _upload_objects_from_file_fail(
-        cli,
-        S3Paths(["test-bucket/bar"]),
-        [tmp_path / "smallfile"],
-        ["xYZB5jZwpls="],
-        S3ChecksumMismatchError(f"Checksum mismatch for upload to test-bucket/bar")
-    )
+    async with _client(minio) as cli:
+        await _upload_objects_from_file_fail(
+            cli,
+            S3Paths(["test-bucket/bar"]),
+            [tmp_path / "smallfile"],
+            ["xYZB5jZwpls="],
+            S3ChecksumMismatchError(f"Checksum mismatch for upload to test-bucket/bar")
+        )
 
 
 @pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_no_file(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    cli = await _client(minio)
-    
-    await _upload_objects_from_file_fail(
-        cli,
-        S3Paths(["foo/bar"]),
-        [Path("smallfile")],
-        ["xYZB5jZwpls="],
-        FileNotFoundError(2, "File not found: smallfile")
-    )
+    async with _client(minio) as cli:
+        await _upload_objects_from_file_fail(
+            cli,
+            S3Paths(["foo/bar"]),
+            [Path("smallfile")],
+            ["xYZB5jZwpls="],
+            FileNotFoundError(2, "File not found: smallfile")
+        )
 
 
 @pytest.mark.asyncio
@@ -705,8 +700,8 @@ async def test_upload_objects_from_file_fail_unauthed(minio, minio_unauthed_user
         f.write("foobar")
     
     user, pwd = minio_unauthed_user
-    s3c = await S3Client.create(minio.host, user, pwd, skip_connection_check=True)
-    await _upload_objects_from_file_fail(
+    async with await S3Client.create(minio.host, user, pwd, skip_connection_check=True) as s3c:
+        await _upload_objects_from_file_fail(
             s3c,
             S3Paths(["fail-bucket/bar"]),
             [tmp_path / "smallfile"],
@@ -714,7 +709,7 @@ async def test_upload_objects_from_file_fail_unauthed(minio, minio_unauthed_user
             S3PathInaccessibleError(
                 "Write access denied to path 'fail-bucket/bar' on the s3 system"
             )
-    )
+        )
 
 
 @pytest.mark.asyncio
@@ -735,15 +730,17 @@ async def test_upload_objects_from_file_fail_concurrent_paths(minio, tmp_path):
         s3paths.append(f"fail-bucket/in{i}")
         crcs.append("xYZB5jZwpls=" if fails_on == i else "oYZB5jZwpls=")
     
-    for con in [1, 2, 5, 10]:
-        await _upload_objects_from_file_fail(
-            await _client(minio),
-            S3Paths(s3paths),
-            paths,
-            crcs,
-            S3ChecksumMismatchError(f"Checksum mismatch for upload to fail-bucket/in{fails_on}"),
-            concurrency=con
-        )
+    async with _client(minio) as cli:
+        for con in [1, 2, 5, 10]:
+            await _upload_objects_from_file_fail(
+                cli,
+                S3Paths(s3paths),
+                paths,
+                crcs,
+                S3ChecksumMismatchError(
+                    f"Checksum mismatch for upload to fail-bucket/in{fails_on}"),
+                concurrency=con
+            )
 
 
 async def _upload_objects_from_file_fail(
@@ -756,10 +753,11 @@ async def _upload_objects_from_file_fail(
 
 @pytest.mark.asyncio
 async def test_presign_get_urls():
-    s3c = await S3Client.create(
-        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
-    s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
-    urls = await s3c.presign_get_urls(s3p, expiration_sec=10 * 60)
+    async with await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
+    ) as s3c:
+        s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
+        urls = await s3c.presign_get_urls(s3p, expiration_sec=10 * 60)
     assert len(urls) == 2
 
     assert urls[0].startswith("https://pubminio.kbase.us/bukkit/myfile?"
@@ -777,11 +775,14 @@ async def test_presign_get_urls():
 
 @pytest.mark.asyncio
 async def test_presign_get_urls_fail():
-    s3c = await S3Client.create(
-        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
-    await _presign_get_urls_fail(s3c, None, 1, "paths is required")
-    for t in [0, -1, -100, -1000000]:
-        await _presign_get_urls_fail(s3c, S3Paths(["foo/bar"]), t, "expiration_sec must be >= 1")
+    async with await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
+    ) as s3c:
+        await _presign_get_urls_fail(s3c, None, 1, "paths is required")
+        for t in [0, -1, -100, -1000000]:
+            await _presign_get_urls_fail(
+                s3c, S3Paths(["foo/bar"]), t, "expiration_sec must be >= 1"
+            )
     
     
 async def _presign_get_urls_fail(s3c, paths, expiration, expected):
@@ -792,33 +793,34 @@ async def _presign_get_urls_fail(s3c, paths, expiration, expected):
 
 @pytest.mark.asyncio
 async def test_presign_post_urls():
-    s3c = await S3Client.create(
-        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
-    s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
-    # not really a good way to test that expiration works without reverse engineering the
-    # policy field I guess?
-    urls = await s3c.presign_post_urls(s3p, expiration_sec=10 * 60)
+    async with await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
+    ) as s3c:
+        s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
+        # not really a good way to test that expiration works without reverse engineering the
+        # policy field I guess?
+        urls = await s3c.presign_post_urls(s3p, expiration_sec=10 * 60)
     assert len(urls) == 2
-    
+
     assert urls[0].url == "https://pubminio.kbase.us/bukkit"
     _presign_post_urls_check_fields(urls[0], "myfile")
-    
+
     assert urls[1].url == "https://pubminio.kbase.us/otherbukkit"
     _presign_post_urls_check_fields(urls[1], "otherdir/somefile")
 
 
 @pytest.mark.asyncio
 async def test_presign_post_urls_with_crc():
-    s3c = await S3Client.create(
-        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
-    s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
-
-    urls = await s3c.presign_post_urls(s3p, ["crc1", "fakecrc2"], expiration_sec=10 * 60)
+    async with await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
+    ) as s3c:
+        s3p = S3Paths(["bukkit/myfile", "otherbukkit/otherdir/somefile"])
+        urls = await s3c.presign_post_urls(s3p, ["crc1", "fakecrc2"], expiration_sec=10 * 60)
     assert len(urls) == 2
-    
+
     assert urls[0].url == "https://pubminio.kbase.us/bukkit"
     _presign_post_urls_check_fields(urls[0], "myfile", "crc1")
-    
+
     assert urls[1].url == "https://pubminio.kbase.us/otherbukkit"
     _presign_post_urls_check_fields(urls[1], "otherdir/somefile", "fakecrc2")
 
@@ -837,21 +839,22 @@ def _presign_post_urls_check_fields(presign_post, key, crc=None):
 
 @pytest.mark.asyncio
 async def test_presign_post_urls_fail():
-    s3c = await S3Client.create(
-        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True)
-    await _presign_get_post_fail(s3c, None, None, 1, "paths is required")
-    for crc in [["fake", "fake", "fake"], ["fake"]]:
-        await _presign_get_post_fail(
-            s3c,
-            S3Paths(["foo/bar", "baz/bat"]),
-            crc,
-            1,
-            "If checksums are supplied, there must be one per path"
-        )
-    for t in [0, -1, -100, -1000000]:
-        await _presign_get_post_fail(
-            s3c, S3Paths(["foo/bar"]), None, t, "expiration_sec must be >= 1"
-        )
+    async with await S3Client.create(
+        "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
+    ) as s3c:
+        await _presign_get_post_fail(s3c, None, None, 1, "paths is required")
+        for crc in [["fake", "fake", "fake"], ["fake"]]:
+            await _presign_get_post_fail(
+                s3c,
+                S3Paths(["foo/bar", "baz/bat"]),
+                crc,
+                1,
+                "If checksums are supplied, there must be one per path"
+            )
+        for t in [0, -1, -100, -1000000]:
+            await _presign_get_post_fail(
+                s3c, S3Paths(["foo/bar"]), None, t, "expiration_sec must be >= 1"
+            )
     
     
 async def _presign_get_post_fail(s3c, paths, checksums, expiration, expected):
@@ -860,9 +863,12 @@ async def _presign_get_post_fail(s3c, paths, checksums, expiration, expected):
     assert_exception_correct(got.value, ValueError(expected))
 
 
+@asynccontextmanager
 async def _client(minio, insecure_ssl=False):
-    return await S3Client.create(
-        minio.host,  minio.access_key, minio.secret_key, insecure_ssl=insecure_ssl)
+    async with await S3Client.create(
+        minio.host, minio.access_key, minio.secret_key, insecure_ssl=insecure_ssl
+    ) as s3c:
+        yield s3c
 
 
 def _check_obj_meta(objm, path, e_tag, size, crc64nvme):

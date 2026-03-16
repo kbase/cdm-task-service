@@ -43,6 +43,7 @@ RUN mkdir /cts
 COPY cdmtaskservice /cts/cdmtaskservice
 COPY scripts/* /cts
 COPY cdmtaskservice_*config.toml.jinja /cts
+
 COPY --from=build /craneinstall/crane /cts
 COPY --from=build /git/git_commit.py /cts/cdmtaskservice/
 ENV KBCTS_CRANE_PATH=/cts/crane
