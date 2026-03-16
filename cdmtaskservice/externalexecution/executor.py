@@ -44,6 +44,7 @@ class Executor:
         )
         self._logr = logging.getLogger(__name__)
         self._args = None
+        self._s3cli = None  # created lazily
     
     async def __aenter__(self):
         return self
@@ -54,6 +55,8 @@ class Executor:
     async def close(self):
         """ Close any resources associated with the executor. """
         await self._sess.close()
+        if self._s3cli:
+            await self._s3cli.close()
     
     async def execute(self):
         """ Run the executor. Returns True for success, False for fail. """
