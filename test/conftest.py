@@ -5,6 +5,7 @@ Configure pytest fixtures and helper functions for this directory.
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 import pytest
 import pytest_asyncio
+import os
 import time
 import traceback
 
@@ -72,9 +73,10 @@ def minio() -> MinioController:
 
 @pytest.fixture(scope="module")
 def minio_unauthed_user(minio) -> (str, str):
-    minio.run_mc("admin", "user", "add", minio.mc_alias, "baduser", "badpsswd")
+    yield os.environ["S3_BAD_USER_KEY"], os.environ["S3_BAD_USER_SECRET"]
+    # minio.run_mc("admin", "user", "add", minio.mc_alias, "baduser", "badpsswd")
     
-    yield ("baduser", "badpsswd")
+    # yield ("baduser", "badpsswd")
 
 
 @pytest.fixture(scope="module")

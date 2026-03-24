@@ -5,6 +5,7 @@ Also look in test_manual for more tests.
 from contextlib import asynccontextmanager
 import json
 import random
+import os
 from pathlib import Path
 import pytest
 from unittest.mock import patch
@@ -119,6 +120,7 @@ async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
     await minio.create_bucket("fail-bucket-readonly")
     await minio.upload_file("fail-bucket-readonly/test_file", b"abcdefghij")
     user, pwd = minio_unauthed_user
+    user_name = os.environ["S3_BAD_USER_NAME"]
     
     policy = {
         "Version": "2012-10-17",
@@ -135,15 +137,22 @@ async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
             }
         ]
     }
-    polname = "s3_client_test_readonly"
+    polname = "s3clienttestreadonly"
     # add some crap to the filename to prevent clobbers
-    polfile = Path("./temp_s3_client_test_policy_file_ipjiajgieajjaptya.json")
+    # polfile = Path("./temp_s3_client_test_policy_file_ipjiajgieajjaptya.json")
     try:
-        with open(polfile, "w") as tf:
-            json.dump(policy, tf, indent=4)
-        # file must be closed or mc complains about missing content length headers
-        minio.run_mc("admin", "policy", "create", minio.mc_alias, polname, tf.name)
-        minio.run_mc("admin", "policy", "attach", minio.mc_alias, polname, "--user", user)
+        async with minio.get_client(iam=True) as cli:
+            await cli.put_user_policy(
+                UserName=user_name,
+                PolicyName=polname,
+                PolicyDocument=json.dumps(policy),
+        )
+        
+        # with open(polfile, "w") as tf:
+        #     json.dump(policy, tf, indent=4)
+        # # file must be closed or mc complains about missing content length headers
+        # minio.run_mc("admin", "policy", "create", minio.mc_alias, polname, tf.name)
+        # minio.run_mc("admin", "policy", "attach", minio.mc_alias, polname, "--user", user)
     
         async with await S3Client.create(minio.host, user, pwd, skip_connection_check=True) as s3c:
             # check that reading works
@@ -152,9 +161,11 @@ async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
                 "Write access denied to bucket 'fail-bucket-readonly' on the s3 system"),
             )
     finally:
-        minio.run_mc("admin", "policy", "detach", minio.mc_alias, polname, "--user", user)
-        minio.run_mc("admin", "policy", "rm", minio.mc_alias, polname)
-        polfile.unlink(missing_ok=True)
+        async with minio.get_client(iam=True) as cli:
+            await cli.delete_user_policy(UserName=user_name, PolicyName=polname)
+        # minio.run_mc("admin", "policy", "detach", minio.mc_alias, polname, "--user", user)
+        # minio.run_mc("admin", "policy", "rm", minio.mc_alias, polname)
+        # polfile.unlink(missing_ok=True)
 
 
 async def _is_bucket_writeable_fail(s3c, bucket, expected, print_stacktrace=False):
@@ -167,8 +178,7 @@ async def _is_bucket_writeable_fail(s3c, bucket, expected, print_stacktrace=Fals
 async def test_get_object_meta_single_part_w_crc64nvme(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    # test that leading /s in key are ignored
-    await minio.upload_file("test-bucket///test_file", b"abcdefghij", crc64nvme="e/Vz6rUQ/+o=")
+    await minio.upload_file("test-bucket/test_file", b"abcdefghij", crc64nvme="e/Vz6rUQ/+o=")
 
     async with _client(minio) as s3c:
         objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))
@@ -321,7 +331,7 @@ async def _get_object_meta_fail(s3c, paths, expected, concurrency=1, print_stack
 async def test_download_objects_to_file(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    await minio.upload_file("test-bucket//test_file", b"imsounique")
+    await minio.upload_file("test-bucket/test_file", b"imsounique")
     await minio.upload_file(
         "test-bucket/big_test_file",
         b"abcdefghij" * 600000,
@@ -442,7 +452,7 @@ async def _stream_and_assert(s3c, file_path, expected, seek=None, length=None):
 async def test_stream_object(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    await minio.upload_file("test-bucket//test_file", b"imsounique")
+    await minio.upload_file("test-bucket/test_file", b"imsounique")
     await minio.upload_file(
         "test-bucket/big_test_file",
         b"abcdefghij" * 600000,
@@ -661,7 +671,25 @@ async def test_upload_objects_from_file_fail_huge_file(minio, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_upload_objects_from_file_fail_bad_crc(minio, tmp_path):
+async def test_upload_objects_from_file_fail_bad_crc_single_part(minio, tmp_path):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    with open(tmp_path / "smallfile", mode="w") as f:
+        f.write("foobar")  # small file, single-part upload
+    async with _client(minio) as cli:
+        await _upload_objects_from_file_fail(
+            cli,
+            S3Paths(["test-bucket/bar"]),
+            [tmp_path / "smallfile"],
+            ["xYZB5jZwpls="],  # actual is oYZB5jZwpls=
+            S3ChecksumMismatchError(f"Checksum mismatch for upload to test-bucket/bar")
+        )
+
+
+@pytest.mark.asyncio
+async def test_upload_objects_from_file_fail_bad_crc_multipart(minio, tmp_path):
+    # CEPH appears (?) to have a bug in full object CRC handling for multipart
+    # uploads, so the code path is different from single part
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     with open(tmp_path / "smallfile", mode="w") as f:
@@ -671,9 +699,28 @@ async def test_upload_objects_from_file_fail_bad_crc(minio, tmp_path):
             cli,
             S3Paths(["test-bucket/bar"]),
             [tmp_path / "smallfile"],
-            ["xYZB5jZwpls="],
+            ["x+KiHdDNTNM="],  # actual is D+KiHdDNTNM=
             S3ChecksumMismatchError(f"Checksum mismatch for upload to test-bucket/bar")
         )
+
+
+@pytest.mark.asyncio
+async def test_upload_objects_from_file_fail_bad_crc_multipart_part(minio, tmp_path):
+    # Verifies CEPH validates per-part checksums when ChecksumAlgorithm is set on upload_part.
+    # Pass the correct full-body CRC so any failure must come from the per-part check.
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    with open(tmp_path / "largefile", mode="w") as f:
+        f.write("0123456789abcdef" * 589824)  # 9 MiB, force multipart
+    async with _client(minio) as cli:
+        with patch.object(cli, "_b64_crc64nvme", return_value="AAAAAAAAAAA="):
+            await _upload_objects_from_file_fail(
+                cli,
+                S3Paths(["test-bucket/bar"]),
+                [tmp_path / "largefile"],
+                ["D+KiHdDNTNM="],  # correct full-body CRC
+                S3ChecksumMismatchError("Checksum mismatch for upload to test-bucket/bar")
+            )
 
 
 @pytest.mark.asyncio

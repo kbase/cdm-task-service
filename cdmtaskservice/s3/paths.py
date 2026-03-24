@@ -10,7 +10,8 @@ import unicodedata
 # https://code.jgi.doe.gov/advanced-analysis/jaws-docs/-/issues/86
 # These characters are obnoxious in filenames anyway
 # May need to add more characters as problems are discovered
-# Double forward slash is disallowed by S3
+# Double forward slash causes issues on POSIX filesystems when files are staged locally;
+# S3-compatible backends also handle // inconsistently (e.g. Minio collapses, Ceph preserves)
 _DISALLOWED_CHARACTERS = re.compile(r"([';]|[/]{2})")
 
 
@@ -69,16 +70,24 @@ def validate_path(path: str, index: int = None) -> str:
     
     Returns a normalized path.
     """
-    # keys can have spaces and / but not //, except for the first characters
+    # keys can have spaces and single / but not //, and keys cannot start with /
     i = f" at index {index}" if index is not None else ""
     if not path or not path.strip():
         raise S3PathSyntaxError(f"The s3 path{i} cannot be null or a whitespace string")
-    parts = path.lstrip().lstrip("/").split("/", 1)  # ignore leading /s in the bucket, be nice
+    stripped = path.lstrip()
+    if stripped.startswith("/"):
+        raise S3PathSyntaxError(f"Path '{path}'{i} cannot start with '/'")
+    parts = stripped.split("/", 1)
     if len(parts) != 2:
         raise S3PathSyntaxError(
             f"Path '{path}'{i} must start with the s3 bucket and include a key")
     bucket = validate_bucket_name(parts[0], index=index)
-    key = parts[1].lstrip("/")  # Leading /s are ignored by s3, but spaces and trailing /s count
+    key = parts[1]
+    if not key:
+        raise S3PathSyntaxError(
+            f"Path '{path}'{i} must start with the s3 bucket and include a key")
+    if key.startswith("/"):
+        raise S3PathSyntaxError(f"Path '{path}'{i}'s key cannot start with '/'")
     if len(key.encode("UTF-8")) > 1024:
         raise S3PathSyntaxError(f"Path '{path}'{i}'s key is longer than 1024 bytes in UTF-8")
     match_ = _DISALLOWED_CHARACTERS.search(key)

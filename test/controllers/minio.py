@@ -2,13 +2,14 @@ from aiobotocore.session import get_session
 import io
 import os
 from pathlib import Path
-import shutil
-import subprocess
-import tempfile
-import time
+# import shutil
+# import subprocess
+# import tempfile
+# import time
 from typing import Any
 
-from utils import find_free_port
+# from utils import find_free_port
+
 
 class MinioController:
     # adapted from https://github.com/kbase/java_test_utilities/blob/develop/src/main/java/us/kbase/testutils/controllers/minio/MinioController.java
@@ -22,59 +23,61 @@ class MinioController:
         root_temp_dir: Path,
         mc_alias: str = "minio_controller"
     ):
-        self.access_key = access_key
-        self.secret_key = secret_key
-        self._mc = mcexe
-        self.mc_alias = mc_alias
-        root_temp_dir = root_temp_dir.absolute()
-        root_temp_dir.mkdir(parents=True, exist_ok=True)
-        tdir = tempfile.mkdtemp(dir=root_temp_dir, prefix="MinioController-")
-        self.tempdir = root_temp_dir / tdir
-        datadir = self.tempdir / "data"
-        datadir.mkdir()
+        self.access_key = os.environ["S3_ACCESS_KEY"]
+        self.secret_key = os.environ["S3_SECRET_KEY"]
+        # self._mc = mcexe
+        # self.mc_alias = mc_alias
+        # root_temp_dir = root_temp_dir.absolute()
+        # root_temp_dir.mkdir(parents=True, exist_ok=True)
+        # tdir = tempfile.mkdtemp(dir=root_temp_dir, prefix="MinioController-")
+        # self.tempdir = root_temp_dir / tdir
+        # datadir = self.tempdir / "data"
+        # datadir.mkdir()
         
-        self.port = find_free_port()
+        self.port = int(os.environ["S3_LOCAL_PORT"])
         self.host = f"http://localhost:{self.port}"
         
-        logfile = self.tempdir / "minio_server.log"
+        # logfile = self.tempdir / "minio_server.log"
         
-        self._logfiledescriptor = open(logfile, "w")
+        # self._logfiledescriptor = open(logfile, "w")
         
-        cmd = [
-                minioexe,
-                "server",
-                "--compat",
-                "--address", f'localhost:{self.port}',
-                # --console-address doesn't seem to work on the 2021-4 Minio distro, maybe too old
-                str(datadir)
-        ]
-        env = dict(os.environ)
-        env["MINIO_ACCESS_KEY"] = access_key
-        env["MINIO_SECRET_KEY"] = secret_key
-
-        self._proc = subprocess.Popen(
-            cmd,
-            env=env,
-            stderr=subprocess.STDOUT,
-            stdout=self._logfiledescriptor,
-        )
-        time.sleep(1)  # wait for server to start up, 0.5 results in rare failures
-        self.run_mc("alias", "set", self.mc_alias, self.host, self.access_key, self.secret_key)
+        # cmd = [
+        #         minioexe,
+        #         "server",
+        #         "--compat",
+        #         "--address", f'localhost:{self.port}',
+        #         # --console-address doesn't seem to work on the 2021-4 Minio distro, maybe too old
+        #         str(datadir)
+        # ]
+        # env = dict(os.environ)
+        # env["MINIO_ACCESS_KEY"] = access_key
+        # env["MINIO_SECRET_KEY"] = secret_key
+        #
+        # self._proc = subprocess.Popen(
+        #     cmd,
+        #     env=env,
+        #     stderr=subprocess.STDOUT,
+        #     stdout=self._logfiledescriptor,
+        # )
+        # time.sleep(1)  # wait for server to start up, 0.5 results in rare failures
+        # self.run_mc("alias", "set", self.mc_alias, self.host, self.access_key, self.secret_key)
     
     def destroy(self, delete_temp_files):
         # I suppose I could turn this into a context manager... meh
-        self._proc.terminate()
-        time.sleep(0.5)
-        self._logfiledescriptor.close()
-        if delete_temp_files:
-            shutil.rmtree(self.tempdir)
-    
-    def get_client(self):
+        # self._proc.terminate()
+        # time.sleep(0.5)
+        # self._logfiledescriptor.close()
+        # if delete_temp_files:
+        #     shutil.rmtree(self.tempdir)
+        pass
+
+    def get_client(self, iam=False):
         return get_session().create_client(
-            "s3",
+            "iam" if iam else "s3",
             endpoint_url=self.host,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
+            region_name="default",
         )
     
     async def clean(self):
@@ -93,10 +96,6 @@ class MinioController:
     async def create_bucket(self, bucket):
         async with self.get_client() as client:
             await client.create_bucket(Bucket=bucket)
-
-    async def get_object(self, bucket, key) -> dict[str, Any]:
-        async with self.get_client() as client:
-            return await client.get_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
 
     async def upload_file(
         self,
@@ -118,6 +117,7 @@ class MinioController:
                     "ContentLength": len(main_part),
                 }
                 if crc64nvme:
+                    args["ChecksumAlgorithm"] = "CRC64NVME"
                     args["ChecksumCRC64NVME"] = crc64nvme
                 return await client.put_object(**args)
             else:
@@ -152,8 +152,8 @@ class MinioController:
                     args["ChecksumType"] = "FULL_OBJECT"
                 return await client.complete_multipart_upload(**args)
 
-    def run_mc(self, *args):
-        subprocess.run([self._mc] + list(args)).check_returncode()
+    # def run_mc(self, *args):
+    #     subprocess.run([self._mc] + list(args)).check_returncode()
 
 
 async def upload_part(client, part, bucket, key, upload_id, part_num, crc64nvme):
@@ -170,14 +170,14 @@ async def upload_part(client, part, bucket, key, upload_id, part_num, crc64nvme)
     return await client.upload_part(**args)
 
 
-if __name__ == "__main__":
-    mc = MinioController(
-        shutil.which("minio"),  # must be on the path
-        "access_key",
-        "secret_key",
-        Path("minio_temp_dir")
-    )
-    print("port: " + str(mc.port))
-    inp = input("Type 'd' to delete temp files, anything else to leave them")
-    print(f"got [{inp}]")
-    mc.destroy(inp == "d")
+# if __name__ == "__main__":
+#     mc = MinioController(
+#         shutil.which("minio"),  # must be on the path
+#         "access_key",
+#         "secret_key",
+#         Path("minio_temp_dir")
+#     )
+#     print("port: " + str(mc.port))
+#     inp = input("Type 'd' to delete temp files, anything else to leave them")
+#     print(f"got [{inp}]")
+#     mc.destroy(inp == "d")
