@@ -5,6 +5,7 @@ Also look in test_manual for more tests.
 from contextlib import asynccontextmanager
 import json
 import random
+import os
 from pathlib import Path
 import pytest
 from unittest.mock import patch
@@ -119,6 +120,7 @@ async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
     await minio.create_bucket("fail-bucket-readonly")
     await minio.upload_file("fail-bucket-readonly/test_file", b"abcdefghij")
     user, pwd = minio_unauthed_user
+    user_name = os.environ["S3_BAD_USER_NAME"]
     
     policy = {
         "Version": "2012-10-17",
@@ -135,15 +137,22 @@ async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
             }
         ]
     }
-    polname = "s3_client_test_readonly"
+    polname = "s3clienttestreadonly"
     # add some crap to the filename to prevent clobbers
-    polfile = Path("./temp_s3_client_test_policy_file_ipjiajgieajjaptya.json")
+    # polfile = Path("./temp_s3_client_test_policy_file_ipjiajgieajjaptya.json")
     try:
-        with open(polfile, "w") as tf:
-            json.dump(policy, tf, indent=4)
-        # file must be closed or mc complains about missing content length headers
-        minio.run_mc("admin", "policy", "create", minio.mc_alias, polname, tf.name)
-        minio.run_mc("admin", "policy", "attach", minio.mc_alias, polname, "--user", user)
+        async with minio.get_client(iam=True) as cli:
+            await cli.put_user_policy(
+                UserName=user_name,
+                PolicyName=polname,
+                PolicyDocument=json.dumps(policy),
+        )
+        
+        # with open(polfile, "w") as tf:
+        #     json.dump(policy, tf, indent=4)
+        # # file must be closed or mc complains about missing content length headers
+        # minio.run_mc("admin", "policy", "create", minio.mc_alias, polname, tf.name)
+        # minio.run_mc("admin", "policy", "attach", minio.mc_alias, polname, "--user", user)
     
         async with await S3Client.create(minio.host, user, pwd, skip_connection_check=True) as s3c:
             # check that reading works
@@ -152,9 +161,11 @@ async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
                 "Write access denied to bucket 'fail-bucket-readonly' on the s3 system"),
             )
     finally:
-        minio.run_mc("admin", "policy", "detach", minio.mc_alias, polname, "--user", user)
-        minio.run_mc("admin", "policy", "rm", minio.mc_alias, polname)
-        polfile.unlink(missing_ok=True)
+        async with minio.get_client(iam=True) as cli:
+            await cli.delete_user_policy(UserName=user_name, PolicyName=polname)
+        # minio.run_mc("admin", "policy", "detach", minio.mc_alias, polname, "--user", user)
+        # minio.run_mc("admin", "policy", "rm", minio.mc_alias, polname)
+        # polfile.unlink(missing_ok=True)
 
 
 async def _is_bucket_writeable_fail(s3c, bucket, expected, print_stacktrace=False):
