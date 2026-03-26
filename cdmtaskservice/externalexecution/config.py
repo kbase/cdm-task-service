@@ -131,7 +131,7 @@ class Config(BaseSettings):
         "s3_error_log_path",
         "s3_insecure",
         "refdata_host_path",
-        "job_update_timeout_sec",
+        "job_update_timeout_min",
         "mount_prefix_override",
     }
     

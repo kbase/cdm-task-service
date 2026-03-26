@@ -185,6 +185,7 @@ class S3Client:
         await self._cli_ctx.__aexit__(None, None, None)
         
     async def _fnc_wrapper(self, client, func):
+        logger = logging.getLogger(__name__)
         try:
             return await func(client)
         except EndpointConnectionError as e:
@@ -193,7 +194,7 @@ class S3Client:
             # TODO TEST logging
             # This is untested as I currently don't know a way to test it reliably
             # It used to be testable by GETing a text resource
-            logging.getLogger(__name__).exception(f"Unable to parse response from S3:\n{e}\n")
+            logger.exception(f"Unable to parse response from S3:\n{e}\n")
             raise S3ClientConnectError(
                 f"s3 response from the server at {self._url} was not parseable. "
                 + "See logs for details"
@@ -207,6 +208,7 @@ class S3Client:
             bucket = getattr(func, "bucket", None)
             write = getattr(func, "write", False)
             path = getattr(func, "path", None)
+            logger.debug(f"S3 ClientError raw response:\n{e.response}")
             code = e.response["Error"]["Code"]
             if code == "SignatureDoesNotMatch":
                 raise S3ClientConnectError("s3 access credentials are invalid")
@@ -235,7 +237,7 @@ class S3Client:
                     ) from e
             if code == "XAmzContentChecksumMismatch":
                 raise S3ChecksumMismatchError(f"Checksum mismatch for upload to {path}")
-            logging.getLogger(__name__).exception(
+            logger.exception(
                 f"Unexpected response from S3. Response data:\n{e.response}")
             raise S3UnexpectedError(f"Unexpected response from S3: {e}") from e
         
