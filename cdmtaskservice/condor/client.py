@@ -6,6 +6,7 @@ Task Service.
 import asyncio
 from classad2 import ClassAd, ExprTree
 import htcondor2
+import os
 from pathlib import Path
 import posixpath
 from typing import Any
@@ -198,6 +199,8 @@ class CondorClient:
             env["ADDITIONAL_PATH"] = self._config.additional_path
         if self._s3config.insecure:
             env["S3_INSECURE"] = "TRUE"
+        if log_level := os.environ.get("CTS_LOG_LEVEL"):
+            env["CTS_LOG_LEVEL"] = log_level
         environment = ""
         for key, val in env.items():
             environment += f"{key}={val} "

@@ -121,7 +121,12 @@ handler.setFormatter(CustomJsonFormatter(
     reserved_attrs=RESERVED_ATTRS + ["color_message"],
 ))
 rootlogger.addHandler(handler)
-logging.getLogger("cdmtaskservice").setLevel(logging.INFO)
+_cts_log_level = os.environ.get("CTS_LOG_LEVEL", "INFO").upper()
+try:
+    logging.getLogger("cdmtaskservice").setLevel(_cts_log_level)
+except ValueError:
+    raise ValueError(f"Invalid CTS_LOG_LEVEL '{_cts_log_level}': must be a standard log level "
+                     + "e.g. DEBUG, INFO, WARNING, ERROR, CRITICAL") from e
 
 
 ###
