@@ -1,4 +1,5 @@
 import aiohttp
+from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 import pytest
@@ -106,8 +107,8 @@ async def _test_download_presigned_url(minio, temp_dir, crc):
     await minio.create_bucket("test-bucket")
     await minio.upload_file("test-bucket/myfile", b"abcdefghij", crc64nvme="e/Vz6rUQ/+o=")
     
-    s3c = await _client(minio)
-    url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
     output = temp_dir / "somedir" / "temp.txt"  # test directory creation for the first case
     async with aiohttp.ClientSession() as sess:
         await download_presigned_url(
@@ -131,8 +132,8 @@ async def test_download_presigned_url_multipart_and_insecure_ssl(minio, temp_dir
         crc64nvme="B/mN7A/vO4c=",
     )
 
-    s3c = await _client(minio)
-    url = (await s3c.presign_get_urls(S3Paths(["nice-bucket/big_test_file"])))[0]
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_get_urls(S3Paths(["nice-bucket/big_test_file"])))[0]
     output = temp_dir / "temp2.txt"
     async with aiohttp.ClientSession() as sess:
         # There's not a lot to test with insecure ssl other than it doesn't break things
@@ -151,8 +152,8 @@ async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
     await minio.upload_file("test-bucket/myfile", b"abcdefghij")
     o = temp_dir / "fail.txt"
     
-    s3c = await _client(minio)
-    url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"])))[0]
     async with aiohttp.ClientSession() as s:
         await _download_presigned_url_fail(None, url, o, ValueError("session is required"))
         await _download_presigned_url_fail(s, None, o, ValueError("url is required"))
@@ -189,9 +190,9 @@ async def test_download_presigned_url_fail_bad_sig(minio, temp_dir):
             + "signing method.</Message><Key>myfilex</Key><BucketName>test-bucket</BucketName>"
             + "<Resource>/test-bucket/myfilex</Resource>"
     )
-    s3c = await _client(minio)
-    url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"]))
-           )[0].replace("myfile", "myfilex")
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"]))
+               )[0].replace("myfile", "myfilex")
     await _download_presigned_url_fail_s3_error(minio, temp_dir, url, starts_with, contains)
 
 
@@ -202,8 +203,8 @@ async def test_download_presigned_url_fail_nofile(minio, temp_dir):
                 + "</Message><Key>myfilex</Key><BucketName>test-bucket</BucketName>"
                 +"<Resource>/test-bucket/myfilex</Resource>"
     )
-    s3c = await _client(minio)
-    url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfilex"])))[0]
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfilex"])))[0]
     await _download_presigned_url_fail_s3_error(minio, temp_dir, url, starts_with, contains)
 
 
@@ -227,8 +228,8 @@ async def test_upload_presigned_url(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     
-    s3c = await _client(minio)
-    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
     async with aiohttp.ClientSession() as sess:
         await upload_presigned_url(sess, url.url, url.fields, TEST_RAND10KB, timeout_sec=5)
     with open(TEST_RAND10KB, "rb") as f:
@@ -244,8 +245,9 @@ async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     
-    s3c = await _client(minio)
-    url = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"]), ["4ekt2WB1KO4="]))[0]
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_post_urls(
+            S3Paths(["test-bucket/foo/myfile"]), ["4ekt2WB1KO4="]))[0]
     async with aiohttp.ClientSession() as sess:
         # There's not a lot to test with insecure ssl other than it doesn't break things
         # Unless we want to get really crazy and set up Minio with a SSC in the tests. We don't
@@ -263,8 +265,8 @@ async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
 
 @pytest.mark.asyncio
 async def test_upload_presigned_url_fail(minio):
-    s3c = await _client(minio)
-    r = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
+    async with _client(minio) as s3c:
+        r = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
     url, flds = r.url, r.fields
     fl = TEST_RAND10KB
     
@@ -324,11 +326,11 @@ async def test_upload_presigned_url_fail_bad_crc(minio):
                 + "<RequestId>"
     )
     
-    s3c = await _client(minio)
-    url = (await s3c.presign_post_urls(
-        S3Paths(["test-bucket/bar/myfilecrc"]), ["uIE6WiBPRpX="] # Actual checksum: uIE6WiBPRps=
-    ))[0]
-    
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_post_urls(
+            S3Paths(["test-bucket/bar/myfilecrc"]), ["uIE6WiBPRpX="] # Actual checksum: uIE6WiBPRps=
+        ))[0]
+
     await _upload_presigned_url_fail_s3_error(minio, url.url, url.fields, starts_with, contains)
 
 
@@ -341,9 +343,9 @@ async def test_upload_presigned_url_fail_no_bucket(minio):
                 + "</Resource><RequestId>"
     )
     
-    s3c = await _client(minio)
-    url = (await s3c.presign_post_urls(S3Paths(["fake-bucket/bar/myfilecrc"])))[0]
-    
+    async with _client(minio) as s3c:
+        url = (await s3c.presign_post_urls(S3Paths(["fake-bucket/bar/myfilecrc"])))[0]
+
     await _upload_presigned_url_fail_s3_error(minio, url.url, url.fields, starts_with, contains)
 
 
@@ -359,5 +361,7 @@ async def _upload_presigned_url_fail_s3_error(minio, url, fields, starts_with, c
     assert type(got.value) == TransferError
 
 
+@asynccontextmanager
 async def _client(minio):
-    return await S3Client.create(minio.host,  minio.access_key, minio.secret_key)
+    async with await S3Client.create(minio.host, minio.access_key, minio.secret_key) as s3c:
+        yield s3c
