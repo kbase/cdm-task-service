@@ -476,6 +476,7 @@ class S3Client:
                     Bucket=buk,
                     Key=key,
                     Body=f,
+                    ChecksumAlgorithm="CRC64NVME",
                     ChecksumCRC64NVME=crc64nvme
                 )
             return
