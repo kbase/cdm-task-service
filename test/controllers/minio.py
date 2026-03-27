@@ -118,6 +118,7 @@ class MinioController:
                     "ContentLength": len(main_part),
                 }
                 if crc64nvme:
+                    args["ChecksumAlgorithm"] = "CRC64NVME"
                     args["ChecksumCRC64NVME"] = crc64nvme
                 return await client.put_object(**args)
             else:
