@@ -212,7 +212,7 @@ class S3Client:
             code = e.response["Error"]["Code"]
             if code == "SignatureDoesNotMatch":
                 raise S3ClientConnectError("s3 access credentials are invalid")
-            if code == "404" or code == "NoSuchBucket" or code == "NoSuchKey":
+            if code in ("404", "NoSuchBucket", "NoSuchKey"):
                 if bucket:
                     raise S3BucketNotFoundError(
                         f"The bucket '{bucket}' was not found on the s3 system"
@@ -220,7 +220,7 @@ class S3Client:
                 raise S3PathNotFoundError(
                     f"The path '{path}' was not found on the s3 system"
                 ) from e
-            if code == "AccessDenied" or code == "403":  # why both? Both 403s
+            if code in ("AccessDenied", "403"):  # why both? Both 403s
                 # may need to add other cases here
                 op = "Write" if write else "Read"
                 if bucket:
@@ -235,7 +235,8 @@ class S3Client:
                     raise S3ClientConnectError(
                         "Access denied to list buckets on the s3 system"
                     ) from e
-            if code == "XAmzContentChecksumMismatch":
+            # BAdDigest = CEPH, ChecksumMismatch = Minio
+            if code in ("XAmzContentChecksumMismatch", "BadDigest"):
                 raise S3ChecksumMismatchError(f"Checksum mismatch for upload to {path}")
             logger.exception(
                 f"Unexpected response from S3. Response data:\n{e.response}")
@@ -504,6 +505,8 @@ class S3Client:
                         PartNumber=part_number,
                         UploadId=upload_id,
                         Body=chunk,
+                        # Required for CEPH to check checksum is valid
+                        ChecksumAlgorithm="CRC64NVME",
                         ChecksumCRC64NVME=part_crc
                     )
                     parts.append({
@@ -512,8 +515,7 @@ class S3Client:
                         "ChecksumCRC64NVME": part_crc
                     })
                     part_number += 1
-
-            await client.complete_multipart_upload(
+            complete_resp = await client.complete_multipart_upload(
                 Bucket=buk,
                 Key=key,
                 UploadId=upload_id,
@@ -524,6 +526,13 @@ class S3Client:
         except Exception:
             await client.abort_multipart_upload(Bucket=buk, Key=key, UploadId=upload_id)
             raise
+        # for some reason I don't understand, I can't get CEPH to reject the upload
+        # if the full body checksum is wrong, so we check it here. Note this will
+        # not be covered when testing against Minio, for example, which doesn't need this
+        # code
+        returned_crc = complete_resp["ChecksumCRC64NVME"]
+        if returned_crc != crc64nvme:
+            raise S3ChecksumMismatchError(f"Checksum mismatch for upload to {buk}/{key}")
 
     async def presign_get_urls(self, paths: S3Paths, expiration_sec: int = 3600) -> list[str]:
         """

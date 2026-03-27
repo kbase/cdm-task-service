@@ -660,7 +660,25 @@ async def test_upload_objects_from_file_fail_huge_file(minio, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_upload_objects_from_file_fail_bad_crc(minio, tmp_path):
+async def test_upload_objects_from_file_fail_bad_crc_single_part(minio, tmp_path):
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    with open(tmp_path / "smallfile", mode="w") as f:
+        f.write("foobar")  # small file, single-part upload
+    async with _client(minio) as cli:
+        await _upload_objects_from_file_fail(
+            cli,
+            S3Paths(["test-bucket/bar"]),
+            [tmp_path / "smallfile"],
+            ["xYZB5jZwpls="],  # actual is oYZB5jZwpls=
+            S3ChecksumMismatchError(f"Checksum mismatch for upload to test-bucket/bar")
+        )
+
+
+@pytest.mark.asyncio
+async def test_upload_objects_from_file_fail_bad_crc_multipart(minio, tmp_path):
+    # CEPH appears (?) to have a bug in full object CRC handling for multipart
+    # uploads, so the code path is different from single part
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
     with open(tmp_path / "smallfile", mode="w") as f:
@@ -670,9 +688,28 @@ async def test_upload_objects_from_file_fail_bad_crc(minio, tmp_path):
             cli,
             S3Paths(["test-bucket/bar"]),
             [tmp_path / "smallfile"],
-            ["xYZB5jZwpls="],
+            ["x+KiHdDNTNM="],  # actual is D+KiHdDNTNM=
             S3ChecksumMismatchError(f"Checksum mismatch for upload to test-bucket/bar")
         )
+
+
+@pytest.mark.asyncio
+async def test_upload_objects_from_file_fail_bad_crc_multipart_part(minio, tmp_path):
+    # Verifies CEPH validates per-part checksums when ChecksumAlgorithm is set on upload_part.
+    # Pass the correct full-body CRC so any failure must come from the per-part check.
+    await minio.clean()  # couldn't get this to work as a fixture
+    await minio.create_bucket("test-bucket")
+    with open(tmp_path / "largefile", mode="w") as f:
+        f.write("0123456789abcdef" * 589824)  # 9 MiB, force multipart
+    async with _client(minio) as cli:
+        with patch.object(cli, "_b64_crc64nvme", return_value="AAAAAAAAAAA="):
+            await _upload_objects_from_file_fail(
+                cli,
+                S3Paths(["test-bucket/bar"]),
+                [tmp_path / "largefile"],
+                ["D+KiHdDNTNM="],  # correct full-body CRC
+                S3ChecksumMismatchError("Checksum mismatch for upload to test-bucket/bar")
+            )
 
 
 @pytest.mark.asyncio
