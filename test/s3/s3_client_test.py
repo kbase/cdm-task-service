@@ -167,8 +167,7 @@ async def _is_bucket_writeable_fail(s3c, bucket, expected, print_stacktrace=Fals
 async def test_get_object_meta_single_part_w_crc64nvme(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    # test that leading /s in key are ignored
-    await minio.upload_file("test-bucket///test_file", b"abcdefghij", crc64nvme="e/Vz6rUQ/+o=")
+    await minio.upload_file("test-bucket/test_file", b"abcdefghij", crc64nvme="e/Vz6rUQ/+o=")
 
     async with _client(minio) as s3c:
         objm = await s3c.get_object_meta(S3Paths(["test-bucket/test_file"]))
@@ -321,7 +320,7 @@ async def _get_object_meta_fail(s3c, paths, expected, concurrency=1, print_stack
 async def test_download_objects_to_file(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    await minio.upload_file("test-bucket//test_file", b"imsounique")
+    await minio.upload_file("test-bucket/test_file", b"imsounique")
     await minio.upload_file(
         "test-bucket/big_test_file",
         b"abcdefghij" * 600000,
@@ -442,7 +441,7 @@ async def _stream_and_assert(s3c, file_path, expected, seek=None, length=None):
 async def test_stream_object(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
-    await minio.upload_file("test-bucket//test_file", b"imsounique")
+    await minio.upload_file("test-bucket/test_file", b"imsounique")
     await minio.upload_file(
         "test-bucket/big_test_file",
         b"abcdefghij" * 600000,

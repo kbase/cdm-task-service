@@ -21,11 +21,13 @@ def test_init_fail_bad_path():
     testset = {
         None: "The s3 path at index x cannot be null or a whitespace string",
         "   \t   ": "The s3 path at index x cannot be null or a whitespace string",
-        "  /  ": "Path '  /  ' at index x must start with the s3 bucket and include a key",
-        "  /  /  ": "Bucket name at index x cannot be whitespace only",
-        "  ////bar  ":
-            "Path '  ////bar  ' at index x must start with the s3 bucket and include a key",
-        " / bar   ": "Path ' / bar   ' at index x must start with the s3 bucket and include a key",
+        "  /  ": "Path '  /  ' at index x cannot start with '/'",
+        "  bar  ": "Path '  bar  ' at index x must start with the s3 bucket and include a key",
+        "  bar  /": "Path '  bar  /' at index x must start with the s3 bucket and include a key",
+        "  /  /  ": "Path '  /  /  ' at index x cannot start with '/'",
+        "  ////bar  ": "Path '  ////bar  ' at index x cannot start with '/'",
+        " / bar   ": "Path ' / bar   ' at index x cannot start with '/'",
+        "buckit//foo": "Path 'buckit//foo' at index x's key cannot start with '/'",
         "il/foo": "Bucket name at index x must be > 2 and < 64 characters: il",
         ("illegal-bu" * 6) + "cket/foo":
             f"Bucket name at index x must be > 2 and < 64 characters: {'illegal-bu' * 6}cket",
@@ -44,8 +46,10 @@ def test_init_fail_bad_path():
             "Path 'buckit/foo//bar' at index x contains illegal character(s) '//' "
             + "at key index 3",
         "buckit///  //bar":
-            "Path 'buckit///  //bar' at index x contains illegal character(s) '//' "
-            + "at key index 2",
+            "Path 'buckit///  //bar' at index x's key cannot start with '/'",
+        "buckit/bar//foo":
+            "Path 'buckit/bar//foo' at index x contains illegal character(s) '//' "
+            + "at key index 3",
         "buckit/barbaz;foo'x":
             "Path 'buckit/barbaz;foo'x' at index x contains illegal character(s) ';' "
             + "at key index 6",
@@ -83,8 +87,8 @@ def test_init():
     
     s3p = S3Paths([
         "foo/bar",
-        "  ///  baz////    bat   /",
-        "   thingy-stuff9///    /𝛙hatever/ ",
+        "  baz  /    bat   /",
+        "   thingy-stuff9/    /𝛙hatever/ ",
         "  bukkit  /      "])
     assert s3p.paths == (
         "foo/bar",
@@ -95,8 +99,8 @@ def test_init():
 
 
 def test_split_paths():
-    s3p = S3Paths(["foo/bar", "baz/bat   ", "   //thingy-stuff9///𝛙hatever/baz"])
-    
+    s3p = S3Paths(["foo/bar", "baz/bat   ", "   thingy-stuff9/𝛙hatever/baz"])
+
     assert list(s3p.split_paths()) == [
         ["foo", "bar"], ["baz", "bat   "], ["thingy-stuff9", "𝛙hatever/baz"]
     ]
