@@ -185,11 +185,8 @@ async def _download_presigned_url_fail(
 @pytest.mark.asyncio
 async def test_download_presigned_url_fail_bad_sig(minio, temp_dir):
     starts_with = f"GET URL: http://localhost:{minio.port}/test-bucket/myfilex 403\nError:\n"
-    contains = ("<Error><Code>SignatureDoesNotMatch</Code><Message>The request signature we "
-            + "calculated does not match the signature you provided. Check your key and "
-            + "signing method.</Message><Key>myfilex</Key><BucketName>test-bucket</BucketName>"
-            + "<Resource>/test-bucket/myfilex</Resource>"
-    )
+    # CEPH is stingy with error message contents
+    contains = "<Error><Code>SignatureDoesNotMatch</Code><Message>"
     async with _client(minio) as s3c:
         url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfile"]))
                )[0].replace("myfile", "myfilex")
@@ -199,10 +196,8 @@ async def test_download_presigned_url_fail_bad_sig(minio, temp_dir):
 @pytest.mark.asyncio
 async def test_download_presigned_url_fail_nofile(minio, temp_dir):
     starts_with = f"GET URL: http://localhost:{minio.port}/test-bucket/myfilex 404\nError:\n"
-    contains = ("<Error><Code>NoSuchKey</Code><Message>The specified key does not exist."
-                + "</Message><Key>myfilex</Key><BucketName>test-bucket</BucketName>"
-                +"<Resource>/test-bucket/myfilex</Resource>"
-    )
+    # CEPH is stingy with error message contents
+    contains = "<Error><Code>NoSuchKey</Code><Message>"
     async with _client(minio) as s3c:
         url = (await s3c.presign_get_urls(S3Paths(["test-bucket/myfilex"])))[0]
     await _download_presigned_url_fail_s3_error(minio, temp_dir, url, starts_with, contains)
@@ -323,7 +318,10 @@ async def test_upload_presigned_url_fail_bad_crc(minio):
     contains = ("<Error><Code>XAmzContentChecksumMismatch</Code><Message>The provided "
                 + "&#39;x-amz-checksum&#39; header does not match what was computed.</Message>"
                 + "<BucketName>test-bucket</BucketName><Resource>/test-bucket</Resource>"
-                + "<RequestId>"
+                + "<RequestId>",
+                # CEPH error is different from Minio
+                "<Error><Code>BadDigest</Code><Message></Message>"
+                + "<BucketName>test-bucket</BucketName><RequestId>"
     )
     
     async with _client(minio) as s3c:
@@ -338,10 +336,8 @@ async def test_upload_presigned_url_fail_bad_crc(minio):
 async def test_upload_presigned_url_fail_no_bucket(minio):
     starts_with = (f"POST URL: http://localhost:{minio.port}/fake-bucket Key: bar/myfilecrc 404"
                    + "\nError:\n")
-    contains = ("<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist"
-                + "</Message><BucketName>fake-bucket</BucketName><Resource>/fake-bucket"
-                + "</Resource><RequestId>"
-    )
+    # CEPH is stingy with error message contents
+    contains = "<Error><Code>NoSuchBucket</Code><Message>"
     
     async with _client(minio) as s3c:
         url = (await s3c.presign_post_urls(S3Paths(["fake-bucket/bar/myfilecrc"])))[0]
@@ -357,7 +353,10 @@ async def _upload_presigned_url_fail_s3_error(minio, url, fields, starts_with, c
             await upload_presigned_url(sess, url, fields, TEST_RAND10KB)
     errmsg = str(got.value)
     assert errmsg.startswith(starts_with)
-    assert contains in errmsg
+    if isinstance(contains, str):
+        assert contains in errmsg
+    else:
+        assert any(c in errmsg for c in contains)
     assert type(got.value) == TransferError
 
 
