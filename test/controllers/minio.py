@@ -10,6 +10,7 @@ from typing import Any
 
 from utils import find_free_port
 
+
 class MinioController:
     # adapted from https://github.com/kbase/java_test_utilities/blob/develop/src/main/java/us/kbase/testutils/controllers/minio/MinioController.java
     
@@ -93,10 +94,6 @@ class MinioController:
     async def create_bucket(self, bucket):
         async with self.get_client() as client:
             await client.create_bucket(Bucket=bucket)
-
-    async def get_object(self, bucket, key) -> dict[str, Any]:
-        async with self.get_client() as client:
-            return await client.get_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
 
     async def upload_file(
         self,

@@ -235,7 +235,7 @@ class S3Client:
                     raise S3ClientConnectError(
                         "Access denied to list buckets on the s3 system"
                     ) from e
-            # BAdDigest = CEPH, ChecksumMismatch = Minio
+            # BadDigest = CEPH, ChecksumMismatch = Minio
             if code in ("XAmzContentChecksumMismatch", "BadDigest"):
                 raise S3ChecksumMismatchError(f"Checksum mismatch for upload to {path}")
             logger.exception(
