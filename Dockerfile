@@ -1,4 +1,4 @@
-FROM python:3.12.13-slim AS build
+FROM python:3.14.3-slim AS build
 
 ENV CRANE_VER=v0.21.2
 ENV CRANE_SHA256=897e7c342db072ba76531246fc18fbf3e8e298688b6ecf98916770984b263866
@@ -20,7 +20,7 @@ COPY .git /git
 RUN GITCOMMIT=$(git rev-parse HEAD) && echo "GIT_COMMIT=\"$GITCOMMIT\"" > /git/git_commit.py
 
 
-FROM python:3.12.13-slim
+FROM python:3.14.3-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tini \
