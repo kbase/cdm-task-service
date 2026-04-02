@@ -15,7 +15,7 @@ dependencies = [
     "aiokafka==0.13.0",
     "apscheduler==3.11.2",
     "async-lru==2.2.0",
-    "awscrt==0.31.2",
+    "awscrt==0.32.0",
     "bidict==0.23.1",
     "cacheout==0.16.0",
     "docker==7.1.0",
