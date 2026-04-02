@@ -37,7 +37,7 @@ dependencies = [
 dev = [
     # aiobotocore 3.2.1 cannot be installed with boto3 > 1.42.61
     "boto3==1.42.61",
-    "ipython==9.11.0",
+    "ipython==9.12.0",
     "kafka-python==2.3.0",
     "pymongo==4.16.0",
     "pytest==9.0.2",
