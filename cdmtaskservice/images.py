@@ -3,7 +3,7 @@ Methods for registering, deleting, and listing images.
 """
 
 import re
-from typing import Awaitable
+from typing import Awaitable, NamedTuple
 
 from cdmtaskservice import models
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
@@ -15,6 +15,13 @@ from cdmtaskservice.timestamp import utcdatetime
 
 
 _ABSPATH_REGEX = re.compile(models.ABSOLUTE_PATH_REGEX)
+
+
+class _ImageFields(NamedTuple):
+    urls: list | None
+    usage_notes: str | None
+    refdata_id: str | None
+    default_refdata_mount_point: str | None
 
 
 class Images:
@@ -37,51 +44,84 @@ class Images:
         self,
         imagename: str,
         username: str,
-        image_usage: models.ImageUsage = None,
+        image_reg: models.ImageRegistration = None,
         refdata_id: str = None,
         default_refdata_mount_point: str = None
     ) -> models.Image:
         """
         Register an image to the service.
-        
+
         imagename - the name of the docker image, e.g. gchr.io/kbase/checkm2:6.7.1
         username - the name of the user registering the image.
-        image_usage - usage information about the image.
+        image_reg - the image registration request, optionally including usage info
+            and a from_image reference to an existing registered image from which to copy
+            user-supplied fields.
         refdata_id - the ID of reference data to associate with the image.
         default_refdata_mount_point - the default mount point for refdata in an image container.
-            Must be am absolute path with at least one path element.
+            Must be an absolute path with at least one path element.
         """
-        if default_refdata_mount_point:
-            if not refdata_id:
+        image_reg = image_reg or models.ImageRegistration()
+        fields = await self._resolve_image_fields(image_reg, refdata_id, default_refdata_mount_point)
+        if fields.default_refdata_mount_point:
+            if not fields.refdata_id:
                 raise IllegalParameterError(
                     "If a refdata mount point is provided a refdata ID must be provided."
                 )
-            if not _ABSPATH_REGEX.fullmatch(default_refdata_mount_point):
+            if not _ABSPATH_REGEX.fullmatch(fields.default_refdata_mount_point):
                 raise IllegalParameterError(
                     "Refdata mount points must be absolute paths with at least one path element."
                 )
-        if refdata_id:  # ensure refdata exists
-            await self._ref.get_refdata_by_id(refdata_id)
+        if fields.refdata_id:  # ensure refdata exists
+            await self._ref.get_refdata_by_id(fields.refdata_id)
         normedname = await self._iminfo.normalize_image_name(imagename)
         # Just use the sha for entrypoint lookup to ensure we get the right image
         entrypoint = await self._iminfo.get_entrypoint_from_name(normedname.name_with_digest)
         if not entrypoint:
             raise NoEntrypointError(f"Image {imagename} does not have an entrypoint")
-        image_usage = image_usage or models.ImageUsage()
         img = models.Image(
             name=normedname.name,
-            digest = normedname.digest,
+            digest=normedname.digest,
             tag=normedname.tag,
             entrypoint=entrypoint,
             registered_by=username,
             registered_on=utcdatetime(),
-            refdata_id=refdata_id or None,  # ensure not empty string, etc.
-            default_refdata_mount_point=default_refdata_mount_point,
-            usage_notes=image_usage.usage_notes,
-            urls=image_usage.urls,
+            refdata_id=fields.refdata_id,
+            default_refdata_mount_point=fields.default_refdata_mount_point,
+            usage_notes=fields.usage_notes,
+            urls=fields.urls,
         )
         await self._mongo.save_image(img)
         return img
+
+    async def _resolve_image_fields(
+        self,
+        image_reg: models.ImageRegistration,
+        refdata_id: str,
+        default_refdata_mount_point: str,
+    ) -> _ImageFields:
+        """
+        Resolve the final user-supplied field values for image registration from the two
+        potential sources: the current request and the from_image reference. Values in the
+        current request take precedence.
+        """
+        urls = image_reg.urls
+        usage_notes = image_reg.usage_notes
+        if image_reg.from_image:
+            from_img = await self._process_image(image_reg.from_image, self._mongo.get_image)
+            if urls is None:
+                urls = from_img.urls
+            if usage_notes is None:
+                usage_notes = from_img.usage_notes
+            if refdata_id is None:
+                refdata_id = from_img.refdata_id
+            if default_refdata_mount_point is None:
+                default_refdata_mount_point = from_img.default_refdata_mount_point
+        return _ImageFields(
+            urls=urls,
+            usage_notes=usage_notes,
+            refdata_id=refdata_id or None,  # ensure not empty string, etc.
+            default_refdata_mount_point=default_refdata_mount_point,
+        )
     
     async def get_image(self, imagename: str) -> models.Image:
         """

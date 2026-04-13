@@ -793,6 +793,23 @@ class ImageUsage(BaseModel):
         return [str(u) for u in urls]
 
 
+class ImageRegistration(ImageUsage):
+    """
+    Request body for image registration.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    from_image: Annotated[str | None, Field(
+        examples=["ghcr.io/kbase/checkm2:6.7.1"],
+        description="The name of an existing registered image to use as a source for "
+            + "user-supplied fields. Any fields explicitly provided in the current request "
+            + "take precedence over fields from the referenced image. "
+            + "A tag, digest, or both may be supplied to identify the image.",
+        min_length=1,
+        max_length=1000,
+    )] = None
+
+
 class Image(ImageUsage, JobImage):
     """
     Information about a docker image.
