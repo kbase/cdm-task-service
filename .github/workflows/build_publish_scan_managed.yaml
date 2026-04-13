@@ -1,4 +1,4 @@
-name: Two Step Build, Publish and Scan (Managed)
+name: Build, Publish and Scan (Managed)
 on:
   workflow_dispatch:
   push:
@@ -8,8 +8,8 @@ on:
   release:
     types: [published]
 jobs:
-  two-step-build-publish-scan:
-    uses: BERDataLakehouse/.github/.github/workflows/two_step_build_publish_scan.yaml@main
+  build-publish-scan:
+    uses: BERDataLakehouse/.github/.github/workflows/build_publish_scan.yaml@main
     permissions:
       contents: read
       packages: write
