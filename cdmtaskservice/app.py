@@ -106,9 +106,9 @@ class CustomJsonFormatter(JsonFormatter):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def process_log_record(self, log_record):
+    def process_log_record(self, log_data):
         return super().process_log_record(
-            {k: v for k, v in log_record.items() if v is not None}
+            {k: v for k, v in log_data.items() if v is not None}
         )
 
 
@@ -124,7 +124,7 @@ rootlogger.addHandler(handler)
 _cts_log_level = os.environ.get("CTS_LOG_LEVEL", "INFO").upper()
 try:
     logging.getLogger("cdmtaskservice").setLevel(_cts_log_level)
-except ValueError:
+except ValueError as e:
     raise ValueError(f"Invalid CTS_LOG_LEVEL '{_cts_log_level}': must be a standard log level "
                      + "e.g. DEBUG, INFO, WARNING, ERROR, CRITICAL") from e
 
@@ -140,7 +140,7 @@ _X_FORWARDED_FOR = "X-Forwarded-For"
 _USER_AGENT = "User-Agent"
 
 
-def _safe_strip(s: str):
+def _safe_strip(s: str | None):
     return s.strip() if s else None
 
 
