@@ -197,7 +197,7 @@ class CondorClient:
             env["MOUNT_PREFIX_OVERRIDE"] = self._config.mount_prefix_override
         if self._config.additional_path:
             env["ADDITIONAL_PATH"] = self._config.additional_path
-        if self._s3config.insecure:
+        if self._s3config.get_insecure(self._config.use_S3_external_url):
             env["S3_INSECURE"] = "TRUE"
         if log_level := os.environ.get("CTS_LOG_LEVEL"):
             env["CTS_LOG_LEVEL"] = log_level

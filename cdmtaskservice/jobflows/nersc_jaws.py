@@ -98,7 +98,7 @@ class NERSCJAWSRunner(JobFlow):
         self._mongo = _not_falsy(mongodao, "mongodao")
         self._s3 = _not_falsy(s3config, "s3config").get_internal_client()
         self._s3ext = s3config.get_external_client()
-        self._s3insecure = s3config.insecure
+        self._s3insecure = s3config.insecure_external
         self._s3logdir = s3config.error_log_path
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._callback_root = _require_string(service_root_url, "service_root_url")

@@ -85,7 +85,7 @@ class CDMRefdataServiceConfig:
             internal_url=self.s3_url,
             access_key=self.s3_access_key,
             access_secret=self.s3_access_secret,
-            insecure=self.s3_allow_insecure,
+            insecure_internal=self.s3_allow_insecure,
         )
 
     def print_config(self, output: TextIO):
