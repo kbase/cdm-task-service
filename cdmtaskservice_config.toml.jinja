@@ -198,9 +198,13 @@ access_key = "{{ KBCTS_S3_ACCESS_KEY or "" }}"
 # The S3 secret key.
 access_secret = "{{ KBCTS_S3_ACCESS_SECRET or "" }}"
 # Setting allow_insecure = true (and only the exact string "true") skips checking the validity of
-# the SSL certificate for both the standard and external urls, leaving the service vulnerable
-# to Man in the Middle attacks.
+# the SSL certificate for the internal url, leaving the service vulnerable to Man in the Middle
+# attacks.
 allow_insecure = "{{ KBCTS_S3_ALLOW_INSECURE or "false"}}"
+# Setting allow_insecure_external = true (and only the exact string "true") skips checking the
+# validity of the SSL certificate for the external url, leaving the service vulnerable to Man in
+# the Middle attacks.
+allow_insecure_external = "{{ KBCTS_S3_ALLOW_INSECURE_EXTERNAL or "false"}}"
 
 [MongoDB]
 

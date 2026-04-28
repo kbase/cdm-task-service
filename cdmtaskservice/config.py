@@ -88,8 +88,10 @@ class CDMTaskServiceConfig:
         service startup.
     s3_access_key: str - the S3 access key.
     s3_access_secret: str - the S3 access secret.
-    s3_allow_insecure: bool - whether to skip SSL cert validation, leaving the service vulnerable
-        to MITM attacks.
+    s3_allow_insecure: bool - whether to skip SSL cert validation for the internal S3 URL,
+        leaving the service vulnerable to MITM attacks.
+    s3_allow_insecure_external: bool - whether to skip SSL cert validation for the external S3
+        URL, leaving the service vulnerable to MITM attacks.
     mongo_host: str - the MongoDB host.
     mongo_db: str - the MongoDB database.
     mongo_user: str | None - the MongoDB user name.
@@ -210,6 +212,9 @@ class CDMTaskServiceConfig:
         self.s3_access_key = _get_string_required(config, _SEC_S3, "access_key")
         self.s3_access_secret = _get_string_required(config, _SEC_S3, "access_secret")
         self.s3_allow_insecure = _get_string_optional(config, _SEC_S3, "allow_insecure") == "true"
+        self.s3_allow_insecure_external = (
+            _get_string_optional(config, _SEC_S3, "allow_insecure_external") == "true"
+        )
         # If needed, we could add an S3 region parameter. YAGNI
         # If needed we could add sub sections to support > 1 S3 instance per service. YAGNI
         self.mongo_host = _get_string_required(config, _SEC_MONGODB, "mongo_host")
@@ -278,7 +283,8 @@ class CDMTaskServiceConfig:
             access_key=self.s3_access_key,
             access_secret=self.s3_access_secret,
             error_log_path=self.container_s3_log_dir,
-            insecure=self.s3_allow_insecure,
+            insecure_internal=self.s3_allow_insecure,
+            insecure_external=self.s3_allow_insecure_external,
             verify_external_url=self.s3_verify_external_url,
         )
 
@@ -364,7 +370,8 @@ class CDMTaskServiceConfig:
             f"S3 verify external URL: {self.s3_verify_external_url}",
             f"S3 access key: {self.s3_access_key}",
             "S3 access secret: REDACTED FOR YOUR SAFETY AND COMFORT",
-            f"S3 allow insecure: {self.s3_allow_insecure}",
+            f"S3 allow insecure (internal): {self.s3_allow_insecure}",
+            f"S3 allow insecure (external): {self.s3_allow_insecure_external}",
             f"MongoDB host: {self.mongo_host}",
             f"MongoDB database: {self.mongo_db}",
             f"MongoDB user: {self.mongo_user}",

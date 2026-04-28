@@ -33,9 +33,15 @@ class S3Config(BaseModel):
     May not be present if unavailable.
     """
     
-    insecure: bool = False
+    insecure_internal: bool = False
     """
-    Whether to skip checking the SSL certificate for the S3 instance,
+    Whether to skip checking the SSL certificate for the internal S3 URL,
+    leaving the service open to MITM attacks.
+    """
+
+    insecure_external: bool = False
+    """
+    Whether to skip checking the SSL certificate for the external S3 URL,
     leaving the service open to MITM attacks.
     """
     
@@ -50,6 +56,10 @@ class S3Config(BaseModel):
         """ Get the S3 internal url, or the external url if external is true. """
         return self.external_url if external else self.internal_url
 
+    def get_insecure(self, external: bool = False) -> bool:
+        """ Get the insecure SSL flag for the internal url, or the external url if external is true. """
+        return self.insecure_external if external else self.insecure_internal
+
     async def initialize_clients(self):
         """
         Initialize the S3 clients. NOTE: this method is not safe for concurrent access.
@@ -63,14 +73,14 @@ class S3Config(BaseModel):
                 self.internal_url,
                 self.access_key,
                 self.access_secret,
-                insecure_ssl=self.insecure
+                insecure_ssl=self.insecure_internal
             )
         if self._s3_external_client is None and self.external_url:
             self._s3_external_client = await S3Client.create(
                 self.external_url,
                 self.access_key,
                 self.access_secret,
-                insecure_ssl=self.insecure,
+                insecure_ssl=self.insecure_external,
                 skip_connection_check=not self.verify_external_url
             )
 
