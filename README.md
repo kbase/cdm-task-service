@@ -14,54 +14,54 @@ Enables running jobs on remote compute from the KBase CDM cluster.
 
 The CTS uses CRC64/NVME checksums on all input and output files for data integrity checks and
 to ensure files do not unexpectedly change over time. As such, all input files in S3 must
-have the checksums stored in their metadata. A user can check this via various methods, but
-here we use the Minio client, `mc`. Assuming the alias for the S3 installation is `local9002`:
+have the checksums stored in their metadata.
+
+A user can check this via various methods, but here we use the
+[AWS CLI](https://aws.amazon.com/cli/).
+
+When using an S3-compatible store rather than AWS S3 itself, configure a profile:
 
 ```
-$ ./mc stat local9002/test-bucket/test-file-with-checksum
-Name      : test-file-with-checksum
-Date      : 2025-02-26 16:52:49 PST 
-Size      : 8 B    
-ETag      : 1b9554867d35f0d59e4705f6b2712cd1 
-Type      : file 
-Checksum  : CRC64NVME:S8AXmd7A3f8=
-Metadata  :
-  Content-Type: application/octet-stream
+export AWS_PROFILE=<your preferred profile name>
+$ aws configure set endpoint_url <s3 url here>
+$ aws configure
+AWS Access Key ID [None]: <access key>
+AWS Secret Access Key [None]: <secret key>
+Default region name [None]: default
+Default output format [None]:
+```
+
+Checking a file's checksum:
+
+```
+$ aws s3api head-object --bucket test-bucket --key test-file-with-checksum --checksum-mode ENABLED
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-04-13T22:10:40+00:00",
+    "ContentLength": 507,
+    "ChecksumCRC64NVME": "4YocWC/iHHg=",
+    "ChecksumType": "FULL_OBJECT",
+    "ETag": "\"b49d8511ffc4c158395f4b920763f80b\"",
+    "ContentType": "binary/octet-stream",
+    "Metadata": {}
+}
 ```
 
 Files without the CRC64NVME checksum will be rejected by the service.
 
-To include a checksum on upload with `mc`, use the `--checksum` argument:
+The AWS CLI automatically includes a CRC64NVME checksum on upload:
 
 ```
-./mc cp --checksum crc64nvme tinyfile.crap local9002/test-bucket/test-file-with-checksum
-...yfile.crap: 8 B / 8 B ┃▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓┃ 60 B/s 0s
+$ aws s3 cp job_ids s3://test-bucket/test-file-with-checksum
+upload: ./job_ids to s3://test-bucket/test-file-with-checksum 
 ```
 
-If a file already exists in S3 but has no checksum, one can be added via a copy:
+If a file already exists in S3 but has no checksum, it may need to be downloaded and re uploaded.
+Copying also may be an option, but be aware that some S3 implementations, in particular Ceph,
+do not currently add checksums on a copy.
 
 ```
-$ ./mc stat local9002/test-bucket/test-file-no-checksum
-Name      : test-file-no-checksum
-Date      : 2025-02-26 16:52:33 PST 
-Size      : 8 B    
-ETag      : 1b9554867d35f0d59e4705f6b2712cd1 
-Type      : file 
-Metadata  :
-  Content-Type: application/octet-stream 
-
-~$ ./mc cp --checksum crc64nvme local9002/test-bucket/test-file-no-checksum local9002/test-bucket/test-file-now-with-more-checksums
-...o-checksum: 8 B / 8 B ┃▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓┃ 37 B/s 0s
-
-~$ ./mc stat local9002/test-bucket/test-file-now-with-more-checksums
-Name      : test-file-now-with-more-checksums
-Date      : 2025-02-26 16:57:06 PST 
-Size      : 8 B    
-ETag      : 1b9554867d35f0d59e4705f6b2712cd1 
-Type      : file 
-Checksum  : CRC64NVME:S8AXmd7A3f8=
-Metadata  :
-  Content-Type: application/octet-stream 
+aws s3 cp s3://test-bucket/test-file-no-checksum s3://test-bucket/new-file --checksum-algorithm CRC64NVME
 ```
 
 ### Further usage documentation
@@ -87,7 +87,6 @@ Metadata  :
   AWS key management service.
 * The provided credentials must enable listing readable buckets, as the service performs that
   operation to check the host and credentials on startup.
-* If using Minio, the minimum version is `2025-02-07T23-21-09Z`.
 
 ### HTCondor requirements
 
