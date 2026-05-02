@@ -22,7 +22,7 @@ dependencies = [
     "docker-image-py==0.1.13",
     "fastapi[standard]==0.136.1",
     # stay on htcondor 25.0.X - LTS version
-    "htcondor==25.0.9",
+    "htcondor==25.8.2",
     "jinja-cli==1.2.2",
     "kbase-auth-client==0.1.2",
     "marisa-trie==1.4.1",
