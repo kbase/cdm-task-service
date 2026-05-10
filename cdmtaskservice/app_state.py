@@ -26,7 +26,8 @@ from cdmtaskservice.flow_cleaner import FlowCleaner
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.jaws_flows_provider import JAWSFlowProvider
 from cdmtaskservice.jobflows.kbase import KBaseFlowProvider, KBaseRunner
-from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
+# NOTE: Restore this import if Lawrencium is reactivated (see also sites.py and jaws_flows_provider.py).
+# from cdmtaskservice.jobflows.lawrencium_jaws import LawrenciumJAWSRunner
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice.job_state import JobState
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -335,7 +336,9 @@ async def _register_nersc_job_flows(
     )
     dest.register("JAWS flow provider", jaws_job_flows.close())
     flowman.register_flow(NERSCJAWSRunner.CLUSTER, jaws_job_flows.get_nersc_job_flow)
-    flowman.register_flow(LawrenciumJAWSRunner.CLUSTER, jaws_job_flows.get_lrc_job_flow)
+    # NOTE: LRC is offline. Restore this line (and see jaws_flows_provider.py and sites.py)
+    # if Lawrencium is reactivated.
+    # flowman.register_flow(LawrenciumJAWSRunner.CLUSTER, jaws_job_flows.get_lrc_job_flow)
     return jaws_job_flows
 
 

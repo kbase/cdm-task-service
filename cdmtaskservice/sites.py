@@ -9,15 +9,32 @@ from enum import Enum
 
 class Cluster(str, Enum):
     """
-    The location where a job should run.
-    
-    perlmutter-jaws: The Perlmutter cluster at NERSC run via JAWS.
-    lawrencium-jaws: The Lawrencium cluster at LBNL run via JAWS.
+    All clusters that have ever been registered in the system, including those that are no longer
+    registered but may have associated job records.
+
+    perlmutter-jaws: The Perlmutter cluster at NERSC run via JAWS.  
+    lawrencium-jaws: The Lawrencium cluster at LBNL run via JAWS.  
     kbase: KBase compute nodes.
     """
 
     PERLMUTTER_JAWS = "perlmutter-jaws"
     LAWRENCIUM_JAWS = "lawrencium-jaws"
+    KBASE = "kbase"
+
+
+class SubmittableCluster(str, Enum):
+    """
+    Clusters for job submission..
+
+    perlmutter-jaws: The Perlmutter cluster at NERSC run via JAWS.  
+    kbase: KBase compute nodes.
+    """
+    
+    # NOTE: If Lawrencium (lawrencium-jaws) is reactivated, add it back here and restore the
+    # LawrenciumJAWSRunner instantiation and flow registration — see jaws_flows_provider.py
+    # and app_state.py.
+
+    PERLMUTTER_JAWS = "perlmutter-jaws"
     KBASE = "kbase"
 
 

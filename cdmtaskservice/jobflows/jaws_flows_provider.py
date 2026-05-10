@@ -309,15 +309,17 @@ class JAWSFlowProvider:
 
     def _build_flows(self, jaws_client: JAWSClient, nerscman: NERSCManager
     ) -> (NERSCJAWSRunner, LawrenciumJAWSRunner):
-        lrcjawsflow = LawrenciumJAWSRunner(
-            nerscman,
-            jaws_client,
-            self._mongodao,
-            self._s3config,
-            self._kafka,
-            self._coman,
-            self._service_root_url,
-        )
+        # NOTE: LRC is offline. Restore lrcjawsflow instantiation and on_refdata_complete
+        # coupling (and see app_state.py and sites.py) if Lawrencium is reactivated.
+        # lrcjawsflow = LawrenciumJAWSRunner(
+        #     nerscman,
+        #     jaws_client,
+        #     self._mongodao,
+        #     self._s3config,
+        #     self._kafka,
+        #     self._coman,
+        #     self._service_root_url,
+        # )
         nerscjawsflow = NERSCJAWSRunner(
             nerscman,
             jaws_client,
@@ -326,6 +328,6 @@ class JAWSFlowProvider:
             self._kafka,
             self._coman,
             self._service_root_url,
-            on_refdata_complete=lrcjawsflow.nersc_refdata_complete,
+            # on_refdata_complete=lrcjawsflow.nersc_refdata_complete,
         )
-        return nerscjawsflow, lrcjawsflow
+        return nerscjawsflow, None
