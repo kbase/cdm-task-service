@@ -157,10 +157,14 @@ async def whoami(r: Request, user: CTSUser=Depends(_AUTH)) -> WhoAmI:
 class Site(sites.ComputeSite):
     """
     Information about a remote compute site and its status.
-    
+
     For a site to be usable, it must be both active and available.
     """
-    
+
+    cluster: Annotated[sites.SubmittableCluster, Field(
+        examples=[sites.SubmittableCluster.PERLMUTTER_JAWS.value],
+        description="The site identifier",
+    )]
     active: Annotated[bool, Field(
         description="Whether the compute site has been set to active by a service admin."
     )]
@@ -258,6 +262,15 @@ class SubmitJobResponse(BaseModel):
     job_id: Annotated[str, Field(description="An opaque job ID.")]
 
 
+class JobInputCreate(models.JobInput):
+    """ Input to a Job. """
+
+    # restrict to clusters registered to the service
+    cluster: Annotated[sites.SubmittableCluster, Field(
+        examples=[sites.SubmittableCluster.PERLMUTTER_JAWS.value]
+    )]
+
+
 @ROUTER_JOBS.post(
     "",
     response_model=SubmitJobResponse,
@@ -267,7 +280,7 @@ class SubmitJobResponse(BaseModel):
 )
 async def submit_job(
     r: Request,
-    job_input: models.JobInput,
+    job_input: JobInputCreate,
     user: CTSUser=Depends(_AUTH),
 ) -> SubmitJobResponse:
     job_state = app_state.get_app_state(r).job_state
