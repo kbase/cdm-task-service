@@ -58,8 +58,12 @@ class Executor:
         if self._s3cli:
             await self._s3cli.close()
     
-    async def execute(self):
-        """ Run the executor. Returns True for success, False for fail. """
+    async def execute(self) -> int:
+        """
+        Run the executor.
+        Returns 0 for success, a positive integer for the container exit code, or -1 if an error
+        occurred other than a container error.
+        """
         await self._log_service_ver()
         # If we can't get the job, we presumably can't update the job either, so we just throw any
         # exceptions.
@@ -74,11 +78,11 @@ class Executor:
                 await self._process_error_state(job, exit_code)
             else:
                 await self._process_complete_state(job)
+            return exit_code
         except Exception as e:
             self._logr.exception(f"Job failed: {e}")
             await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
-            return False
-        return True
+            return -1
     
     async def _check_resp(self, resp: aiohttp.ClientResponse, action: str
     ) -> dict[str, Any] | None:
@@ -317,13 +321,14 @@ Local relative path: {loc}
         )
 
 
-async def run_executor(stderr: TextIO):
+async def run_executor(stderr: TextIO) -> int:
     """
     Run the job executor. 
     
     stderr - a stderr stream.
     
-    Returns True for success, False for failure.
+    Returns 0 for success, a positive integer for the container exit code, or -1 if an error
+    occurred other than a container error.
     """
     stderr.write(f"Executor version: {VERSION} githash: {GIT_COMMIT}\n")
     cfg = Config()

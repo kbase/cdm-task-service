@@ -49,7 +49,7 @@ async def run_container(
     mounts: dict[str, tuple[str, bool]] | None = None,
     post_start_callback: Awaitable[None] | None = None,
     sigterm_callback: Callable[[int], None] | None = None,
-):
+) -> int:
     """
     Run a container and wait for it to complete.
     
@@ -66,6 +66,8 @@ async def run_container(
     sigterm_callback - a callable that will be called if a SIGTERM or SIGINT is sent to the
         process, after a stop signal is sent to the docker container. The argument is the signal
         number.
+
+    Returns the container exit code.
     """
     _require_string(image, "image")
     _not_falsy(stdout_path, "stdout_path")
@@ -115,7 +117,7 @@ async def run_container(
         _stream_logs(container, stdout_path, stderr_path)
 
         result = container.wait()
-        return result.get("StatusCode", -1)
+        return result["StatusCode"]
     finally:
         try:
             container.remove(force=True)
