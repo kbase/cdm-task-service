@@ -18,6 +18,7 @@ if __name__ == "__main__":
             f"Invalid CTS_LOG_LEVEL '{cts_log_level}': must be a standard log level "
             + "e.g. DEBUG, INFO, WARNING, ERROR, CRITICAL"
         ) from e
-    res = asyncio.run(run_executor(sys.stderr))  # allow testing via replacing streams
-    if not res:
-        sys.exit(1)
+    exit_code = asyncio.run(run_executor(sys.stderr))  # allow testing via replacing streams
+    # pick any old number that's less likely to collide with with container exit codes
+    exit_code = 119 if exit_code < 0 else exit_code
+    sys.exit(exit_code)
