@@ -181,7 +181,7 @@ class CondorClient:
     def _get_environment(self, job: models.Job) -> str:
         env = {
             "JOB_ID": job.id,
-            "CONTAINER_NUMBER": "$(container_number)",
+            "CONTAINER_NUMBER": f"$$([{_AD_CONTAINER_NUMBER}])",
             "CODE_ARCHIVE": self._code_archive_name,
             "GLOBAL_CACHE_DIR": self._config.cache_dir,
             "SERVICE_ROOT_URL": self._config.service_root_url,
@@ -268,7 +268,7 @@ class CondorClient:
             v = ca.get(k)
             if v is not None:
                 if k == _AD_MEM:
-                    v = v.eval()
+                    v = v.eval(scope=ca)
                 if isinstance(v, ExprTree):
                     v = str(v)  # eval()ing he ExprTree isn't helpful, want the expression
                 ret[k] = v
