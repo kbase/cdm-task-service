@@ -80,7 +80,6 @@ _BASESUBJOB3 = _BASESUBJOB1.model_copy(deep=True)
 _BASESUBJOB3.sub_id = 2
 
 
-@pytest.mark.asyncio
 async def test_indexes(mongo, mondb):
     mongo.clear_database(MONGO_TEST_DB, drop_indexes=True)
     await MongoDAO.create(mondb)
@@ -168,7 +167,6 @@ async def test_indexes(mongo, mondb):
     }
 
 
-@pytest.mark.asyncio
 async def test_job_basic_roundtrip(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
@@ -177,7 +175,6 @@ async def test_job_basic_roundtrip(mondb):
     assert got == _BASEJOB
 
 
-@pytest.mark.asyncio
 async def test_set_job_clean(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
@@ -193,7 +190,6 @@ async def test_set_job_clean(mondb):
     assert got == expected
 
 
-@pytest.mark.asyncio
 async def test_set_job_clean_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
@@ -208,7 +204,6 @@ async def _set_job_clean_fail(mc, job_id, expected):
         await mc.set_job_clean(job_id)
 
 
-@pytest.mark.asyncio
 async def test_process_dirty_jobs(mondb):
     mc = await MongoDAO.create(mondb)
     current = datetime.datetime(
@@ -277,7 +272,6 @@ async def test_process_dirty_jobs(mondb):
     assert found.keys() == set() 
 
 
-@pytest.mark.asyncio
 async def test_process_dirty_jobs_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await _process_dirty_jobs_fail(
@@ -291,7 +285,6 @@ async def _process_dirty_jobs_fail(mc, older_than, op, expected):
         await mc.process_dirty_jobs(older_than, op)
 
 
-@pytest.mark.asyncio
 async def test_exit_codes_for_standard_job_roundtrip(mondb):
     mc = await MongoDAO.create(mondb)
     
@@ -303,7 +296,6 @@ async def test_exit_codes_for_standard_job_roundtrip(mondb):
     assert await mc.get_exit_codes_for_standard_job("baz") is None
 
 
-@pytest.mark.asyncio
 async def test_exit_codes_for_standard_job_upsert(mondb):
     mc = await MongoDAO.create(mondb)
     
@@ -314,7 +306,6 @@ async def test_exit_codes_for_standard_job_upsert(mondb):
     assert await mc.get_exit_codes_for_standard_job("foo") == [0]
 
 
-@pytest.mark.asyncio
 async def test_save_exit_codes_for_standard_job_fail(mondb):
     mc = await MongoDAO.create(mondb)
     
@@ -333,7 +324,6 @@ async def save_exit_codes_for_standard_job_fail(mc, job_id, exit_codes, expected
         await mc.save_exit_codes_for_standard_job(job_id, exit_codes)
 
 
-@pytest.mark.asyncio
 async def test_update_job(mondb):
     # tests updates that change standard and array fields as well as switching to error
     mc = await MongoDAO.create(mondb)
@@ -383,7 +373,6 @@ async def test_update_job(mondb):
     assert got == expected
 
 
-@pytest.mark.asyncio
 async def test_update_job_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
@@ -408,7 +397,6 @@ async def test_update_job_fail(mondb):
     )
 
 
-@pytest.mark.asyncio
 async def test_update_job_and_subjob_fail_update_to_error(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
@@ -443,7 +431,6 @@ def check_trans_retry_fields(jobdoc: dict[str, Any]):
         assert tt["_retry"] == 0
 
 
-@pytest.mark.asyncio
 async def test_job_hidden_fields(mondb):
     # Tests that internal fields are set correctly when performing actions
     # on a job. Does not test other job saving / updating code.
@@ -477,7 +464,6 @@ async def test_job_hidden_fields(mondb):
     check_job_retry_fields(job)
 
 
-@pytest.mark.asyncio
 async def test_subjob_basic_roundtrip(mondb):
     mc = await MongoDAO.create(mondb)
     
@@ -492,7 +478,6 @@ async def test_subjob_basic_roundtrip(mondb):
     assert sjs_got == sjs 
 
 
-@pytest.mark.asyncio
 async def test_initialize_subjobs_fail_bad_args(mondb):
     mc = await MongoDAO.create(mondb)
     
@@ -507,7 +492,6 @@ async def initialize_subjobs_fail(mc, subjobs, expected):
         await mc.initialize_subjobs(subjobs)
 
 
-@pytest.mark.asyncio
 async def test_initialize_subjobs_fail_duplicate_ids(mondb):
     # for now just throw a mongo error, this indicates a programming issue
     mc = await MongoDAO.create(mondb)
@@ -523,7 +507,6 @@ async def test_initialize_subjobs_fail_duplicate_ids(mondb):
         await mc.initialize_subjobs(sjs)
 
 
-@pytest.mark.asyncio
 async def test_get_subjob_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB2])
@@ -548,7 +531,6 @@ async def get_subjob_fail(mc, job_id, subjob_id, expected):
         await mc.get_subjob(job_id, subjob_id)
 
 
-@pytest.mark.asyncio
 async def test_get_subjobs_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB2])
@@ -563,7 +545,6 @@ async def get_subjobs_fail(mc, job_id, expected):
         await mc.get_subjobs(job_id)
 
 
-@pytest.mark.asyncio
 async def test_get_exit_codes_for_subjobs(mondb):
     mc = await MongoDAO.create(mondb)
     sj1 = _BASESUBJOB1.model_copy()
@@ -575,7 +556,6 @@ async def test_get_exit_codes_for_subjobs(mondb):
     assert await mc.get_exit_codes_for_subjobs("bar") == [3, 0, None]
 
 
-@pytest.mark.asyncio
 async def test_get_exit_codes_for_subjobs_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB2])
@@ -592,7 +572,6 @@ async def get_exit_codes_for_subjobs_fail(mc, job_id, expected):
         await mc.get_exit_codes_for_subjobs(job_id)
 
 
-@pytest.mark.asyncio
 async def test_update_subjob(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB1])
@@ -616,7 +595,6 @@ async def test_update_subjob(mondb):
     assert got == expected
 
 
-@pytest.mark.asyncio
 async def test_update_subjob_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB1])
@@ -648,7 +626,6 @@ async def fail_update_subjob(mc, job_id, subjob_id, update, dt, expected):
         await mc.update_subjob_state(job_id, subjob_id, update, dt)
 
 
-@pytest.mark.asyncio
 async def test_subjob_hidden_fields(mondb):
     # Tests that internal fields are set correctly when performinging actions
     # on a subjob. Does not test other job saving / updating code.
@@ -679,7 +656,6 @@ async def test_subjob_hidden_fields(mondb):
     assert job["_update_time"] == dt
 
 
-@pytest.mark.asyncio
 async def test_have_subjobs_reached_state(mondb):
     mc = await MongoDAO.create(mondb)
     
@@ -732,7 +708,6 @@ async def test_have_subjobs_reached_state(mondb):
     }
 
 
-@pytest.mark.asyncio
 async def test_have_subjobs_reached_state_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB1])
@@ -749,7 +724,6 @@ async def fail_have_subjobs_reached_state(mc, job_id, expected, *states):
         await mc.have_subjobs_reached_state(job_id, *states)
 
 
-@pytest.mark.asyncio
 async def test_refdata_redundant_update_time(mondb):
     # Tests that an internal update time field is set correctly when performing actions
     # on refdata. Does not test other refdata saving / updating code.
@@ -824,7 +798,6 @@ async def test_refdata_redundant_update_time(mondb):
     assert refd["statuses"][1]["_update_time"] == _SAFE_TIME
 
 
-@pytest.mark.asyncio
 async def test_job_update_sent(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
@@ -848,7 +821,6 @@ async def test_job_update_sent(mondb):
     assert got2 == job2
 
 
-@pytest.mark.asyncio
 async def test_job_update_sent_fail_bad_args(mondb):
     mc = await MongoDAO.create(mondb)
     await _fail_job_update_sent(mc, None, "foo", ValueError("job_id is required"))
@@ -857,7 +829,6 @@ async def test_job_update_sent_fail_bad_args(mondb):
     await _fail_job_update_sent(mc, "foo", "    \t    ", ValueError("trans_id is required"))
 
 
-@pytest.mark.asyncio
 async def test_job_update_sent_fail_no_such_job(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
@@ -877,7 +848,6 @@ async def _fail_job_update_sent(mc: MongoDAO, job_id: str, trans_id: str, expect
         await mc.job_update_sent(job_id, trans_id)
 
 
-@pytest.mark.asyncio
 async def test_process_jobs_with_unsent_updates_noop(mondb):
     mc = await MongoDAO.create(mondb)
     job = _BASEJOB.model_copy(deep=True)
@@ -940,7 +910,6 @@ async def set_up_jobs(mc: MongoDAO) -> tuple[models.AdminJobDetails]:
     return job3, job4, job5
 
 
-@pytest.mark.asyncio
 async def test_process_jobs_with_unsent_updates(mondb):
     mc = await MongoDAO.create(mondb)
     jobs = {}
@@ -965,7 +934,6 @@ async def test_process_jobs_with_unsent_updates(mondb):
     assert jobs["job5"] == job5
 
 
-@pytest.mark.asyncio
 async def test_process_jobs_with_unsent_updates_using_index(mondb):
     # This tests that the mongo query for the respective function uses the correct index.
     mc = await MongoDAO.create(mondb)
@@ -1010,7 +978,6 @@ async def test_process_jobs_with_unsent_updates_using_index(mondb):
     }
 
 
-@pytest.mark.asyncio
 async def test_process_jobs_with_unsent_updates_fail_bad_args(mondb):
     mc = await MongoDAO.create(mondb)
     async def foo(j: models.AdminJobDetails):
@@ -1040,7 +1007,6 @@ async def _fail_process_jobs_with_unsent_updates(
         await mc.process_jobs_with_unsent_updates(processor, older_than)
 
 
-@pytest.mark.asyncio
 async def test_set_refdata_clean(mondb):
     mc = await MongoDAO.create(mondb)
     rd = models.AdminReferenceData(
@@ -1092,7 +1058,6 @@ async def test_set_refdata_clean(mondb):
     assert got == rd
 
 
-@pytest.mark.asyncio
 async def test_set_refdata_clean_fail(mondb):
     mc = await MongoDAO.create(mondb)
     rd = models.AdminReferenceData(
@@ -1136,7 +1101,6 @@ async def _fail_set_refdata_clean(
         await mc.set_refdata_clean(cluster, refdata_id)
 
 
-@pytest.mark.asyncio
 async def test_process_dirty_refdata(mondb):
     mc = await MongoDAO.create(mondb)
     current = datetime.datetime(
@@ -1212,7 +1176,6 @@ async def test_process_dirty_refdata(mondb):
     assert found.keys() == set() 
 
 
-@pytest.mark.asyncio
 async def test_process_dirty_refdata_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await _process_dirty_refdata_fail(

@@ -97,7 +97,6 @@ def test_crc64nvme_fail():
         assert_exception_correct(got.value, expected)
 
 
-@pytest.mark.asyncio
 async def test_download_presigned_url(minio, temp_dir):
     await _test_download_presigned_url(minio, temp_dir, None)
     await _test_download_presigned_url(minio, temp_dir, "e/Vz6rUQ/+o=")
@@ -118,7 +117,6 @@ async def _test_download_presigned_url(minio, temp_dir, crc):
         assert f.read() == "abcdefghij"
 
 
-@pytest.mark.asyncio
 async def test_download_presigned_url_multipart_and_insecure_ssl(minio, temp_dir):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("nice-bucket")
@@ -145,7 +143,6 @@ async def test_download_presigned_url_multipart_and_insecure_ssl(minio, temp_dir
         assert f.read() == "abcdefghij" * 600000 * 4 + "bigolfile"
 
 
-@pytest.mark.asyncio
 async def test_download_presigned_url_fail_bad_args(minio, temp_dir):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -182,7 +179,6 @@ async def _download_presigned_url_fail(
         assert not output.exists()
 
 
-@pytest.mark.asyncio
 async def test_download_presigned_url_fail_bad_sig(minio, temp_dir):
     starts_with = f"GET URL: http://localhost:{minio.port}/test-bucket/myfilex 403\nError:\n"
     # CEPH is stingy with error message contents
@@ -193,7 +189,6 @@ async def test_download_presigned_url_fail_bad_sig(minio, temp_dir):
     await _download_presigned_url_fail_s3_error(minio, temp_dir, url, starts_with, contains)
 
 
-@pytest.mark.asyncio
 async def test_download_presigned_url_fail_nofile(minio, temp_dir):
     starts_with = f"GET URL: http://localhost:{minio.port}/test-bucket/myfilex 404\nError:\n"
     # CEPH is stingy with error message contents
@@ -218,7 +213,6 @@ async def _download_presigned_url_fail_s3_error(minio, temp_dir, url, starts_wit
     assert not output.exists()
 
 
-@pytest.mark.asyncio
 async def test_upload_presigned_url(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -236,7 +230,6 @@ async def test_upload_presigned_url(minio):
     assert obj["ETag"] == '"3291fbb392f6fad06dbf331dfb74da81"'
 
 
-@pytest.mark.asyncio
 async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -261,7 +254,6 @@ async def test_upload_presigned_url_with_crc_and_insecure_ssl(minio):
     assert obj["ChecksumCRC64NVME"] == "4ekt2WB1KO4="
 
 
-@pytest.mark.asyncio
 async def test_upload_presigned_url_fail(minio):
     async with _client(minio) as s3c:
         r = (await s3c.presign_post_urls(S3Paths(["test-bucket/foo/myfile"])))[0]
@@ -314,7 +306,6 @@ async def _upload_presigned_url_fail(sess, url, fields, infile, expected, timeou
     assert_exception_correct(got.value, expected)
 
 
-@pytest.mark.asyncio
 async def test_upload_presigned_url_fail_bad_crc(minio):
     starts_with = (f"POST URL: http://localhost:{minio.port}/test-bucket Key: bar/myfilecrc 400"
                    + "\nError:\n")
@@ -335,7 +326,6 @@ async def test_upload_presigned_url_fail_bad_crc(minio):
     await _upload_presigned_url_fail_s3_error(minio, url.url, url.fields, starts_with, contains)
 
 
-@pytest.mark.asyncio
 async def test_upload_presigned_url_fail_no_bucket(minio):
     starts_with = (f"POST URL: http://localhost:{minio.port}/fake-bucket Key: bar/myfilecrc 404"
                    + "\nError:\n")

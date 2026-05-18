@@ -29,7 +29,6 @@ def test_CompleteImageName():
     assert nim.name_with_digest == "foo@sha256:stuff"
 
 
-@pytest.mark.asyncio
 async def test_create_fail_invalid_crane_path():
     badcrane = os.path.normpath((Path(__file__) / ".." / "testfiles" / "badcrane").absolute())
     testset = {
@@ -45,7 +44,6 @@ async def test_create_fail_invalid_crane_path():
         assert_exception_correct(got.value, v)
 
 
-@pytest.mark.asyncio
 async def test_narmalize_image_name():
     testset = {
         "ghcr.io/kbase/workspace_deluxe:0.15.0":
@@ -88,7 +86,6 @@ async def test_narmalize_image_name():
         assert dig == v
 
 
-@pytest.mark.asyncio
 async def test_get_entrypoint_from_name():
     ws_entrypoint = ["/kb/deployment/bin/dockerize"]
     testset = {
@@ -108,7 +105,6 @@ async def test_get_entrypoint_from_name():
         assert ep == v
 
 
-@pytest.mark.asyncio
 async def test_image_methods_fail():
     testset = {
         None: ImageNameParseError("No image name provided"),
@@ -154,7 +150,6 @@ async def test_image_methods_fail():
         await _image_methods_fail(dii, k, v)
 
 
-@pytest.mark.asyncio
 async def test_normalize_image_name_fail():
     """Tests failure modes that only occur with this method rather than all methods. """ 
     testset = {
@@ -179,7 +174,6 @@ async def test_normalize_image_name_fail():
 
 
 
-@pytest.mark.asyncio
 async def test_get_entrypoint_from_name_fail():
     """Tests failure modes that only occur with this method rather than all methods. """
     testset = {
@@ -196,7 +190,6 @@ async def test_get_entrypoint_from_name_fail():
             await dii.get_entrypoint_from_name(k)
         assert_exception_correct(got.value, v)
 
-@pytest.mark.asyncio
 async def test_image_methods_fail_bad_chars():
     # test some of the scary chars for shell injection
     dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
