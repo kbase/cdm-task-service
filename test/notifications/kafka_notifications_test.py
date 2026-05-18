@@ -12,7 +12,6 @@ from conftest import kafka  # @UnusedImport
 from utils import find_free_port
 
 
-@pytest.mark.asyncio
 async def test_create_fail_bad_args():
     await _fail_create(None, "topic", ValueError("bootstrap_servers is required"))
     await _fail_create("   \t   ", "topic", ValueError("bootstrap_servers is required"))
@@ -34,7 +33,6 @@ async def _fail_create(bootstrap: str, topic: str, expected: Exception):
         await KafkaNotifier.create(bootstrap, topic)
 
 
-@pytest.mark.asyncio
 async def test_send(kafka):
     kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "topichere")
     passed = set()
@@ -62,7 +60,6 @@ async def test_send(kafka):
     await kn.close()
 
 
-@pytest.mark.asyncio
 async def test_send_with_recovery(kafka):
     kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "topichere")
     passed = set()
@@ -127,7 +124,6 @@ async def _check_send_results(port, topic):
     await kc.stop()
 
 
-@pytest.mark.asyncio
 async def test_fail_send_on_close(kafka):
     kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "topichere")
     await kn.close()

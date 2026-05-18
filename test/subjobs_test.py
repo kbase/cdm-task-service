@@ -45,7 +45,6 @@ _JOB = models.Job(
 )
 
 
-@pytest.mark.asyncio
 async def test_get_job_update_fail_bad_args():
     md = create_autospec(MongoDAO, spec_set=True, instance=True)
     s = models.JobState.COMPLETE
@@ -65,7 +64,6 @@ async def _get_job_update_fail(md, job, state, expected):
         await get_job_update(md, job, state)
 
 
-@pytest.mark.asyncio
 async def test_get_job_update_fail_single_states():
     for s in set(models.JobState) - models.JobState.canceling_states():
         await _run_get_job_fail(s, {s: (0, None)}, ValueError(
@@ -77,7 +75,6 @@ async def test_get_job_update_fail_single_states():
         ))
 
 
-@pytest.mark.asyncio
 async def test_get_job_update_fail_canceling_states():
     for s in models.JobState.canceling_states():
         await _run_get_job_fail(s, {s: (0, None)}, ValueError(
@@ -85,7 +82,6 @@ async def test_get_job_update_fail_canceling_states():
         ))
 
 
-@pytest.mark.asyncio
 async def test_get_job_update_fail_multiple_states():
     usg = models.JobState.UPLOAD_SUBMITTING
     esg = models.JobState.ERROR_PROCESSING_SUBMITTING
@@ -130,7 +126,6 @@ async def _run_get_job_fail(
         await get_job_update(md, _JOB, state)
 
 
-@pytest.mark.asyncio
 async def test_get_job_update_basic_states():
     states = [
         models.JobState.CREATED,
@@ -158,7 +153,6 @@ async def _run_get_job_update_basic_states(
     md.have_subjobs_reached_state.assert_called_once_with("foo", state)
 
 
-@pytest.mark.asyncio
 async def test_get_job_update_paired_states():
     await _get_job_update_paired_states_cases(
         models.JobState.UPLOAD_SUBMITTING, models.JobState.ERROR_PROCESSING_SUBMITTING

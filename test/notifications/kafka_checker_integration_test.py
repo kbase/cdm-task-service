@@ -18,7 +18,6 @@ from mongo_test import set_up_jobs
 # this case.
 
 
-@pytest.mark.asyncio
 async def test_checker_noop(mondb, kafka):
     mc = await MongoDAO.create(mondb)
     kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "mytopic")
@@ -31,7 +30,6 @@ async def test_checker_noop(mondb, kafka):
     await kn.close()
 
 
-@pytest.mark.asyncio
 async def test_checker(mondb, kafka):
     mc = await MongoDAO.create(mondb)
     kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "mytopic")
@@ -107,7 +105,6 @@ async def test_checker(mondb, kafka):
     await kn.close()
 
 
-@pytest.mark.asyncio
 async def test_construct_fail(mondb, kafka):
     mc = await MongoDAO.create(mondb)
     kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "mytopic")
@@ -123,7 +120,6 @@ def _fail_construct(mc: MongoDAO, kn: KafkaNotifier, expected: Exception):
         KafkaChecker(mc, kn)
 
 
-@pytest.mark.asyncio
 async def test_checker_fail_bad_args(mondb, kafka):
     mc = await MongoDAO.create(mondb)
     kn = await KafkaNotifier.create(f"localhost:{kafka.port}", "mytopic")

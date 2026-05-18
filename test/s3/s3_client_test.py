@@ -29,12 +29,10 @@ from conftest import (
 )
 
 
-@pytest.mark.asyncio
 async def test_max_s3_object_size():
     assert client._MULTIPART_MAXIMUM_SIZE == 53687091200000  # 48.8 TiB
 
 
-@pytest.mark.asyncio
 async def test_create_fail_missing_args():
     u = "https://localhost:1234"
     await _create_fail(None, "foo", "bar", ValueError("endpoint_url is required"))
@@ -45,7 +43,6 @@ async def test_create_fail_missing_args():
     await _create_fail(u, "foo", "  \t   ", ValueError("secret_key is required"))
 
 
-@pytest.mark.asyncio
 async def test_create_fail_bad_args(minio, minio_unauthed_user):
     bad_ep1 = f"localhost:{minio.port}"
     await _create_fail(
@@ -81,7 +78,6 @@ async def _create_fail(host, akey, skey, expected, config=None, print_stacktrace
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
-@pytest.mark.asyncio
 async def test_is_bucket_writeable(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -92,7 +88,6 @@ async def test_is_bucket_writeable(minio):
 # TODO TEST add tests for checking bucket format (None input etc.). For now just test functionality
 
 
-@pytest.mark.asyncio
 async def test_is_bucket_writeable_fail_no_bucket(minio):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
@@ -102,7 +97,6 @@ async def test_is_bucket_writeable_fail_no_bucket(minio):
         )
 
 
-@pytest.mark.asyncio
 async def test_is_bucket_writeable_fail_unauthed(minio, minio_unauthed_user):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
@@ -113,7 +107,6 @@ async def test_is_bucket_writeable_fail_unauthed(minio, minio_unauthed_user):
             "Write access denied to bucket 'fail-bucket' on the s3 system"))
 
 
-@pytest.mark.asyncio
 async def test_is_bucket_writeable_readonly(minio, minio_unauthed_user):
     await minio.clean()
     await minio.create_bucket("fail-bucket-readonly")
@@ -163,7 +156,6 @@ async def _is_bucket_writeable_fail(s3c, bucket, expected, print_stacktrace=Fals
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
-@pytest.mark.asyncio
 async def test_get_object_meta_single_part_w_crc64nvme(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -181,7 +173,6 @@ async def test_get_object_meta_single_part_w_crc64nvme(minio):
     )
 
 
-@pytest.mark.asyncio
 async def test_get_object_meta_multipart_and_insecure_ssl(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -202,7 +193,6 @@ async def test_get_object_meta_multipart_and_insecure_ssl(minio):
     )
 
 
-@pytest.mark.asyncio
 async def test_get_object_meta_mix_w_crc64nvme(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("nice-bucket")
@@ -237,13 +227,11 @@ async def test_get_object_meta_mix_w_crc64nvme(minio):
     )
 
 
-@pytest.mark.asyncio
 async def test_get_object_meta_fail_no_paths(minio):
     async with _client(minio) as cli:
         await _get_object_meta_fail(cli, None, ValueError("paths is required"))
 
 
-@pytest.mark.asyncio
 async def test_get_object_meta_fail_concurrency(minio):
     p = S3Paths(["foo/bar"])
     async with _client(minio) as cli:
@@ -252,7 +240,6 @@ async def test_get_object_meta_fail_concurrency(minio):
                 cli, p, ValueError("concurrency must be >= 1"), concurrency=c)
 
 
-@pytest.mark.asyncio
 async def test_get_object_meta_fail_no_object(minio):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
@@ -267,7 +254,6 @@ async def test_get_object_meta_fail_no_object(minio):
             await _get_object_meta_fail(cli, S3Paths([k]), S3PathNotFoundError(v))
 
 
-@pytest.mark.asyncio
 async def test_get_object_meta_fail_unauthed(minio, minio_unauthed_user):
     # Will probably want to refactor these tests so they can be generically be applied to
     # any endpoint
@@ -285,7 +271,6 @@ async def test_get_object_meta_fail_unauthed(minio, minio_unauthed_user):
         )
 
 
-@pytest.mark.asyncio
 async def test_get_object_meta_fail_concurrent_paths(minio):
     # Since a taskgroup cancels all tasks after the first failure, check that we're throwing
     # the right error and not a CancelledError or something
@@ -316,7 +301,6 @@ async def _get_object_meta_fail(s3c, paths, expected, concurrency=1, print_stack
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
-@pytest.mark.asyncio
 async def test_download_objects_to_file(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -338,7 +322,6 @@ async def test_download_objects_to_file(minio, tmp_path):
         assert f.read() == b"abcdefghij" * 600000 * 2
 
 
-@pytest.mark.asyncio
 async def test_download_objects_to_file_fail_bad_paths(minio):
     lp = [Path("foo")]
     s3p = S3Paths(["foo/bar"])
@@ -353,7 +336,6 @@ async def test_download_objects_to_file_fail_bad_paths(minio):
         )
 
 
-@pytest.mark.asyncio
 async def test_download_objects_to_file_fail_concurrency(minio):
     p = S3Paths(["foo/bar"])
     lp = [Path("foo")]
@@ -363,7 +345,6 @@ async def test_download_objects_to_file_fail_concurrency(minio):
                 cli, p, lp, ValueError("concurrency must be >= 1"), concurrency=c)
 
 
-@pytest.mark.asyncio
 async def test_download_objects_to_file_fail_no_object(minio, tmp_path):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
@@ -379,7 +360,6 @@ async def test_download_objects_to_file_fail_no_object(minio, tmp_path):
             await _download_objects_to_file_fail(cli, S3Paths([k]), lp, S3PathNotFoundError(v))
 
 
-@pytest.mark.asyncio
 async def test_download_objects_to_file_fail_unauthed(minio, minio_unauthed_user, tmp_path):
     # Will probably want to refactor these tests so they can be generically be applied to
     # any endpoint
@@ -397,7 +377,6 @@ async def test_download_objects_to_file_fail_unauthed(minio, minio_unauthed_user
         )
 
 
-@pytest.mark.asyncio
 async def test_download_objects_to_file_fail_concurrent_paths(minio, tmp_path):
     # Since a taskgroup cancels all tasks after the first failure, check that we're throwing
     # the right error and not a CancelledError or something
@@ -437,7 +416,6 @@ async def _stream_and_assert(s3c, file_path, expected, seek=None, length=None):
     assert data == expected
 
 
-@pytest.mark.asyncio
 async def test_stream_object(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -462,7 +440,6 @@ async def test_stream_object(minio):
         await _stream_and_assert(s3c, "test-bucket/test_file", b"ouniq", seek=3, length=5)
 
 
-@pytest.mark.asyncio
 async def test_stream_object_fail_bad_input(minio):
     async with _client(minio) as s3c:
         await _stream_object_fail(s3c, None, ValueError("s3path is required"))
@@ -488,7 +465,6 @@ async def test_stream_object_fail_bad_input(minio):
 
 
 
-@pytest.mark.asyncio
 async def test_stream_object_fail_no_object(minio):
     await minio.clean()
     await minio.create_bucket("fail-bucket")
@@ -503,7 +479,6 @@ async def test_stream_object_fail_no_object(minio):
             await _stream_object_fail(cli, S3Paths([k]), S3PathNotFoundError(v))
 
 
-@pytest.mark.asyncio
 async def test_stream_object_fail_unauthed(minio, minio_unauthed_user):
     # Will probably want to refactor these tests so they can be generically be applied to
     # any endpoint
@@ -531,7 +506,6 @@ async def _stream_object_fail(
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -600,7 +574,6 @@ async def _check_object(minio, bucket, key, crc, etag, content):
         assert b"".join(chunks) == content
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_bad_file_info(minio):
     lp = [Path("foo")]
     s3p = S3Paths(["foo/bar"])
@@ -631,7 +604,6 @@ async def test_upload_objects_from_file_fail_bad_file_info(minio):
         )
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_concurrency(minio):
     p = S3Paths(["foo/bar"])
     lp = [Path("foo")]
@@ -642,7 +614,6 @@ async def test_upload_objects_from_file_fail_concurrency(minio):
             )
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_huge_file(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -659,7 +630,6 @@ async def test_upload_objects_from_file_fail_huge_file(minio, tmp_path):
             )
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_bad_crc_single_part(minio, tmp_path):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -675,7 +645,6 @@ async def test_upload_objects_from_file_fail_bad_crc_single_part(minio, tmp_path
         )
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_bad_crc_multipart(minio, tmp_path):
     # CEPH appears (?) to have a bug in full object CRC handling for multipart
     # uploads, so the code path is different from single part
@@ -693,7 +662,6 @@ async def test_upload_objects_from_file_fail_bad_crc_multipart(minio, tmp_path):
         )
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_bad_crc_multipart_part(minio, tmp_path):
     # Verifies CEPH validates per-part checksums when ChecksumAlgorithm is set on upload_part.
     # Pass the correct full-body CRC so any failure must come from the per-part check.
@@ -712,7 +680,6 @@ async def test_upload_objects_from_file_fail_bad_crc_multipart_part(minio, tmp_p
             )
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_no_file(minio):
     await minio.clean()  # couldn't get this to work as a fixture
     await minio.create_bucket("test-bucket")
@@ -726,7 +693,6 @@ async def test_upload_objects_from_file_fail_no_file(minio):
         )
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_unauthed(minio, minio_unauthed_user, tmp_path):
     # Will probably want to refactor these tests so they can be generically be applied to
     # any endpoint
@@ -748,7 +714,6 @@ async def test_upload_objects_from_file_fail_unauthed(minio, minio_unauthed_user
         )
 
 
-@pytest.mark.asyncio
 async def test_upload_objects_from_file_fail_concurrent_paths(minio, tmp_path):
     # Since a taskgroup cancels all tasks after the first failure, check that we're throwing
     # the right error and not a CancelledError or something
@@ -787,7 +752,6 @@ async def _upload_objects_from_file_fail(
     assert_exception_correct(got.value, expected, print_stacktrace)
 
 
-@pytest.mark.asyncio
 async def test_presign_get_urls():
     async with await S3Client.create(
         "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
@@ -809,7 +773,6 @@ async def test_presign_get_urls():
     assert_close_to_now_sec(exp - 600)
 
 
-@pytest.mark.asyncio
 async def test_presign_get_urls_fail():
     async with await S3Client.create(
         "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
@@ -827,7 +790,6 @@ async def _presign_get_urls_fail(s3c, paths, expiration, expected):
     assert_exception_correct(got.value, ValueError(expected))
 
 
-@pytest.mark.asyncio
 async def test_presign_post_urls():
     async with await S3Client.create(
         "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
@@ -845,7 +807,6 @@ async def test_presign_post_urls():
     _presign_post_urls_check_fields(urls[1], "otherdir/somefile")
 
 
-@pytest.mark.asyncio
 async def test_presign_post_urls_with_crc():
     async with await S3Client.create(
         "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
@@ -873,7 +834,6 @@ def _presign_post_urls_check_fields(presign_post, key, crc=None):
     assert fields == expfields
 
 
-@pytest.mark.asyncio
 async def test_presign_post_urls_fail():
     async with await S3Client.create(
         "https://pubminio.kbase.us", "task-service", "complicated pwd", skip_connection_check=True
