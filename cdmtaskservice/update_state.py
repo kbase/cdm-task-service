@@ -129,6 +129,16 @@ class Update(Generic[T]):
         """
         return dict(self._fields)  # don't bother with full immutability
 
+    def __eq__(self, other):
+        if not isinstance(other, Update):
+            return NotImplemented
+        return (
+            self._new_state == other._new_state
+            and self._current_state == other._current_state
+            and set(self._disallowed_current_states) == set(other._disallowed_current_states)
+            and self._fields == other._fields
+        )
+
 
 class JobUpdate(Update[models.JobState]):
     """ An update for a job. """
