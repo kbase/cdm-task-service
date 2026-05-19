@@ -2,6 +2,7 @@
 Helper class for performing job and refdata state updates for job flows.
 """
 
+from collections.abc import Callable
 import datetime
 import logging
 import traceback
@@ -21,10 +22,17 @@ class JobFlowStateUpdates:
     Performs state updates for job flows.
     """
     
-    def __init__(self, cluster: sites.Cluster, mongo: MongoDAO, kafka: KafkaNotifier):
+    def __init__(
+        self,
+        cluster: sites.Cluster,
+        mongo: MongoDAO,
+        kafka: KafkaNotifier,
+        _timestamp_fn: Callable[[], datetime.datetime] = timestamp.utcdatetime,
+        _trans_id_fn: Callable[[], str] = lambda: str(uuid.uuid4()),
+    ):
         """
         Initialize the updater.
-        
+
         cluster - the cluster to which updates will be applied.
         mongo - the MongoDB DAO.
         kafka - a Kafka notifier.
@@ -32,6 +40,8 @@ class JobFlowStateUpdates:
         self._cluster = _not_falsy(cluster, "cluster")
         self._mongo = _not_falsy(mongo, "mongo")
         self._kafka = _not_falsy(kafka, "kafka")
+        self._timestamp_fn = _timestamp_fn
+        self._trans_id_fn = _trans_id_fn
         
     async def handle_exception(
         self, e: Exception, entity_id: str, erraction: str, refdata: bool = False
@@ -109,10 +119,8 @@ class JobFlowStateUpdates:
         """
         _require_string(job_id, "job_id")
         _not_falsy(update, "update")
-        # TODO TEST will need to mock out uuid
-        trans_id = str(uuid.uuid4())
-        # TODO TEST will need a way to mock out timestamps
-        update_time = update_time if update_time else timestamp.utcdatetime()
+        trans_id = self._trans_id_fn()
+        update_time = update_time if update_time else self._timestamp_fn()
         async def cb():
             await self._mongo.job_update_sent(job_id, trans_id)
         await self._mongo.update_job_state(job_id, update, update_time, trans_id)
@@ -130,6 +138,5 @@ class JobFlowStateUpdates:
         _require_string(refdata_id, "refdata_id")
         _not_falsy(update, "update")
         await self._mongo.update_refdata_state(
-            # TODO TEST will need a way to mock out timestamps
-            self._cluster, refdata_id, update, timestamp.utcdatetime()
+            self._cluster, refdata_id, update, self._timestamp_fn()
         )
