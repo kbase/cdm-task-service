@@ -4,17 +4,33 @@ Helper class for performing job and refdata state updates for job flows.
 
 from collections.abc import Callable
 import datetime
+from dataclasses import dataclass
 import logging
 import traceback
 import uuid
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
+from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice import logfields
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice import sites
 from cdmtaskservice import timestamp
 from cdmtaskservice.update_state import refdata_error, error, JobUpdate, RefdataUpdate
+
+
+@dataclass
+class ParentJobUpdate:
+    """
+    The aggregate state result used to determine the parent job's next transition.
+    Returned by SubjobFlowStateUpdates.get_parent_job_update.
+    """
+
+    state: models.JobState
+    """ The state to transition the parent job to. """
+
+    time: datetime.datetime
+    """ The time at which the last subjob reached the equivalent state. """
 
 
 class JobFlowStateUpdates:
@@ -131,7 +147,7 @@ class JobFlowStateUpdates:
     async def update_refdata_state(self, refdata_id: str, update: RefdataUpdate):
         """
         Update the state of a refdata operation.
-        
+
         refdata_id - the ID of the refdata operation to update.
         update - the update to apply.
         """
@@ -139,4 +155,81 @@ class JobFlowStateUpdates:
         _not_falsy(update, "update")
         await self._mongo.update_refdata_state(
             self._cluster, refdata_id, update, self._timestamp_fn()
+        )
+
+
+class SubjobFlowStateUpdates(JobFlowStateUpdates):
+    """
+    Extends JobFlowStateUpdates with subjob state aggregation for job flows that use subjobs.
+    """
+
+    async def get_parent_job_update(
+        self,
+        job: models.Job,
+        subjob_transition: models.JobState,
+    ) -> ParentJobUpdate | None:
+        """
+        Determine whether a subjob transition should trigger a transition for the parent job.
+
+        job - the parent job.
+        subjob_transition - the state the subjob transitioned to.
+
+        Returns the update to apply to the parent job, or None if not all subjobs have reached
+        an equivalent state yet.
+        """
+        # Not liking this implementation, it has to know too much about equivalent job states
+        # Making it work for now, maybe can be refactored later
+
+        _not_falsy(job, "job")
+        st = _not_falsy(subjob_transition, "subjob_transition")
+        if st.is_canceling():
+            raise ValueError("Subjobs cannot transition to the canceling states.")
+        js = models.JobState
+        if st in {js.CREATED, js.DOWNLOAD_SUBMITTED, js.JOB_SUBMITTING, js.JOB_SUBMITTED}:
+            stcount = (await self._mongo.have_subjobs_reached_state(job.id, st))[st]
+            self._check_count_is_valid(st, stcount[0], stcount[0], job.job_input.num_containers)
+            return ParentJobUpdate(
+                st, stcount[1]
+            ) if stcount[0] == job.job_input.num_containers else None
+        if st in {js.UPLOAD_SUBMITTING, js.ERROR_PROCESSING_SUBMITTING}:
+            return await self._check_equiv_states_complete(
+                job, st, js.UPLOAD_SUBMITTING, js.ERROR_PROCESSING_SUBMITTING
+            )
+        if st in {js.UPLOAD_SUBMITTED, js.ERROR_PROCESSING_SUBMITTED}:
+            return await self._check_equiv_states_complete(
+                job, st, js.UPLOAD_SUBMITTED, js.ERROR_PROCESSING_SUBMITTED
+            )
+        if st.is_terminal():
+            return await self._check_equiv_states_complete(job, st, js.COMPLETE, js.ERROR)
+        raise ValueError("Seems like someone added a state without updating this method, oops")
+
+    @staticmethod
+    def _check_count_is_valid(
+        st: models.JobState, state_count: int, all_count: int, ttl_count: int
+    ):
+        if all_count > ttl_count:
+            raise ValueError(f"More subjobs found ({all_count}) than containers ({ttl_count})")
+        if state_count < 1:
+            raise ValueError(
+                f"You reported that a subjob transitioned to state {st.value} but no "
+                + "subjobs are in that state"
+            )
+
+    async def _check_equiv_states_complete(
+        self,
+        job: models.Job,
+        target_state: models.JobState,
+        stdstate: models.JobState,
+        errstate: models.JobState,
+    ) -> ParentJobUpdate | None:
+        counts = await self._mongo.have_subjobs_reached_state(job.id, stdstate, errstate)
+        ttl = sum(c[0] for c in counts.values())
+        self._check_count_is_valid(
+            target_state, counts[target_state][0], ttl, job.job_input.num_containers
+        )
+        if ttl != job.job_input.num_containers:
+            return None
+        t = max(c[1] for c in counts.values() if c[1])
+        return ParentJobUpdate(errstate, t) if counts[errstate][0] > 0 else ParentJobUpdate(
+            stdstate, t
         )
