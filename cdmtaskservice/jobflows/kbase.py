@@ -26,7 +26,7 @@ from cdmtaskservice.exceptions import (
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
-from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
+from cdmtaskservice.jobflows.state_updates import ParentJobUpdate, SubjobFlowStateUpdates
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -34,7 +34,6 @@ from cdmtaskservice.refserv.client import RefdataServiceClient
 from cdmtaskservice.s3.client import S3ObjectMeta
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice import sites
-from cdmtaskservice import subjobs
 from cdmtaskservice import update_state
 from cdmtaskservice.user import CTSUser
 from cdmtaskservice.timestamp import utcdatetime
@@ -57,28 +56,28 @@ class KBaseRunner(JobFlow):
         condor_client: CondorClient,
         mongodao: MongoDAO,
         s3config: S3Config,
-        kafka: KafkaNotifier, 
+        state_updates: SubjobFlowStateUpdates,
         coro_manager: CoroutineWrangler,
-        refserv_client: RefdataServiceClient
+        refserv_client: RefdataServiceClient,
     ):
         """
         Create the runner.
-        
+
         condor_client - a HTCondor client, configured to interact with the remote condor instance.
         mongodao - the Mongo DAO.
-        s3client - an S3 client initialized to interact with the S3 storage system.
-        kafka - a Kafka notifier.
+        s3config - the S3 configuration.
+        state_updates - the job flow state updater.
         coro_manager - a coroutine manager.
+        refserv_client - the refdata service client.
         """
         self._condor = _not_falsy(condor_client, "condor_client")
         self._mongo = _not_falsy(mongodao, "mongodao")
         self._s3 = _not_falsy(s3config, "s3config").get_internal_client()
         self._s3logdir = s3config.error_log_path
+        self._updates = _not_falsy(state_updates, "state_updates")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._refcli = _not_falsy(refserv_client, "refserv_client")
         self._logr = logging.getLogger(__name__)
-        
-        self._updates = JobFlowStateUpdates(self.CLUSTER, self._mongo, _not_falsy(kafka, "kafka"))
 
     async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
         """
@@ -288,7 +287,7 @@ class KBaseRunner(JobFlow):
         # If this fails the job is only stuck if parent_update is not None. It seems really
         # unlikely that the line above would succeed and this line fail, so we don't catch
         # errors here
-        parent_update = await subjobs.get_job_update(self._mongo, job, new_state)
+        parent_update = await self._updates.get_parent_job_update(job, new_state)
         if parent_update:
             if parent_update.state.is_terminal():
                 # In order to get the final job info from Condor, need to return so the
@@ -307,7 +306,7 @@ class KBaseRunner(JobFlow):
                 await self._updates.handle_exception(e, job.id, "updating job state")
     
     async def _update_terminal_job(
-        self, job: models.AdminJobDetails, parent_update: subjobs.JobUpdate
+        self, job: models.AdminJobDetails, parent_update: ParentJobUpdate
     ):
         try:
             if parent_update.state == models.JobState.ERROR:
@@ -644,11 +643,14 @@ class KBaseFlowProvider:
             condor = CondorClient(schedd, self._condor_config, self._s3config)
             self._logr.info("Initializing refdata service client...")
             refcli = await RefdataServiceClient.create(self._refserv_url, self._refserv_token)
+            state_updates = SubjobFlowStateUpdates(
+                KBaseRunner.CLUSTER, self._mongodao, self._kafka
+            )
             kbase = KBaseRunner(
                 condor,
                 self._mongodao,
                 self._s3config,
-                self._kafka,
+                state_updates,
                 self._coman,
                 refcli,
             )
