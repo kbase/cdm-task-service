@@ -178,7 +178,7 @@ ArgumentString = Annotated[str, StringConstraints(
     min_length=1,
     max_length=1024,
     # open this up as needed, careful to not allow dangerous chars. Do not allow spaces
-    pattern=r"^[\w\./][\w\./-]*$"
+    pattern=r"^[\w\./][\w\.\,/-]*$"
 )]
 
 

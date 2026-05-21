@@ -196,7 +196,10 @@ async def get_sites(r: Request) -> Sites:
             active=cl in active,
             available=not err,
             unavailable_reason=err,
-            **sites.CLUSTER_TO_SITE[cl].model_dump()
+            # mode="json" serializes the Cluster enum to its string value so Pydantic
+            # validates it into SubmittableCluster (the overridden field type in Site)
+            # rather than warning about a type mismatch
+            **sites.CLUSTER_TO_SITE[cl].model_dump(mode="json")
         ))
     return Sites(sites=ret)
 
@@ -284,7 +287,15 @@ async def submit_job(
     user: CTSUser=Depends(_AUTH),
 ) -> SubmitJobResponse:
     job_state = app_state.get_app_state(r).job_state
-    return SubmitJobResponse(job_id=await job_state.submit(job_input, user))
+    # JobInputCreate.cluster is SubmittableCluster (a subset of Cluster) for API validation,
+    # but downstream code expects JobInput with cluster typed as Cluster. model_construct
+    # skips re-validation of the already-checked fields (important for large input_files lists);
+    # only cluster is overridden to convert SubmittableCluster -> Cluster.
+    job_input_base = models.JobInput.model_construct(
+        **{**vars(job_input), models.FLD_JOB_INPUT_CLUSTER: sites.Cluster(job_input.cluster.value)}
+    )
+    del job_input
+    return SubmitJobResponse(job_id=await job_state.submit(job_input_base, user))
 
 
 _ANN_JOB_ID = Annotated[str, FastPath(
