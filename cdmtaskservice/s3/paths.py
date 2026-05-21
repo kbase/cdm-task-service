@@ -42,6 +42,14 @@ class S3Paths:
             newpaths.append(validate_path(p, index=i if not no_index_in_errors else None))
         self.paths = tuple(newpaths)
 
+    def __eq__(self, other):
+        if not isinstance(other, S3Paths):
+            return NotImplemented
+        return self.paths == other.paths
+
+    def __hash__(self):
+        return hash(self.paths)
+
     def __len__(self):
         return len(self.paths)
 

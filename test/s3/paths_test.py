@@ -98,6 +98,20 @@ def test_init():
     assert (len(s3p)) == 4
 
 
+def test_eq():
+    assert S3Paths(["foo/bar"]) == S3Paths(["foo/bar"])
+    assert S3Paths(["foo/bar", "baz/bat"]) == S3Paths(["foo/bar", "baz/bat"])
+    assert S3Paths(["foo/bar"]) != S3Paths(["foo/baz"])
+    assert S3Paths(["foo/bar", "baz/bat"]) != S3Paths(["baz/bat", "foo/bar"])
+    assert S3Paths(["foo/bar"]) != "foo/bar"
+
+
+def test_hash():
+    assert hash(S3Paths(["foo/bar"])) == hash(S3Paths(["foo/bar"]))
+    assert hash(S3Paths(["foo/bar"])) != hash(S3Paths(["foo/baz"]))
+    assert len({S3Paths(["foo/bar"]), S3Paths(["foo/bar"])}) == 1
+
+
 def test_split_paths():
     s3p = S3Paths(["foo/bar", "baz/bat   ", "   thingy-stuff9/𝛙hatever/baz"])
 
