@@ -26,7 +26,7 @@ from cdmtaskservice.exceptions import (
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
-from cdmtaskservice.jobflows.state_updates import ParentJobUpdate, SubjobFlowStateUpdates
+from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -273,7 +273,7 @@ class KBaseRunner(JobFlow):
         """
         # TODO UPDATE_SUBJOB add other states.
         _not_falsy(job, "job")
-        _check_num(container_num, "conteiner_num", minimum=0)
+        _check_num(container_num, "container_num", minimum=0)
         _not_falsy(new_state, "new_state")
         _not_falsy(update, "update")
         if new_state not in self._SUBJOB_STATE_TO_UPDATE_FUNC:
@@ -284,37 +284,37 @@ class KBaseRunner(JobFlow):
         # Just throw the error, don't error out the job. If the caller thinks this is an error
         # they can try and set the error state.
         await self._mongo.update_subjob_state(job.id, container_num, mongo_update, update.time)
-        # If this fails the job is only stuck if parent_update is not None. It seems really
-        # unlikely that the line above would succeed and this line fail, so we don't catch
-        # errors here
-        parent_update = await self._updates.get_parent_job_update(job, new_state)
-        if parent_update:
-            if parent_update.state.is_terminal():
-                # In order to get the final job info from Condor, need to return so the
-                # subjobs can exit
-                await self._coman.run_coroutine(self._update_terminal_job(job, parent_update))
+        # Allow the method to return so failures in setting the parent job state
+        # don't kill the container. This is particularly important during job recovery
+        # where all state updates will fail
+        # Also, for terminal transitions, the call needs to return so the container can exit
+        await self._coman.run_coroutine(self._update_parent_job(job, new_state, update))
+
+    async def _update_parent_job(
+        self,
+        job: models.AdminJobDetails,
+        new_state: models.JobState,
+        update: models.ContainerUpdate,
+    ):
+        try:
+            parent_update = await self._updates.get_parent_job_update(job, new_state)
+            if not parent_update:
                 return
-            # May not be the same update func as the subjob
-            mongo_update = self._JOB_STATE_TO_UPDATE_FUNC[parent_update.state](update)
-            # If this fails all the containers have transitioned to an equivalent state and
-            # so the job is stuck, so we error out if possible.
-            try:
+            if parent_update.state.is_terminal():
+                if parent_update.state == models.JobState.ERROR:
+                    await self._error_job(job)
+                else:
+                    await self._complete_job(job)
+            else:
+                # May not be the same update func as the subjob
+                mongo_update = self._JOB_STATE_TO_UPDATE_FUNC[parent_update.state](update)
+                # If this fails all the containers have transitioned to an equivalent state and
+                # so the job is stuck, so we error out if possible.
                 await self._updates.update_job_state(
                     job.id, mongo_update, update_time=parent_update.time
                 )
-            except Exception as e:
-                await self._updates.handle_exception(e, job.id, "updating job state")
-    
-    async def _update_terminal_job(
-        self, job: models.AdminJobDetails, parent_update: ParentJobUpdate
-    ):
-        try:
-            if parent_update.state == models.JobState.ERROR:
-                await self._error_job(job)
-            else:
-                await self._complete_job(job)
         except Exception as e:
-            await self._updates.handle_exception(e, job.id, "completing errored")
+            await self._updates.handle_exception(e, job.id, "updating job state")
 
     async def _error_job(self, job: models.AdminJobDetails):
         cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
