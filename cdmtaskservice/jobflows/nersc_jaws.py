@@ -156,9 +156,9 @@ class NERSCJAWSRunner(JobFlow):
         """
         _not_falsy(user, "user")
         _not_falsy(job_input, "job_input")  # unused for now
-        if not user.is_kbase_staff or not user.has_nersc_account:
+        if not user.is_cts_user() or not user.has_nersc_account:
             raise UnauthorizedError(
-                f"To use the {self.CLUSTER.value} site, you must be a KBase staff member "
+                f"To use the {self.CLUSTER.value} site, you must be a CTS user "
                 + "and have a NERSC account"
             )
 

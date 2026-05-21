@@ -140,7 +140,7 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
         kbauth,
         set(cfg.auth_full_admin_roles),
         cts_role=cfg.auth_cts_role,
-        require_kbase_staff_and_nersc_accounts_for_admin=False
+        require_cts_user_and_nersc_accounts_for_admin=False
     )
     logr.info("Done")
     try:
@@ -199,7 +199,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
     auth = CTSAuth(
         kbauth,
         set(cfg.auth_full_admin_roles),
-        is_kbase_staff_role=cfg.kbase_staff_role,
+        cts_user_roles=set(cfg.auth_cts_user_roles),
         has_nersc_account_role=cfg.has_nersc_account_role,
         external_executor_role=cfg.external_executor_role,
         refdata_service_role=cfg.refdata_service_role,

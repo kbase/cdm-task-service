@@ -91,9 +91,9 @@ class KBaseRunner(JobFlow):
         _not_falsy(user, "user")
         _require_string(job_id, "job_id")
         _not_falsy(job_input, "job_input")
-        if not user.is_kbase_staff:
+        if not user.is_cts_user():
             raise UnauthorizedError(
-                f"To use the {self.CLUSTER.value} site, you must be a KBase staff member."
+                f"To use the {self.CLUSTER.value} site, you must be a CTS user."
             )
         param = job_input.params.get_file_parameter()
         if param and param.type is models.ParameterType.MANIFEST_FILE:
