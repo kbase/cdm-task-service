@@ -39,7 +39,8 @@ class CDMTaskServiceConfig:
     auth_url: str - the URL of the KBase Auth2 service.
     auth_full_admin_roles: list[str] - the list of Auth2 custom roles that signify that a user is
         a full admin for the CDM task service
-    kbase_staff_role: str - the Auth2 custom role indicating a user is a member of KBase staff.
+    auth_cts_user_roles: list[str] - the list of Auth2 custom roles that authorize a user to use
+        the CDM task service.
     has_nersc_account_role: str - the Auth2 custom role indicating a user has a NERSC account.
     external_executor_role: str - the Auth2 custom role indicating a user is an external job
         executor.
@@ -137,7 +138,7 @@ class CDMTaskServiceConfig:
         #           yarl is way too liberal though. yarl + validators maybe?
         self.auth_url = _get_string_required(config, _SEC_AUTH, "url")
         self.auth_full_admin_roles = _get_list_string(config, _SEC_AUTH, "admin_roles_full")
-        self.kbase_staff_role = _get_string_required(config, _SEC_AUTH, "kbase_staff_role")
+        self.auth_cts_user_roles = _get_list_string(config, _SEC_AUTH, "user_roles")
         self.has_nersc_account_role = _get_string_required(
             config, _SEC_AUTH, "has_nersc_account_role"
         )
@@ -334,7 +335,7 @@ class CDMTaskServiceConfig:
             "\n*** Service Configuration ***",
             f"Authentication URL: {self.auth_url}",
             f"Authentication full admin roles: {self.auth_full_admin_roles}",
-            f"Authentication KBase staff role: {self.kbase_staff_role}",
+            f"Authentication CTS user roles: {self.auth_cts_user_roles}",
             f"Authentication has NERSC account role: {self.has_nersc_account_role}",
             f"Authentication external executor role: {self.external_executor_role}",
             f"Authentication refdata service role: {self.refdata_service_role}",
