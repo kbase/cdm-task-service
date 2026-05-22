@@ -73,6 +73,7 @@ FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
 FLD_COMMON_ID = "id"
 FLD_COMMON_STATE = "state"
 FLD_COMMON_TRANS_TIMES = "transition_times"
+FLD_COMMON_TRANS_HISTORY = "trans_history"
 FLD_COMMON_CLEANED = "cleaned"
 FLD_COMMON_ERROR = "error"
 FLD_COMMON_ADMIN_ERROR = "admin_error"
@@ -827,6 +828,7 @@ class JobState(str, Enum):
     UPLOAD_SUBMITTING = "upload_submitting"
     UPLOAD_SUBMITTED = "upload_submitted"
     COMPLETE = "complete"
+    RECOVERING = "recovering"
     CANCELING = "canceling"
     CANCELED = "canceled"
     ERROR_PROCESSING_SUBMITTING = "error_processing_submitting"
@@ -882,12 +884,16 @@ class _JobBase(BaseModel):
 
 class SubJob(_JobBase):
     """
-    Information about the state of a subjob that is running as part of a job. 
+    Information about the state of a subjob that is running as part of a job.
     """
     # This is an outgoing data structure only so we don't add validators
     sub_id: Annotated[int, Field(
         description="The ID of the subjob, identical to the container number."
     )]
+    trans_history: Annotated[list[JobStateTransition] | None, Field(
+        description="Historical state transition records from previous recovery attempts. "
+            + "Populated when the subjob is reset during job recovery."
+    )] = None
     exit_code: Annotated[int | None, Field(
         examples=[0, 255],
         description="The container exit code, if available."
@@ -981,6 +987,10 @@ class Job(JobPreview):
     job_input: JobInput
     # May need to assemble jobs manually if path validation is too expensive.
     outputs: list[S3File] | None = None
+    trans_history: Annotated[list[JobStateTransition] | None, Field(
+        description="Historical state transition records from previous recovery attempts. "
+            + "Populated when the job is reset during job recovery."
+    )] = None
 
 
 class NERSCDetails(BaseModel):
@@ -1072,6 +1082,10 @@ class AdminJobDetails(Job):
         ]],
         description="A list of job state transitions."
     )]
+    trans_history: Annotated[list[AdminJobStateTransition] | None, Field(
+        description="Historical state transition records from previous recovery attempts. "
+            + "Populated when the job is reset during job recovery."
+    )] = None
     cleaned: Annotated[bool, Field(
         description="Whether any job intermediate data has been cleaned up. E.g. "
             + "JAWS results directories, download / upload manifests and results, etc."

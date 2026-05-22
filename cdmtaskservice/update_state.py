@@ -148,6 +148,19 @@ class RefdataUpdate(Update[models.ReferenceDataState]):
     """ An update for a refdata staging process. """
 
 
+# The ordered sequence of states a job passes through on the happy path, from creation to
+# completion. Used to replay state transitions during job recovery.
+JOB_COMPLETED_PATH = [
+    models.JobState.CREATED,
+    models.JobState.DOWNLOAD_SUBMITTED,
+    models.JobState.JOB_SUBMITTING,
+    models.JobState.JOB_SUBMITTED,
+    models.JobState.UPLOAD_SUBMITTING,
+    models.JobState.UPLOAD_SUBMITTED,
+    models.JobState.COMPLETE,
+]
+
+
 def submitted_download() -> JobUpdate:
     """
     Update a job's state from created to download submitted.
@@ -289,6 +302,29 @@ def complete(
     )
 
 
+#####################
+### Recovering states
+#####################
+
+
+def recovering() -> JobUpdate:
+    """ Update a job's state to recovering. Allowed from error states. """
+    return JobUpdate(
+        )._set_disallowed_current_states(
+            {models.JobState.COMPLETE, models.JobState.RECOVERING}
+            | models.JobState.canceling_states()
+        )._set_new_state(models.JobState.RECOVERING
+    )
+
+
+def force_recovering() -> JobUpdate:
+    """ Update a job's state from recovering to recovering (fix a stuck recovery). """
+    return JobUpdate(
+        )._set_current_state(models.JobState.RECOVERING
+        )._set_new_state(models.JobState.RECOVERING
+    )
+
+
 ####################
 ### Canceling states
 ####################
@@ -299,6 +335,7 @@ def canceling() -> JobUpdate:
     return JobUpdate(
         )._set_disallowed_current_states(
             models.JobState.terminal_states() | models.JobState.canceling_states()
+            | {models.JobState.RECOVERING}
         )._set_new_state(models.JobState.CANCELING
     )
 
@@ -422,7 +459,8 @@ def error(
         flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
     return JobUpdate(
         )._set_new_state(models.JobState.ERROR
-        )._set_disallowed_current_states(models.JobState.terminal_states()
+        )._set_disallowed_current_states(
+            models.JobState.terminal_states() | {models.JobState.RECOVERING}
         )._set_fields(flds)
 
 
