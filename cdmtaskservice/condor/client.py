@@ -5,6 +5,7 @@ Task Service.
 
 import asyncio
 from classad2 import ClassAd, ExprTree
+import enum
 import htcondor2
 import os
 from pathlib import Path
@@ -22,6 +23,8 @@ from cdmtaskservice import models
 # to some other condor instance is pretty low, so don't worry about it 
 
 
+_AD_CLUSTER_ID = "ClusterId"
+_AD_PROC_ID = "ProcId"
 _AD_JOB_ID = "CTSJobID"
 _AD_CONTAINER_NUMBER = "CTSContainerNumber"
 _AD_CPU_SYS = "RemoteSysCpu"
@@ -31,8 +34,36 @@ _AD_COMMITTED_TIME = "CommittedTime"
 _AD_JOB_STATUS = "JobStatus"
 _JOB_STATUS_HELD = 5
 
+
+class ProcState(enum.Enum):
+    """ The state of an HTCondor process. """
+    RUNNING = "running"
+    HELD = "held"
+    COMPLETE = "complete"
+    OTHER = "other"
+
+
+_JOB_STATUS_TO_PROC_STATE = {
+    1:                ProcState.RUNNING,   # Idle
+    2:                ProcState.RUNNING,   # Running
+    3:                ProcState.OTHER,     # Removed
+    4:                ProcState.COMPLETE,  # Completed
+    _JOB_STATUS_HELD: ProcState.HELD,      # Held
+    6:                ProcState.RUNNING,   # Transferring Output
+    7:                ProcState.OTHER,     # Suspended
+}
+
+
+def _status_to_proc_state(status: int) -> ProcState:
+    if status not in _JOB_STATUS_TO_PROC_STATE:
+        raise ValueError(f"Unknown HTCondor job status: {status}")
+    return _JOB_STATUS_TO_PROC_STATE[status]
+
+
+_STATUS_ONLY = [_AD_PROC_ID, _AD_JOB_STATUS]
+
 _LOCATIONS = ["Iwd", "Err", "Out", "UserLog"]
-_IDS = ["ClusterId", "ProcId", _AD_JOB_ID, _AD_CONTAINER_NUMBER]
+_IDS = [_AD_CLUSTER_ID, _AD_PROC_ID, _AD_JOB_ID, _AD_CONTAINER_NUMBER]
 _RESOURCES = [
     "RequestCpus",
     "RequestDisk",
@@ -274,7 +305,8 @@ class CondorClient:
                 ret[k] = v
         return ret
 
-    async def get_container_status(self, cluster_id: int, container_number: int) -> dict[str, Any]:
+    async def get_container_classad(self, cluster_id: int, container_number: int
+    ) -> dict[str, Any]:
         """
         Get the HTCondor status for a specific container for a job, specified by the job's
         HTCondor ClusterID.
@@ -283,7 +315,10 @@ class CondorClient:
         """
         _check_num(cluster_id, "cluster_id")
         _check_num(container_number, "container_number", minimum=0)
-        constraint = f"ClusterId == {cluster_id} && {_AD_CONTAINER_NUMBER} == {container_number}"
+        constraint = (
+            f"{_AD_CLUSTER_ID} == {cluster_id} && "
+            + f"{_AD_CONTAINER_NUMBER} == {container_number}"
+        )
         job_ads = await asyncio.to_thread(  # Don't block the event loop
             self._schedd.query,
             constraint=constraint,
@@ -302,7 +337,7 @@ class CondorClient:
             )
         return self._classad_to_dict(job_ads[0])
         
-    async def get_job_status(self, cluster_id: int
+    async def get_cluster_classads(self, cluster_id: int
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """
         Get the htcondor status for a job. Returns all containers.
@@ -311,27 +346,65 @@ class CondorClient:
         Returns a 2-tuple of running jobs and completed jobs.
         """
         _check_num(cluster_id, "cluster_id")
-        constraint = f"ClusterId == {cluster_id}"
-        running_job_ads = await asyncio.to_thread(  # Don't block the event loop
-            self._schedd.query,
-            constraint=constraint,
-            projection=_RETURNED_JOB_ADS,
+        running_job_ads, complete_job_ads = await self._fetch_cluster_ads(
+            cluster_id, _RETURNED_JOB_ADS
         )
-        complete_job_ads = await asyncio.to_thread(
-            self._schedd.history,
-            constraint=constraint,
-            projection=_RETURNED_JOB_ADS,
-        )
-        if not running_job_ads and not complete_job_ads:
-            raise ValueError(f"No records found for cluster ID {cluster_id}")
-        id2ad = {(ad["ClusterId"], ad["ProcId"]): ad for ad in running_job_ads}
+        id2ad = {(ad[_AD_CLUSTER_ID], ad[_AD_PROC_ID]): ad for ad in running_job_ads}
         for ad in complete_job_ads:
-            job_key = (ad["ClusterId"], ad["ProcId"])
+            job_key = (ad[_AD_CLUSTER_ID], ad[_AD_PROC_ID])
             # remove jobs that have transitioned to complete between the queries
             id2ad.pop(job_key, None)
         running = [self._classad_to_dict(ad) for ad in id2ad.values()]
         complete = [self._classad_to_dict(ad) for ad in complete_job_ads]
         return running, complete
+
+    async def _fetch_cluster_ads(
+        self, cluster_id: int, projection: list[str]
+    ) -> tuple[list, list]:
+        constraint = f"{_AD_CLUSTER_ID} == {cluster_id}"
+        active_ads = await asyncio.to_thread(  # Don't block the event loop
+            self._schedd.query,
+            constraint=constraint,
+            projection=projection,
+        )
+        complete_ads = await asyncio.to_thread(
+            self._schedd.history,
+            constraint=constraint,
+            projection=projection,
+        )
+        if not active_ads and not complete_ads:
+            raise ValueError(f"No records found for cluster ID {cluster_id}")
+        return active_ads, complete_ads
+
+    async def get_cluster_proc_states(self, cluster_id: int) -> list[ProcState]:
+        """
+        Get the state of each process in an HTC cluster using minimal data transfer.
+
+        Returns a list indexed by proc ID (which equals the container number), where each
+        element is a ProcState. Raises ValueError if no records are found for cluster_id.
+        """
+        _check_num(cluster_id, "cluster_id")
+        active_ads, complete_ads = await self._fetch_cluster_ads(cluster_id, _STATUS_ONLY)
+        states = {}
+        for ad in active_ads:
+            states[ad[_AD_PROC_ID]] = _status_to_proc_state(ad[_AD_JOB_STATUS])
+        for ad in complete_ads:
+            # override active entry if a proc raced from query to history between calls
+            states[ad[_AD_PROC_ID]] = _status_to_proc_state(ad[_AD_JOB_STATUS])
+        return [states[i] for i in range(len(states))]
+
+    async def release_job(self, cluster_id: int):
+        """
+        Release all held processes in an HTCondor job cluster.
+
+        If no processes are held this is a noop.
+        """
+        _check_num(cluster_id, "cluster_id")
+        await asyncio.to_thread(
+            self._schedd.act,
+            htcondor2.JobAction.Release,
+            f"{_AD_CLUSTER_ID} == {cluster_id}",
+        )
 
     async def cancel_job(self, cluster_id: int):
         """
@@ -343,5 +416,5 @@ class CondorClient:
         await asyncio.to_thread(  # don't block the event loop
             self._schedd.act,
             htcondor2.JobAction.Remove,
-            f"ClusterId == {cluster_id}"
+            f"{_AD_CLUSTER_ID} == {cluster_id}"
         )

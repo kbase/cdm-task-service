@@ -168,7 +168,7 @@ class KBaseRunner(JobFlow):
             return {}  # job not submitted yet
         # if cluster_id exists, there's a cluster ID in it
         cluster_id = job.htcondor_details.cluster_id[-1]
-        return await self._condor.get_container_status(cluster_id, container_number)
+        return await self._condor.get_container_classad(cluster_id, container_number)
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """
@@ -402,7 +402,7 @@ class KBaseRunner(JobFlow):
         cluster_id = job.htcondor_details.cluster_id[-1]
         while attempts < 12:  # 60 seconds for condor to finish the job, seems ample?
             await asyncio.sleep(5)  # give Condor a few seconds to finish up
-            running, complete = await self._condor.get_job_status(cluster_id)
+            running, complete = await self._condor.get_cluster_classads(cluster_id)
             # Kind of inefficient but I doubt this will happen often
             # If the condor job errors, it's held with the current setup
             # Means the client and this code is coupled, might need to rethink
