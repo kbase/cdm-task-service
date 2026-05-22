@@ -306,7 +306,8 @@ async def _get_parent_job_update_fail(sfsu, job, state, expected):
 
 
 async def test_get_parent_job_update_fail_single_states():
-    for s in set(models.JobState) - models.JobState.canceling_states():
+    excluded = models.JobState.canceling_states() | {models.JobState.RECOVERING}
+    for s in set(models.JobState) - excluded:
         await _run_get_job_fail(s, {s: (0, None)}, ValueError(
             f"You reported that a subjob transitioned to state {s.value} but no subjobs are "
             + "in that state"
@@ -321,6 +322,12 @@ async def test_get_parent_job_update_fail_canceling_states():
         await _run_get_job_fail(s, {s: (0, None)}, ValueError(
             "Subjobs cannot transition to the canceling states."
         ))
+
+
+async def test_get_parent_job_update_fail_recovering_state():
+    await _run_get_job_fail(models.JobState.RECOVERING, {models.JobState.RECOVERING: (0, None)},
+        ValueError("Subjobs cannot transition to the recovering state.")
+    )
 
 
 async def test_get_parent_job_update_fail_multiple_states():

@@ -182,9 +182,11 @@ class SubjobFlowStateUpdates(JobFlowStateUpdates):
 
         _not_falsy(job, "job")
         st = _not_falsy(subjob_transition, "subjob_transition")
+        js = models.JobState
         if st.is_canceling():
             raise ValueError("Subjobs cannot transition to the canceling states.")
-        js = models.JobState
+        if st == js.RECOVERING:
+            raise ValueError("Subjobs cannot transition to the recovering state.")
         if st in {js.CREATED, js.DOWNLOAD_SUBMITTED, js.JOB_SUBMITTING, js.JOB_SUBMITTED}:
             stcount = (await self._mongo.have_subjobs_reached_state(job.id, st))[st]
             self._check_count_is_valid(st, stcount[0], stcount[0], job.job_input.num_containers)

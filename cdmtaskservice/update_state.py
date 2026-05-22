@@ -325,7 +325,6 @@ def force_recovering() -> JobUpdate:
     )
 
 
-
 ####################
 ### Canceling states
 ####################

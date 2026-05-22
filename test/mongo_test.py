@@ -409,11 +409,12 @@ async def test_update_job_and_subjob_fail_update_to_error(mondb):
         await mondb.jobs.update_one({}, {"$set": {"state": state.value}})
         await mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
         await fail_update_job(mc, "foo", u, dt, tid, NoSuchJobError(
-            "No job with ID 'foo' not in states ['canceled', 'complete', 'error'] exists"
+            "No job with ID 'foo' not in states "
+            + "['canceled', 'complete', 'error', 'recovering'] exists"
         ))
         await fail_update_subjob(mc, "bar", 0, u, dt, NoSuchSubJobError(
             "No job with ID 'bar' and subjob ID 0 not in states "
-            + "['canceled', 'complete', 'error'] exists"
+            + "['canceled', 'complete', 'error', 'recovering'] exists"
         ))
 
 
@@ -702,6 +703,7 @@ async def test_have_subjobs_reached_state(mondb):
         models.JobState.COMPLETE: (0, None),
         models.JobState.CANCELING: (0, None),
         models.JobState.CANCELED: (0, None),
+        models.JobState.RECOVERING: (0, None),
         models.JobState.ERROR_PROCESSING_SUBMITTING: (0, None),
         models.JobState.ERROR_PROCESSING_SUBMITTED: (0, None),
         models.JobState.ERROR: (0, None),
