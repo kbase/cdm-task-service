@@ -334,9 +334,21 @@ class JobState:
             raise IllegalParameterError(
                 f"Container number must be < {job.job_input.num_containers} for job {job_id}"
             )
+
+        if sites.CLUSTER_TO_EXECUTION_TYPE[job.job_input.cluster]:
+            subjob = await self._mongo.get_subjob(job_id, container_num)
+            # Note that if log path is present, checked above, that means no containers are
+            # still running. Logs are only uploaded for containers with a non-zero exit code;
+            # a None exit code means the container entered the error state before the exit code
+            # was recorded and therefore may not have uploaded logs.
+            if not subjob.exit_code:
+                raise NoJobLogsError(
+                    f"Container {container_num} for job {job_id} has no logs available; "
+                    "logs are only uploaded for containers that exit with an error code"
+                )
+
         filename = s3errpath if stderr else s3outpath
         s3path = S3Paths([str(Path(job.logpath) / filename)])
-
         if seek is not None:
             if seek < 0:
                 raise IllegalParameterError(
