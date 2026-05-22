@@ -108,9 +108,17 @@ RECOVERING state.
   document
 * On a force
   * Throw an error if any containers are running. All containers must be held or complete.
-    * This prevents the case where the job is force reset to download submitted but all
-      running containers are already past job submitting, meaning that the job can never
-      complete as container updates trigger main job updates.
+    * Parent job state advancement works by checking whether all N subjobs have a given
+      state in their transition history. Resetting the main job to DOWNLOAD_SUBMITTED while
+      containers are still running creates a race: containers may finish and fire their
+      remaining callbacks before or during the reset, leaving the parent stuck at
+      DOWNLOAD_SUBMITTED with no future callbacks arriving to advance it through the
+      intermediate states. Requiring all containers to be held or complete first gives a
+      stable snapshot with no in-flight callbacks to race against.
+    * Regular recovery avoids this race by only changing the job state when there are held
+      containers — if there are only running containers it throws an error and leaves the job
+      alone. Force recovery cannot do the same because the job is already stuck in RECOVERING
+      and must be reset regardless of whether there are held containers.
   * Allow transitioning the job from RECOVERING -> RECOVERING
     * Any other transition should fail, throw an error, and not update the job state
   * Only allow recovery every 10m
@@ -128,7 +136,7 @@ RECOVERING state.
     jobs as per the standard recovery process
     * Note that if the job has succeeded, the code should build the new transition times
       array starting from download submitted and perform the array append / set as described
-      previously, but it can be done in one operation vs. one per state
+      previously, but it can be done in one operation vs. one operation per state
     * If it has not succeeded there must be held jobs
 
 ## Notes
