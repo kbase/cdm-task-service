@@ -64,6 +64,7 @@ FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
 FLD_JOB_LOGPATH = "logpath"
 FLD_SUBJOB_ID = "sub_id"
 FLD_SUBJOB_EXIT_CODE = "exit_code"
+FLD_SUBJOB_EXIT_CODE_HISTORY = "exit_code_history"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
@@ -77,6 +78,7 @@ FLD_COMMON_TRANS_HISTORY = "trans_history"
 FLD_COMMON_CLEANED = "cleaned"
 FLD_COMMON_ERROR = "error"
 FLD_COMMON_ADMIN_ERROR = "admin_error"
+FLD_COMMON_ADMIN_ERROR_HISTORY = "admin_error_history"
 FLD_COMMON_TRACEBACK = "traceback"
 FLD_COMMON_STATE_TRANSITION_STATE = "state"
 FLD_COMMON_STATE_TRANSITION_TIME = "time"
@@ -898,6 +900,10 @@ class SubJob(_JobBase):
         examples=[0, 255],
         description="The container exit code, if available."
     )] = None
+    exit_code_history: Annotated[list[int | None] | None, Field(
+        description="Historical exit codes from previous recovery attempts. "
+            + "Populated when the subjob is reset during job recovery."
+    )] = None
     outputs: Annotated[list[S3File] | None, Field(
         description="The files produced by the container stored in S3, if available."
     )] = None
@@ -905,6 +911,10 @@ class SubJob(_JobBase):
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
             + "admins, potentially including more details."
+    )] = None
+    admin_error_history: Annotated[list[str | None] | None, Field(
+        description="Historical admin error messages from previous recovery attempts. "
+            + "Populated when the subjob is reset during job recovery."
     )] = None
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
 

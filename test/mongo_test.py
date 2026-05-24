@@ -10,6 +10,7 @@ from cdmtaskservice import models
 from cdmtaskservice import sites
 from cdmtaskservice.exceptions import JobRecoveryError
 from cdmtaskservice.mongo import (
+    MissingSubJobError,
     MongoDAO,
     NoSuchJobError,
     NoSuchReferenceDataError,
@@ -779,6 +780,156 @@ async def test_subjob_hidden_fields(mondb):
     job = await mondb.subjobs.find_one({"id": "bar", "sub_id": 0})
     check_trans_retry_fields(job)
     assert job["_update_time"] == dt
+
+
+async def test_recover_subjobs(mondb):
+    mc = await MongoDAO.create(mondb)
+
+    dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
+    dt2 = dt1 + datetime.timedelta(minutes=1)
+
+    # subjobs 0 and 2 have error-state fields set to verify clearing;
+    # sj0 has extra transitions so trans_history gets a richer set of entries
+    sj0 = _BASESUBJOB1.model_copy(deep=True)
+    sj0.state = models.JobState.JOB_SUBMITTING
+    sj0.transition_times.extend([
+        models.JobStateTransition(state=models.JobState.DOWNLOAD_SUBMITTED, time=dt1),
+        models.JobStateTransition(state=models.JobState.JOB_SUBMITTING, time=dt2),
+    ])
+    sj0.exit_code = 5
+    sj0.admin_error = "some admin error"
+    sj0.traceback = "some traceback"
+    sj2 = _BASESUBJOB3.model_copy(deep=True)
+    sj2.admin_error = "sj2 error"
+    await mc.initialize_subjobs([sj0, _BASESUBJOB2, sj2])
+
+    rec_time = datetime.datetime(2025, 4, 2, 13, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    ds_time = rec_time + datetime.timedelta(seconds=1)
+
+    await mc.recover_subjobs("bar", [0, 2], rec_time, ds_time)
+
+    def _tt(state, time):
+        return models.JobStateTransition(state=state, time=time)
+
+    # subjob 0: error fields cleared, trans_history contains all prior transitions,
+    #           exit_code and admin_error captured into history arrays
+    got0 = await mc.get_subjob("bar", 0)
+    assert got0 == models.SubJob(
+        id="bar",
+        sub_id=0,
+        state=models.JobState.DOWNLOAD_SUBMITTED,
+        transition_times=[_tt(models.JobState.DOWNLOAD_SUBMITTED, ds_time)],
+        trans_history=[
+            _tt(models.JobState.CREATED, _SAFE_TIME),
+            _tt(models.JobState.DOWNLOAD_SUBMITTED, dt1),
+            _tt(models.JobState.JOB_SUBMITTING, dt2),
+            _tt(models.JobState.RECOVERING, rec_time),
+        ],
+        exit_code_history=[5],
+        admin_error_history=["some admin error"],
+    )
+    raw0 = await mondb.subjobs.find_one({"id": "bar", "sub_id": 0})
+    assert raw0["_update_time"] == ds_time
+    assert "exit_code" not in raw0
+    assert "admin_error" not in raw0
+    assert "traceback" not in raw0
+
+    # subjob 2: no exit_code → null recorded in history; admin_error captured
+    got2 = await mc.get_subjob("bar", 2)
+    assert got2 == models.SubJob(
+        id="bar",
+        sub_id=2,
+        state=models.JobState.DOWNLOAD_SUBMITTED,
+        transition_times=[_tt(models.JobState.DOWNLOAD_SUBMITTED, ds_time)],
+        trans_history=[
+            _tt(models.JobState.CREATED, _SAFE_TIME),
+            _tt(models.JobState.RECOVERING, rec_time),
+        ],
+        exit_code_history=[None],
+        admin_error_history=["sj2 error"],
+    )
+    raw2 = await mondb.subjobs.find_one({"id": "bar", "sub_id": 2})
+    assert raw2["_update_time"] == ds_time
+    assert "admin_error" not in raw2
+
+    # subjob 1 is untouched
+    assert await mc.get_subjob("bar", 1) == _BASESUBJOB2
+
+
+async def test_recover_subjobs_second_recovery(mondb):
+    # When trans_history/exit_code_history/admin_error_history already exist, they should
+    # be appended rather than replaced. Exercises the $ifNull branch with existing values.
+    mc = await MongoDAO.create(mondb)
+
+    sj0 = _BASESUBJOB1.model_copy(deep=True)
+    sj0.exit_code = 5
+    sj0.admin_error = "first error"
+    await mc.initialize_subjobs([sj0])
+
+    rec_time1 = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    ds_time1 = rec_time1 + datetime.timedelta(seconds=1)
+
+    await mc.recover_subjobs("bar", [0], rec_time1, ds_time1)
+
+    t_err = ds_time1 + datetime.timedelta(minutes=5)
+    await mc.update_subjob_state("bar", 0, error("second error"), t_err)
+
+    rec_time2 = t_err + datetime.timedelta(minutes=5)
+    ds_time2 = rec_time2 + datetime.timedelta(seconds=1)
+
+    await mc.recover_subjobs("bar", [0], rec_time2, ds_time2)
+
+    def _tt(state, time):
+        return models.JobStateTransition(state=state, time=time)
+
+    got = await mc.get_subjob("bar", 0)
+    assert got == models.SubJob(
+        id="bar",
+        sub_id=0,
+        state=models.JobState.DOWNLOAD_SUBMITTED,
+        transition_times=[_tt(models.JobState.DOWNLOAD_SUBMITTED, ds_time2)],
+        trans_history=[
+            # from first recovery: original transition_times + RECOVERING1
+            _tt(models.JobState.CREATED, _SAFE_TIME),
+            _tt(models.JobState.RECOVERING, rec_time1),
+            # from second recovery: first recovery's transition_times + RECOVERING2
+            _tt(models.JobState.DOWNLOAD_SUBMITTED, ds_time1),
+            _tt(models.JobState.ERROR, t_err),
+            _tt(models.JobState.RECOVERING, rec_time2),
+        ],
+        exit_code_history=[5, None],  # no exit code for second failure
+        admin_error_history=["first error", "second error"],
+    )
+
+
+async def test_recover_subjobs_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB1, _BASESUBJOB2, _BASESUBJOB3])
+
+    rec_time = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    ds_time = rec_time + datetime.timedelta(seconds=1)
+
+    await fail_recover_subjobs(mc, None, [0], rec_time, ds_time,
+        ValueError("job_id is required"))
+    await fail_recover_subjobs(mc, "   \t  ", [0], rec_time, ds_time,
+        ValueError("job_id is required"))
+    await fail_recover_subjobs(mc, "bar", [], rec_time, ds_time,
+        ValueError("container_numbers is required and must not be empty"))
+    await fail_recover_subjobs(mc, "bar", [-1], rec_time, ds_time,
+        ValueError("container_number must be >= 0"))
+    await fail_recover_subjobs(mc, "bar", [0], None, ds_time,
+        ValueError("recovering_time is required"))
+    await fail_recover_subjobs(mc, "bar", [0], rec_time, None,
+        ValueError("download_submitted_time is required"))
+    await fail_recover_subjobs(mc, "bar", [99], rec_time, ds_time,
+        MissingSubJobError("Expected to reset 1 subjobs for job 'bar' but only matched 0"))
+    await fail_recover_subjobs(mc, "nobar", [0], rec_time, ds_time,
+        MissingSubJobError("Expected to reset 1 subjobs for job 'nobar' but only matched 0"))
+
+
+async def fail_recover_subjobs(mc, job_id, container_numbers, rec_time, ds_time, expected):
+    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$"):
+        await mc.recover_subjobs(job_id, container_numbers, rec_time, ds_time)
 
 
 async def test_have_subjobs_reached_state(mondb):

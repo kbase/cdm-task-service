@@ -839,6 +839,88 @@ class MongoDAO:
             subjob_id=_check_num(subjob_id, "subjob_id", minimum=0)
         )
 
+    async def recover_subjobs(
+        self,
+        job_id: str,
+        container_numbers: list[int],
+        recovering_time: datetime.datetime,
+        download_submitted_time: datetime.datetime,
+    ):
+        """
+        Reset held subjobs to DOWNLOAD_SUBMITTED, preserving history for failure analysis.
+
+        For each specified subjob, atomically:
+          - Appends transition_times plus a RECOVERING entry to trans_history
+          - Appends the current exit_code to exit_code_history
+          - Appends the current admin_error to admin_error_history
+          - Resets transition_times to a single DOWNLOAD_SUBMITTED entry
+          - Sets state to DOWNLOAD_SUBMITTED
+          - Clears exit_code, error, admin_error, and traceback
+
+        Null is recorded in the history arrays when a field was not set, preserving
+        alignment between history entries and recovery attempts.
+
+        job_id - the job ID.
+        container_numbers - the sub_ids of the held containers to reset.
+        recovering_time - the time the recovery was initiated, appended to trans_history.
+        download_submitted_time - the time for the new DOWNLOAD_SUBMITTED transition.
+        """
+        _require_string(job_id, "job_id")
+        if not container_numbers:
+            raise ValueError("container_numbers is required and must not be empty")
+        nums = [_check_num(c, "container_number", minimum=0) for c in container_numbers]
+        _not_falsy(recovering_time, "recovering_time")
+        _not_falsy(download_submitted_time, "download_submitted_time")
+        recovering_entry = {
+            models.FLD_COMMON_STATE_TRANSITION_STATE: models.JobState.RECOVERING.value,
+            models.FLD_COMMON_STATE_TRANSITION_TIME: recovering_time,
+            _FLD_RETRY_ATTEMPT: 0,  # Unused for now
+        }
+        ds_entry = {
+            models.FLD_COMMON_STATE_TRANSITION_STATE: models.JobState.DOWNLOAD_SUBMITTED.value,
+            models.FLD_COMMON_STATE_TRANSITION_TIME: download_submitted_time,
+            _FLD_RETRY_ATTEMPT: 0,  # Unused for now
+        }
+        pipeline = [
+            {"$set": {
+                models.FLD_COMMON_TRANS_HISTORY: {"$concatArrays": [
+                    {"$ifNull": [f"${models.FLD_COMMON_TRANS_HISTORY}", []]},
+                    f"${models.FLD_COMMON_TRANS_TIMES}",
+                    [recovering_entry],
+                ]},
+                # We intentionally don't add a created entry here
+                models.FLD_COMMON_TRANS_TIMES: [ds_entry],
+                models.FLD_COMMON_STATE: models.JobState.DOWNLOAD_SUBMITTED.value,
+                _FLD_UPDATE_TIME: download_submitted_time,
+                models.FLD_SUBJOB_EXIT_CODE_HISTORY: {"$concatArrays": [
+                    {"$ifNull": [f"${models.FLD_SUBJOB_EXIT_CODE_HISTORY}", []]},
+                    [f"${models.FLD_SUBJOB_EXIT_CODE}"],
+                ]},
+                models.FLD_COMMON_ADMIN_ERROR_HISTORY: {"$concatArrays": [
+                    {"$ifNull": [f"${models.FLD_COMMON_ADMIN_ERROR_HISTORY}", []]},
+                    [f"${models.FLD_COMMON_ADMIN_ERROR}"],
+                ]},
+            }},
+            {"$unset": [
+                models.FLD_SUBJOB_EXIT_CODE,
+                models.FLD_COMMON_ERROR,
+                models.FLD_COMMON_ADMIN_ERROR,
+                models.FLD_COMMON_TRACEBACK,
+            ]},
+        ]
+        result = await self._col_subjobs.update_many(
+            {
+                models.FLD_COMMON_ID: job_id,
+                models.FLD_SUBJOB_ID: {"$in": nums},
+            },
+            pipeline,
+        )
+        if result.matched_count != len(set(nums)):
+            raise MissingSubJobError(
+                f"Expected to reset {len(set(nums))} subjobs for job '{job_id}' "
+                f"but only matched {result.matched_count}"
+            )
+
     async def have_subjobs_reached_state(self, job_id: str, *states: models.JobState
     ) -> dict[models.JobState, tuple[int, datetime.datetime | None]]:
         """
@@ -1138,6 +1220,12 @@ class NoSuchJobError(Exception):
 
 class NoSuchSubJobError(Exception):
     """ The sub job does not exist in the system. """
+
+
+class MissingSubJobError(Exception):
+    """
+    Internal error: subjobs expected to exist were not found. Indicates a programming error.
+    """
 
 
 class NoSuchReferenceDataError(Exception):
