@@ -92,7 +92,9 @@ async def test_update_job_state():
 
     await jfsu.update_job_state("jid", upd)
 
-    mongo.update_job_state.assert_called_once_with("jid", upd, _T, _TRANS_ID)
+    mongo.update_job_state.assert_called_once_with(
+        "jid", upd, _T, _TRANS_ID, recovery_cooldown=None
+    )
     kafka.update_job_state.assert_called_once_with(
         "jid", upd.new_state, _T, _TRANS_ID, callback=ANY
     )
@@ -106,9 +108,28 @@ async def test_update_job_state_explicit_time():
 
     await jfsu.update_job_state("jid", upd, update_time=_EXPLICIT_T)
 
-    mongo.update_job_state.assert_called_once_with("jid", upd, _EXPLICIT_T, _TRANS_ID)
+    mongo.update_job_state.assert_called_once_with(
+        "jid", upd, _EXPLICIT_T, _TRANS_ID, recovery_cooldown=None
+    )
     kafka.update_job_state.assert_called_once_with(
         "jid", upd.new_state, _EXPLICIT_T, _TRANS_ID, callback=ANY
+    )
+    await kafka.update_job_state.call_args.kwargs["callback"]
+    mongo.job_update_sent.assert_called_once_with("jid", _TRANS_ID)
+
+
+async def test_update_job_state_with_recovery_cooldown():
+    mongo, kafka, jfsu = _make_jfsu()
+    upd = update_state.recovering()
+    cooldown = datetime.timedelta(minutes=10)
+
+    await jfsu.update_job_state("jid", upd, recovery_cooldown=cooldown)
+
+    mongo.update_job_state.assert_called_once_with(
+        "jid", upd, _T, _TRANS_ID, recovery_cooldown=cooldown
+    )
+    kafka.update_job_state.assert_called_once_with(
+        "jid", upd.new_state, _T, _TRANS_ID, callback=ANY
     )
     await kafka.update_job_state.call_args.kwargs["callback"]
     mongo.job_update_sent.assert_called_once_with("jid", _TRANS_ID)
@@ -155,6 +176,7 @@ async def test_save_error_job():
         "jid",
         update_state.error("admin err", user_error="user err"),
         _T, _TRANS_ID,
+        recovery_cooldown=None,
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", models.JobState.ERROR, _T, _TRANS_ID, callback=ANY
@@ -174,6 +196,7 @@ async def test_save_error_job_with_traceback_and_logpath():
             "admin err", user_error="user err", traceback="tb", log_files_path="logs/jid"
         ),
         _T, _TRANS_ID,
+        recovery_cooldown=None,
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", models.JobState.ERROR, _T, _TRANS_ID, callback=ANY
@@ -237,6 +260,7 @@ async def test_handle_exception_job(caplog):
         update_state.error("test error", user_error="An unexpected error occurred", traceback=tb),
         _T,
         _TRANS_ID,
+        recovery_cooldown=None,
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", models.JobState.ERROR, _T, _TRANS_ID, callback=ANY
