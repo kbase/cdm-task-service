@@ -65,6 +65,9 @@ class ErrorType(Enum):
     
     INVALID_JOB_STATE =          (30300, "Invalid job state")
     """ The job is not in the correct state for the requested operation. """
+
+    JOB_RECOVERY =               (30310, "Job recovery error")
+    """ An error occurred during job recovery. """
     
     INVALID_REFDATA_STATE =      (30400, "Invalid reference data state")
     """ The reference data is not in the correct state for the requested operation. """

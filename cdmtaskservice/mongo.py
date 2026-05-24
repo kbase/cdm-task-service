@@ -19,6 +19,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     verify_aware_datetime
 )
+from cdmtaskservice.exceptions import JobRecoveryError
 from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 
 
@@ -32,6 +33,7 @@ _FLD_TRANS_TIME_SEND = (
     f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT}"
 )
 _FLD_RETRY_ATTEMPT = "_retry"  # not really used for now, but preparation for later
+_FLD_LAST_RECOVER = "_last_recover"
 
 
 class MongoDAO:
@@ -440,6 +442,7 @@ class MongoDAO:
         time: datetime.datetime,
         update: JobUpdate,
         subjob_id: int | None = None,
+        recovery_cooldown: datetime.timedelta | None = None,
     ) -> dict[str, Any]:
         query = {
             models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
@@ -453,14 +456,33 @@ class MongoDAO:
             ]}
         if subjob_id is not None:
             query[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
+        if recovery_cooldown and recovery_cooldown > datetime.timedelta(0):
+            query["$or"] = [
+                {_FLD_LAST_RECOVER: {"$exists": False}},
+                {_FLD_LAST_RECOVER: {"$lte": time - recovery_cooldown}},
+            ]
         return query
 
-    def _update_job_state_err(
+    async def _update_job_state_err(
         self,
+        col: AsyncIOMotorCollection,
         job_id: str,
         update: JobUpdate,
+        time: datetime.datetime,
         subjob_id: int | None = None,
+        recovery_cooldown: datetime.timedelta | None = None,
     ):
+        if recovery_cooldown and recovery_cooldown > datetime.timedelta(0):
+            # Distinguish cooldown violation from state/existence mismatch: re-query without
+            # the cooldown constraint to check if the job exists and is in the right state
+            diag_query = self._update_job_state_query(job_id, time, update)
+            doc = await col.find_one(diag_query, {_FLD_MONGO_ID: 0, _FLD_LAST_RECOVER: 1})
+            if doc is not None:
+                remaining = (doc[_FLD_LAST_RECOVER] + recovery_cooldown) - time
+                raise JobRecoveryError(
+                    f"Job '{job_id}' was recovered too recently; "
+                    f"must wait {remaining} more before forcing recovery again"
+                )
         statestr = ""
         if update.current_state:
             statestr = f"in state {update.current_state.value} "
@@ -482,6 +504,7 @@ class MongoDAO:
         time: datetime.datetime,
         trans_id: str | None = None,
         subjob_id: int | None = None,
+        recovery_cooldown: datetime.timedelta | None = None,
     ):
         set_ = {}
         push = {}
@@ -489,7 +512,9 @@ class MongoDAO:
             jbfld, ispush = self._FIELD_TO_KEY_AND_PUSH[fld]
             target = push if ispush else set_
             target[jbfld] = val
-        query = self._update_job_state_query(job_id, time, update, subjob_id)
+        query = self._update_job_state_query(job_id, time, update, subjob_id, recovery_cooldown)
+        if recovery_cooldown is not None:
+            set_[_FLD_LAST_RECOVER] = time
         transition = {
             models.FLD_COMMON_STATE_TRANSITION_STATE: update.new_state.value,
             models.FLD_COMMON_STATE_TRANSITION_TIME: time,
@@ -514,7 +539,9 @@ class MongoDAO:
             # This doesn't account for missing matches due to a too-early `time` argument,
             # but that generally shouldn't happen unless someone is deliberately being a pain
             # YAGNI for now, improve later if necessary
-            self._update_job_state_err(job_id, update, subjob_id)
+            await self._update_job_state_err(
+                col, job_id, update, time, subjob_id, recovery_cooldown
+            )
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
@@ -554,16 +581,24 @@ class MongoDAO:
         update: JobUpdate,
         time: datetime.datetime,
         trans_id: str,
+        *,
+        recovery_cooldown: datetime.timedelta | None = None,
     ):
         """
         Update the job state, marking it as not yet sent to the notification system.
-        
+
         job_id - the job ID.
         update - the update to apply to the job.
         time - the time at which the job transitioned to the new state.
         trans_id - a unique string representing an ID for the job state transition,
             to be used for sending to notification systems.
             The caller is responsible for ensuring uniqueness of IDs.
+        recovery_cooldown - if provided, atomically writes a recovery timestamp to the
+            job document. If greater than zero, also requires that either no prior recovery has
+            occurred or the prior recovery happened more than recovery_cooldown ago; raises
+            JobRecoveryError otherwise. Pass timedelta(0) for a regular (non-force) recovery
+            that sets the timestamp without a minimum-time constraint, or a positive timedelta
+            for a forced recovery that enforces a minimum wait between recoveries.
         """
         # If we need to send notifications to more than one place this will need a refactor. YAGNI
         await self._update_job_state(
@@ -571,7 +606,8 @@ class MongoDAO:
             job_id,
             update,
             time,
-            trans_id=_require_string(trans_id, "trans_id")
+            trans_id=_require_string(trans_id, "trans_id"),
+            recovery_cooldown=recovery_cooldown,
         )
 
     async def update_job_admin_meta(
@@ -1121,3 +1157,4 @@ class ImageDigestExistsError(Exception):
 
 class IllegalAdminMetaError(Exception):
     """ The specified admin metadata update is illegal. """
+

@@ -33,3 +33,7 @@ class UnavailableResourceError(Exception):
 
 class UnsupportedOperationError(Exception):
     """ An error thrown when an unsupported operation is requested. """
+
+
+class JobRecoveryError(Exception):
+    """ An error occurred during job recovery. """
