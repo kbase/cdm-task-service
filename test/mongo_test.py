@@ -8,6 +8,7 @@ from typing import Coroutine, Callable, Any
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
+from cdmtaskservice.exceptions import JobRecoveryError
 from cdmtaskservice.mongo import (
     MongoDAO,
     NoSuchJobError,
@@ -16,6 +17,8 @@ from cdmtaskservice.mongo import (
 )
 from cdmtaskservice.update_state import (
     error,
+    force_recovering,
+    recovering,
     submitted_download,
     submitted_jaws_job,
     submitted_nersc_refdata_download,
@@ -463,6 +466,127 @@ async def test_job_hidden_fields(mondb):
     job = await mondb.jobs.find_one({"id": "foo"})
     assert job["_update_time"] == dt
     check_job_retry_fields(job)
+
+
+async def test_update_job_recovery_cooldown(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    dt2 = dt + datetime.timedelta(minutes=11)
+    dt3 = dt2 + datetime.timedelta(minutes=1)
+
+    def _tt(state, time, trans_id):
+        return models.AdminJobStateTransition(
+            state=state, time=time, trans_id=trans_id,notif_sent=False
+        )
+    R = models.JobState.RECOVERING
+
+    # recovery_cooldown=timedelta(0): transitions to RECOVERING, sets _last_recover
+    await mc.update_job_state(
+        "foo", recovering(), dt, "tid1", recovery_cooldown=datetime.timedelta(0)
+    )
+    got = await mc.get_job("foo", as_admin=True)
+    expected = _BASEJOB.model_copy(deep=True)
+    expected.state = R
+    expected.transition_times.append(_tt(R, dt, "tid1"))
+    assert got == expected
+    raw = await mondb.jobs.find_one({"id": "foo"})
+    assert raw["_last_recover"] == dt
+
+    # recovery_cooldown with positive timedelta: RECOVERING->RECOVERING, updates _last_recover
+    await mc.update_job_state(
+        "foo", force_recovering(), dt2, "tid2",
+        recovery_cooldown=datetime.timedelta(minutes=10),
+    )
+    got = await mc.get_job("foo", as_admin=True)
+    expected = expected.model_copy(deep=True)
+    expected.transition_times.append(_tt(R, dt2, "tid2"))
+    assert got == expected
+    raw = await mondb.jobs.find_one({"id": "foo"})
+    assert raw["_last_recover"] == dt2
+
+    # recovery_cooldown=None (default): RECOVERING->RECOVERING, does not write _last_recover
+    await mc.update_job_state("foo", force_recovering(), dt3, "tid3")
+    got = await mc.get_job("foo", as_admin=True)
+    expected = expected.model_copy(deep=True)
+    expected.transition_times.append(_tt(R, dt3, "tid3"))
+    assert got == expected
+    raw = await mondb.jobs.find_one({"id": "foo"})
+    assert raw["_last_recover"] == dt2  # unchanged
+
+
+async def test_update_job_force_recovery_no_prior_recover(mondb):
+    # A positive cooldown on a job with no _last_recover should succeed: exercises the
+    # $exists: False branch in the $or cooldown query
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_job_state(
+        "foo", recovering(), dt, "tid1",
+        recovery_cooldown=datetime.timedelta(minutes=10),
+    )
+    got = await mc.get_job("foo", as_admin=True)
+    expected = _BASEJOB.model_copy(deep=True)
+    expected.state = models.JobState.RECOVERING
+    expected.transition_times.append(models.AdminJobStateTransition(
+        state=models.JobState.RECOVERING, time=dt, trans_id="tid1", notif_sent=False,
+    ))
+    assert got == expected
+    raw = await mondb.jobs.find_one({"id": "foo"})
+    assert raw["_last_recover"] == dt
+
+
+async def test_update_job_recovery_cooldown_state_mismatch(mondb):
+    # A positive cooldown on a job in the wrong state should raise NoSuchJobError, not
+    # JobRecoveryError — the diagnostic query must correctly attribute the failure to state
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)  # state = DOWNLOAD_SUBMITTED
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    # force_recovering requires current state = RECOVERING, but job is DOWNLOAD_SUBMITTED
+    with pytest.raises(NoSuchJobError, match=(
+        r"^No job with ID 'foo' in state recovering exists$"
+    )):
+        await mc.update_job_state(
+            "foo", force_recovering(), dt, "tid1",
+            recovery_cooldown=datetime.timedelta(minutes=10),
+        )
+
+
+async def test_update_job_recovery_cooldown_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    # first recovery sets _last_recover
+    await mc.update_job_state(
+        "foo", recovering(), dt, "tid1", recovery_cooldown=datetime.timedelta(0)
+    )
+
+    # force recovery within the cooldown window should fail; remaining = 10min - 5min = 5min
+    dt2 = dt + datetime.timedelta(minutes=4)
+    with pytest.raises(JobRecoveryError, match=(
+        r"^Job 'foo' was recovered too recently; "
+        r"must wait 0:06:00 more before forcing recovery again$"
+    )):
+        await mc.update_job_state(
+            "foo", force_recovering(), dt2, "tid2",
+            recovery_cooldown=datetime.timedelta(minutes=10),
+        )
+    # job state should be unchanged
+    job = await mondb.jobs.find_one({"id": "foo"})
+    assert job["_last_recover"] == dt
+
+    # force recovery after the cooldown window should succeed
+    dt3 = dt + datetime.timedelta(minutes=11)
+    await mc.update_job_state(
+        "foo", force_recovering(), dt3, "tid3",
+        recovery_cooldown=datetime.timedelta(minutes=10),
+    )
+    job = await mondb.jobs.find_one({"id": "foo"})
+    assert job["_last_recover"] == dt3
 
 
 async def test_subjob_basic_roundtrip(mondb):
