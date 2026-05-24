@@ -124,14 +124,21 @@ class JobFlowStateUpdates:
             ))
 
     async def update_job_state(
-        self, job_id: str, update: JobUpdate, update_time: datetime.datetime = None
+        self,
+        job_id: str,
+        update: JobUpdate,
+        update_time: datetime.datetime = None,
+        recovery_cooldown: datetime.timedelta | None = None,
     ):
         """
         Update the state of a job.
-        
+
         job_id - the job to update.
         update - the update to apply.
         update_time - the timestamp for the update, defaulting to now.
+        recovery_cooldown - if provided and > 0, prevents a job recovery attempt if the prior
+            recovery, if any, was less than the time provided in the past. If provided at all,
+            sets the time of the last recovery attempt.
         """
         _require_string(job_id, "job_id")
         _not_falsy(update, "update")
@@ -139,7 +146,9 @@ class JobFlowStateUpdates:
         update_time = update_time if update_time else self._timestamp_fn()
         async def cb():
             await self._mongo.job_update_sent(job_id, trans_id)
-        await self._mongo.update_job_state(job_id, update, update_time, trans_id)
+        await self._mongo.update_job_state(
+            job_id, update, update_time, trans_id, recovery_cooldown=recovery_cooldown
+        )
         await self._kafka.update_job_state(
             job_id, update.new_state, update_time, trans_id, callback=cb()
         )
