@@ -3,19 +3,24 @@ The KBase job flow implementation and provider. Runs jobs on the HTCondor system
 """
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
+import datetime
 import htcondor2
 import logging
 from pathlib import Path
 import time
 from typing import Any
+import uuid
 
 from cdmtaskservice.arg_checkers import (
     not_falsy as _not_falsy,
     check_num as _check_num,
     require_string as _require_string,
 )
-from cdmtaskservice.condor.client import CondorClient, condor_job_stats, condor_jobs_all_held
+from cdmtaskservice.condor.client import (
+    CondorClient, ProcState, condor_job_stats, condor_jobs_all_held
+)
 from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
@@ -40,6 +45,7 @@ from cdmtaskservice.timestamp import utcdatetime
 
 
 _RETRY_DELAY_SEC = 5 * 60  # configurable?
+_RECOVERY_COOLDOWN = datetime.timedelta(minutes=10)
 
 
 class KBaseRunner(JobFlow):
@@ -59,6 +65,8 @@ class KBaseRunner(JobFlow):
         state_updates: SubjobFlowStateUpdates,
         coro_manager: CoroutineWrangler,
         refserv_client: RefdataServiceClient,
+        _timestamp_fn: Callable[[], datetime.datetime] = utcdatetime,
+        _trans_id_fn: Callable[[], str] = lambda: str(uuid.uuid4()),
     ):
         """
         Create the runner.
@@ -77,6 +85,8 @@ class KBaseRunner(JobFlow):
         self._updates = _not_falsy(state_updates, "state_updates")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._refcli = _not_falsy(refserv_client, "refserv_client")
+        self._timestamp_fn = _timestamp_fn
+        self._trans_id_fn = _trans_id_fn
         self._logr = logging.getLogger(__name__)
 
     async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
@@ -415,7 +425,68 @@ class KBaseRunner(JobFlow):
         """
         Do nothing. Job cleanup is handled by HTCondor.
         """
-        pass # Intentionally do nothing 
+        pass # Intentionally do nothing
+
+    def _get_cluster_id_or_raise(self, job: models.AdminJobDetails) -> int:
+        if not job.htcondor_details or not job.htcondor_details.cluster_id:
+            raise InvalidJobStateError(
+                "Job has no HTCondor cluster ID. If the job was just submitted, retry in a "
+                "moment. If submission failed, create a new job rather than recovering."
+            )
+        return job.htcondor_details.cluster_id[-1]
+
+    async def _get_held_and_running(
+        self, cluster_id: int
+    ) -> tuple[list[int], list[int]]:
+        proc_states = await self._condor.get_cluster_proc_states(cluster_id)
+        if ProcState.OTHER in set(proc_states):
+            raise InvalidJobStateError(
+                "HTCondor cluster contains processes in an unexpected state (Removed or "
+                "Suspended). Investigate the HTCondor cluster before retrying recovery."
+            )
+        held = [i for i, s in enumerate(proc_states) if s == ProcState.HELD]
+        running = [i for i, s in enumerate(proc_states) if s == ProcState.RUNNING]
+        return held, running
+
+    @staticmethod
+    def _check_standard_recoverable(job: models.AdminJobDetails):
+        js = models.JobState
+        if job.state == js.COMPLETE:
+            raise InvalidJobStateError("Job has already completed successfully.")
+        if job.state == js.RECOVERING:
+            raise InvalidJobStateError(
+                "Job is already being recovered. If recovery is stuck, use force recovery."
+            )
+        if job.state.is_canceling():
+            raise InvalidJobStateError(
+                f"Job is in cancel state {job.state.value} and cannot be recovered."
+            )
+
+    async def _standard_recover(self, job: models.AdminJobDetails):
+        self._check_standard_recoverable(job)
+        cluster_id = self._get_cluster_id_or_raise(job)
+        held_nums, running_nums = await self._get_held_and_running(cluster_id)
+        # TODO CHUNK_B: advance to complete if not held_nums and not running_nums
+        # TODO CHUNK_C: acquire lock and do recovery if held_nums
+
+    async def _force_recover(self, job: models.AdminJobDetails):
+        cluster_id = self._get_cluster_id_or_raise(job)
+        held_nums, running_nums = await self._get_held_and_running(cluster_id)
+        if running_nums:
+            raise InvalidJobStateError(
+                "Cannot force recover while containers are running. All containers must be "
+                "held or complete before forcing recovery."
+            )
+        # TODO CHUNK_D: handle all-complete case (not held_nums)
+        # TODO CHUNK_E: handle held containers
+
+    async def recover_job(self, job: models.AdminJobDetails, force: bool = False):
+        """ Recover a job from a stuck or failed state. """
+        _not_falsy(job, "job")
+        if force:
+            await self._force_recover(job)
+        else:
+            await self._standard_recover(job)
 
 
     async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):
