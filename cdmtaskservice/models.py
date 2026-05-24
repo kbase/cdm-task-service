@@ -1108,6 +1108,10 @@ class AdminJobDetails(Job):
         description="A description of the error that occurred oriented towards service "
             + "admins, potentially including more details."
     )] = None
+    admin_error_history: Annotated[list[str | None] | None, Field(
+        description="Historical admin error messages from previous recovery attempts. "
+            + "Populated when the job is reset during job recovery."
+    )] = None
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
 
 

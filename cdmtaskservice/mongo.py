@@ -610,6 +610,74 @@ class MongoDAO:
             recovery_cooldown=recovery_cooldown,
         )
 
+    @staticmethod
+    def _history_append(history_field: str, *value_exprs) -> dict:
+        """
+        Build a $concatArrays expression that appends one or more arrays to an existing history
+        array, handling the first-recovery case where the field doesn't exist yet via $ifNull.
+        """
+        return {"$concatArrays": [{"$ifNull": [f"${history_field}", []]}, *value_exprs]}
+
+    async def recover_job(
+        self,
+        job_id: str,
+        download_submitted_time: datetime.datetime,
+        trans_id: str,
+    ):
+        """
+        Reset the main job to DOWNLOAD_SUBMITTED, preserving history for failure analysis.
+
+        WARNING: the caller is responsible for ensuring the job is in the RECOVERING state
+        before calling this method. The RECOVERING transition recorded in transition_times
+        is what gets archived into trans_history; if the job is not in RECOVERING the
+        archived history will be misleading.
+
+        Atomically:
+          - Appends transition_times to trans_history (without an additional RECOVERING entry;
+            unlike recover_subjobs the RECOVERING transition is expected to be in transition_times)
+          - Appends the current admin_error to admin_error_history
+          - Resets transition_times to a single DOWNLOAD_SUBMITTED entry
+          - Sets state to DOWNLOAD_SUBMITTED
+          - Sets cleaned to False
+          - Clears error, admin_error, and traceback
+
+        job_id - the job ID.
+        download_submitted_time - the time for the new DOWNLOAD_SUBMITTED transition.
+        trans_id - the transaction ID for the new DOWNLOAD_SUBMITTED entry.
+        """
+        _require_string(job_id, "job_id")
+        _not_falsy(download_submitted_time, "download_submitted_time")
+        _require_string(trans_id, "trans_id")
+        ds_entry = {
+            models.FLD_COMMON_STATE_TRANSITION_STATE: models.JobState.DOWNLOAD_SUBMITTED.value,
+            models.FLD_COMMON_STATE_TRANSITION_TIME: download_submitted_time,
+            models.FLD_JOB_STATE_TRANSITION_ID: trans_id,
+            models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT: False,
+            _FLD_RETRY_ATTEMPT: 0,  # unused for now
+        }
+        pipeline = [
+            {"$set": {
+                models.FLD_COMMON_TRANS_HISTORY: self._history_append(
+                    models.FLD_COMMON_TRANS_HISTORY, f"${models.FLD_COMMON_TRANS_TIMES}"
+                ),
+                models.FLD_COMMON_TRANS_TIMES: [ds_entry],
+                models.FLD_COMMON_STATE: models.JobState.DOWNLOAD_SUBMITTED.value,
+                _FLD_UPDATE_TIME: download_submitted_time,
+                models.FLD_COMMON_CLEANED: False,
+                models.FLD_COMMON_ADMIN_ERROR_HISTORY: self._history_append(
+                    models.FLD_COMMON_ADMIN_ERROR_HISTORY, [f"${models.FLD_COMMON_ADMIN_ERROR}"]
+                ),
+            }},
+            {"$unset": [
+                models.FLD_COMMON_ERROR,
+                models.FLD_COMMON_ADMIN_ERROR,
+                models.FLD_COMMON_TRACEBACK,
+            ]},
+        ]
+        result = await self._col_jobs.update_one({models.FLD_COMMON_ID: job_id}, pipeline)
+        if not result.matched_count:
+            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+
     async def update_job_admin_meta(
         self,
         job_id: str,
@@ -883,23 +951,21 @@ class MongoDAO:
         }
         pipeline = [
             {"$set": {
-                models.FLD_COMMON_TRANS_HISTORY: {"$concatArrays": [
-                    {"$ifNull": [f"${models.FLD_COMMON_TRANS_HISTORY}", []]},
+                models.FLD_COMMON_TRANS_HISTORY: self._history_append(
+                    models.FLD_COMMON_TRANS_HISTORY,
                     f"${models.FLD_COMMON_TRANS_TIMES}",
                     [recovering_entry],
-                ]},
+                ),
                 # We intentionally don't add a created entry here
                 models.FLD_COMMON_TRANS_TIMES: [ds_entry],
                 models.FLD_COMMON_STATE: models.JobState.DOWNLOAD_SUBMITTED.value,
                 _FLD_UPDATE_TIME: download_submitted_time,
-                models.FLD_SUBJOB_EXIT_CODE_HISTORY: {"$concatArrays": [
-                    {"$ifNull": [f"${models.FLD_SUBJOB_EXIT_CODE_HISTORY}", []]},
-                    [f"${models.FLD_SUBJOB_EXIT_CODE}"],
-                ]},
-                models.FLD_COMMON_ADMIN_ERROR_HISTORY: {"$concatArrays": [
-                    {"$ifNull": [f"${models.FLD_COMMON_ADMIN_ERROR_HISTORY}", []]},
-                    [f"${models.FLD_COMMON_ADMIN_ERROR}"],
-                ]},
+                models.FLD_SUBJOB_EXIT_CODE_HISTORY: self._history_append(
+                    models.FLD_SUBJOB_EXIT_CODE_HISTORY, [f"${models.FLD_SUBJOB_EXIT_CODE}"]
+                ),
+                models.FLD_COMMON_ADMIN_ERROR_HISTORY: self._history_append(
+                    models.FLD_COMMON_ADMIN_ERROR_HISTORY, [f"${models.FLD_COMMON_ADMIN_ERROR}"]
+                ),
             }},
             {"$unset": [
                 models.FLD_SUBJOB_EXIT_CODE,

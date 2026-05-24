@@ -590,6 +590,134 @@ async def test_update_job_recovery_cooldown_fail(mondb):
     assert job["_last_recover"] == dt3
 
 
+async def test_recover_job(mondb):
+    mc = await MongoDAO.create(mondb)
+
+    # save a job with extra transitions and error fields to verify clearing and history capture
+    job = _BASEJOB.model_copy(deep=True)
+    job.cleaned = True
+    job.error = "some error"
+    job.admin_error = "some admin error"
+    job.traceback = "some traceback"
+    dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
+    dt2 = dt1 + datetime.timedelta(minutes=1)
+    job.transition_times.extend([
+        models.AdminJobStateTransition(
+            state=models.JobState.JOB_SUBMITTING, time=dt1, trans_id="t3", notif_sent=True
+        ),
+        models.AdminJobStateTransition(
+            state=models.JobState.RECOVERING, time=dt2, trans_id="t4", notif_sent=False
+        ),
+    ])
+    job.state = models.JobState.RECOVERING
+    await mc.save_job(job)
+
+    ds_time = dt2 + datetime.timedelta(seconds=1)
+    await mc.recover_job("foo", ds_time, "t5")
+
+    def _tt(state, time, trans_id, notif_sent):
+        return models.AdminJobStateTransition(
+            state=state, time=time, trans_id=trans_id, notif_sent=notif_sent
+        )
+
+    got = await mc.get_job("foo", as_admin=True)
+    expected = _BASEJOB.model_copy(deep=True)
+    expected.state = models.JobState.DOWNLOAD_SUBMITTED
+    expected.cleaned = False
+    expected.transition_times = [
+        _tt(models.JobState.DOWNLOAD_SUBMITTED, ds_time, "t5", False),
+    ]
+    expected.trans_history = [
+        _tt(models.JobState.CREATED, _SAFE_TIME, "trans1", False),
+        _tt(models.JobState.DOWNLOAD_SUBMITTED, _SAFE_TIME, "trans2", False),
+        _tt(models.JobState.JOB_SUBMITTING, dt1, "t3", True),
+        _tt(models.JobState.RECOVERING, dt2, "t4", False),
+    ]
+    expected.admin_error_history = ["some admin error"]
+    assert got == expected
+
+    raw = await mondb.jobs.find_one({"id": "foo"})
+    assert raw["_update_time"] == ds_time
+    assert "error" not in raw
+    assert "admin_error" not in raw
+    assert "traceback" not in raw
+
+
+async def test_recover_job_second_recovery(mondb):
+    # Verify trans_history and admin_error_history accumulate across multiple recoveries,
+    # and that RECOVERING transitions are preserved in the history.
+    mc = await MongoDAO.create(mondb)
+
+    # Save with a RECOVERING entry already in transition_times to match expected caller behavior.
+    rec_time0 = _SAFE_TIME + datetime.timedelta(minutes=1)
+    job = _BASEJOB.model_copy(deep=True)
+    job.admin_error = "first error"
+    job.transition_times.append(
+        models.AdminJobStateTransition(
+            state=models.JobState.RECOVERING, time=rec_time0, trans_id="r0", notif_sent=False
+        )
+    )
+    job.state = models.JobState.RECOVERING
+    await mc.save_job(job)
+
+    ds_time1 = rec_time0 + datetime.timedelta(seconds=1)
+    await mc.recover_job("foo", ds_time1, "r1")
+
+    t_err = ds_time1 + datetime.timedelta(minutes=5)
+    await mc.update_job_state("foo", error("second error"), t_err, "e1")
+
+    # Transition to RECOVERING before the second recover_job call, as callers are expected to do.
+    t_rec2 = t_err + datetime.timedelta(minutes=1)
+    await mc.update_job_state("foo", recovering(), t_rec2, "r0_2")
+
+    ds_time2 = t_rec2 + datetime.timedelta(seconds=1)
+    await mc.recover_job("foo", ds_time2, "r2")
+
+    def _tt(state, time, trans_id, notif_sent):
+        return models.AdminJobStateTransition(
+            state=state, time=time, trans_id=trans_id, notif_sent=notif_sent
+        )
+
+    got = await mc.get_job("foo", as_admin=True)
+    expected = _BASEJOB.model_copy(deep=True)
+    expected.state = models.JobState.DOWNLOAD_SUBMITTED
+    expected.transition_times = [_tt(models.JobState.DOWNLOAD_SUBMITTED, ds_time2, "r2", False)]
+    expected.trans_history = [
+        _tt(models.JobState.CREATED, _SAFE_TIME, "trans1", False),
+        _tt(models.JobState.DOWNLOAD_SUBMITTED, _SAFE_TIME, "trans2", False),
+        _tt(models.JobState.RECOVERING, rec_time0, "r0", False),
+        # 1st recover call happens here
+        _tt(models.JobState.DOWNLOAD_SUBMITTED, ds_time1, "r1", False),
+        _tt(models.JobState.ERROR, t_err, "e1", False),
+        _tt(models.JobState.RECOVERING, t_rec2, "r0_2", False),
+        # 2nd recovery call happens here
+    ]
+    expected.admin_error_history = ["first error", "second error"]
+    assert got == expected
+
+
+async def test_recover_job_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(_BASEJOB)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+
+    await _fail_recover_job(mc, None, dt, "t1", ValueError("job_id is required"))
+    await _fail_recover_job(mc, "   \t  ", dt, "t1", ValueError("job_id is required"))
+    await _fail_recover_job(mc, "foo", None, "t1", ValueError(
+        "download_submitted_time is required")
+    )
+    await _fail_recover_job(mc, "foo", dt, None, ValueError("trans_id is required"))
+    await _fail_recover_job(mc, "foo", dt, "   \t  ", ValueError("trans_id is required"))
+    await _fail_recover_job(mc, "nosuchthing", dt, "t1",
+        NoSuchJobError("No job with ID 'nosuchthing' exists"))
+
+
+async def _fail_recover_job(mc, job_id, ds_time, trans_id, expected):
+    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$"):
+        await mc.recover_job(job_id, ds_time, trans_id)
+
+
 async def test_subjob_basic_roundtrip(mondb):
     mc = await MongoDAO.create(mondb)
     
