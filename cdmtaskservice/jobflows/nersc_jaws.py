@@ -504,6 +504,12 @@ class NERSCJAWSRunner(JobFlow):
                     jaws_paths.append(Path(d))
         await self._nman.clean_job(job, jaws_paths)
 
+    async def recover_job(self, job: models.AdminJobDetails, force: bool = False):
+        """ Throws an exception as this method is not supported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+
     async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):
         """
         Start staging reference data. It is expected that the ReferenceData has been persisted to

@@ -1,11 +1,11 @@
 import pytest
 from unittest.mock import create_autospec, patch, PropertyMock
 
-from cdmtaskservice.condor.client import CondorClient
+from cdmtaskservice.condor.client import CondorClient, ProcState
 from cdmtaskservice.config_s3 import S3Config
+from cdmtaskservice.exceptions import InvalidJobStateError, UnsupportedOperationError
 from cdmtaskservice.jobflows.kbase import KBaseRunner
 from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates, ParentJobUpdate
-from cdmtaskservice.exceptions import UnsupportedOperationError
 from cdmtaskservice import models
 from cdmtaskservice import update_state
 from cdmtaskservice.mongo import MongoDAO
@@ -19,6 +19,7 @@ from cdmtaskservice.timestamp import utcdatetime
 
 
 _T = utcdatetime()
+_TRANS_ID = "test-trans-id"
 
 # A realistic HTCondor job ClassAd used to exercise cpu_hours / cpu_factor / max_memory paths.
 # RemoteUserCpu=3600s, CommittedTime=1800s, cpus=1 → cpu_hours=1.0, cpu_factor=2.0.
@@ -47,6 +48,21 @@ def _job(num_containers=2):
     )
 
 
+_UNSET = object()
+
+
+def _recovery_job(state=models.JobState.ERROR, cluster_ids=_UNSET):
+    if cluster_ids is _UNSET:
+        cluster_ids = [123]
+    return models.AdminJobDetails.model_construct(
+        id="jid",
+        state=state,
+        job_input=models.JobInput.model_construct(num_containers=2, cpus=1),
+        htcondor_details=None if cluster_ids is None
+            else models.HTCondorDetails(cluster_id=cluster_ids),
+    )
+
+
 _JOB = _job()
 
 
@@ -67,8 +83,17 @@ def _make_runner():
     s3config.get_internal_client.return_value = s3
     updates = create_autospec(SubjobFlowStateUpdates, spec_set=True, instance=True)
     refserv = create_autospec(RefdataServiceClient, spec_set=True, instance=True)
-    runner = KBaseRunner(condor, mongo, s3config, updates, _FakeCoroutineWrangler(), refserv)
+    runner = KBaseRunner(
+        condor, mongo, s3config, updates, _FakeCoroutineWrangler(), refserv,
+        _timestamp_fn=lambda: _T,
+        _trans_id_fn=lambda: _TRANS_ID,
+    )
     return runner, mongo, condor, updates, s3
+
+
+######
+# update_container_state tests
+######
 
 
 async def test_update_container_state_bad_args():
@@ -323,7 +348,7 @@ async def test_update_container_state_unsupported_state():
     updates.get_parent_job_update.assert_not_called()
 
 
-async def test_error_job_no_nonzero_exit_codes():
+async def test_update_container_state_error_job_no_nonzero_exit_codes():
     """All exit codes 0 or None - generic error message with no log path."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
@@ -358,7 +383,7 @@ async def test_error_job_no_nonzero_exit_codes():
     )
 
 
-async def test_error_job_held_running_containers():
+async def test_update_container_state_error_job_held_running_containers():
     """_get_condor_stats exits on first iteration when all running containers are held."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
@@ -396,7 +421,7 @@ async def test_error_job_held_running_containers():
     )
 
 
-async def test_condor_stats_timeout():
+async def test_update_container_state_condor_stats_timeout():
     """_get_condor_stats raises IOError after 12 attempts; handle_exception is called."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
@@ -424,7 +449,7 @@ async def test_condor_stats_timeout():
     updates.handle_exception.assert_called_once_with(exc, "jid", "updating job state")
 
 
-async def test_complete_job_no_outputs():
+async def test_update_container_state_complete_job_no_outputs():
     """_complete_job with subjobs producing no output files sets the job to error."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
@@ -452,7 +477,7 @@ async def test_complete_job_no_outputs():
     )
 
 
-async def test_complete_job_checksum_mismatch():
+async def test_update_container_state_complete_job_checksum_mismatch():
     """A CRC mismatch in _complete_job propagates as an exception to handle_exception."""
     runner, mongo, condor, updates, s3 = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
@@ -480,3 +505,112 @@ async def test_complete_job_checksum_mismatch():
         "for uploaded file bucket/f.txt"
     )
     updates.handle_exception.assert_called_once_with(exc, "jid", "updating job state")
+
+
+######
+# recover_job tests
+######
+
+
+async def test_recover_job_bad_args():
+    runner, _, _, _, _ = _make_runner()
+
+    with pytest.raises(ValueError, match="^job is required$"):
+        await runner.recover_job(None)
+
+
+@pytest.mark.parametrize("cluster_ids", [None, []])
+@pytest.mark.parametrize("force", [False, True])
+async def test_recover_job_no_cluster_id(force, cluster_ids):
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(cluster_ids=cluster_ids)
+
+    with pytest.raises(InvalidJobStateError, match="Job has no HTCondor cluster ID"):
+        await runner.recover_job(job, force=force)
+
+    condor.get_cluster_proc_states.assert_not_called()
+    updates.update_job_state.assert_not_called()
+
+
+@pytest.mark.parametrize("force", [False, True])
+async def test_recover_job_other_proc_state(force):
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job()
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.OTHER]
+
+    with pytest.raises(
+        InvalidJobStateError,
+        match="HTCondor cluster contains processes in an unexpected state",
+    ):
+        await runner.recover_job(job, force=force)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.update_job_state.assert_not_called()
+
+
+@pytest.mark.parametrize("force", [False, True])
+async def test_recover_job_condor_raises(force):
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job()
+    condor.get_cluster_proc_states.side_effect = IOError("condor unavailable")
+
+    with pytest.raises(IOError, match="condor unavailable"):
+        await runner.recover_job(job, force=force)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_standard_complete_state():
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.COMPLETE)
+
+    with pytest.raises(InvalidJobStateError, match="^Job has already completed successfully\\.$"):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_not_called()
+    updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_standard_recovering_state():
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.RECOVERING)
+
+    with pytest.raises(
+        InvalidJobStateError,
+        match="^Job is already being recovered\\. If recovery is stuck, use force recovery\\.$",
+    ):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_not_called()
+    updates.update_job_state.assert_not_called()
+
+
+@pytest.mark.parametrize("cancel_state", list(models.JobState.canceling_states()))
+async def test_recover_job_standard_canceling_state(cancel_state):
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=cancel_state)
+
+    with pytest.raises(
+        InvalidJobStateError,
+        match=f"^Job is in cancel state {cancel_state.value} and cannot be recovered\\.$",
+    ):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_not_called()
+    updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_force_running_containers():
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.RECOVERING)
+    condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.RUNNING]
+
+    with pytest.raises(
+        InvalidJobStateError,
+        match="^Cannot force recover while containers are running\\.",
+    ):
+        await runner.recover_job(job, force=True)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.update_job_state.assert_not_called()
