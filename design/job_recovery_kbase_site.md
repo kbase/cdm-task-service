@@ -39,9 +39,23 @@ updates the job state appropriately.
 
 ## On a recovery request
 
-* If the job has completed successfully, is in recovery, or is in a cancel state,
-  return an informative error
+* If the job has completed successfully (COMPLETE), is already in recovery (RECOVERING), or
+  has already been canceled (CANCELED), return an informative error
   * May want a new error type, TBD
+* If the job is stuck in the CANCELING state (cancel was initiated but the final state write
+  failed, e.g. due to a transient Mongo error), re-run the cancel operation and return
+  * The cancel operation is idempotent: calling condor to cancel an already-canceling or
+    already-canceled cluster is harmless, and if condor finished the cancel naturally during
+    recovery the result is the same either way
+  * Transient errors from the cancel operation propagate to the caller, who can retry
+  * No recovery lock is needed: CANCELING is effectively the lock (no transition can race
+    from CANCELING to anything other than CANCELED)
+  * Note: cancel failures must NOT set the job to ERROR. If the job went from CANCELING to
+    ERROR, recovery would see it as a failed normal job and attempt to reset and advance it
+    to COMPLETE — which is wrong, since the subjobs are in an indeterminate canceled state.
+    Instead, cancel failures leave the job in CANCELING so that recovery can safely
+    retry the cancel. This means the cancel coroutine propagates exceptions rather than
+    swallowing them into the error handler.
 * If there is no HTC cluster ID in the job record throw an informative error
   * Either the job is so new it hasn't yet been submitted -OR-
   * The submission failed, in which case it makes more sense to just make a new job. The point
@@ -50,18 +64,33 @@ updates the job state appropriately.
   * If this occurs frequently could revisit
 * If there are no held or running processes in HTC for the job cluster
   * This implies the job completed successfully but the main job state was not updated
-  * If the job is not on the standard job state path (CREATED -> COMPLETED) throw a 500 error,
-    something is broken
-    * Unless it's moved to a cancel state, then throw a 4XX error
-  * Determine the set of state updates that need to be applied to the main job,
-    e.g. from current job state through to the COMPLETED state.
-  * For each update in order, call `subjobs.get_job_update()` to get the update information
-    and apply the update.
-    * For the completed state transition, standard updates need to be done (set output files,
-      cpu usage, etc.)
-  * If an update fails, that presumably means that another recovery call is ongoing and has taken
-    over responsibility for the updates, the job has started canceling,
-    or something is very wrong. In any case throw an error and do not update the job state.
+    or an error occurred during an update
+  * If the job is on the standard job state path (CREATED -> COMPLETED):
+    * Determine the set of state updates that need to be applied to the main job,
+      e.g. from current job state through to the COMPLETED state.
+    * For each update in order, call `subjobs.get_job_update()` to get the update information
+      and apply the update.
+      * For the completed state transition, standard updates need to be done (set output files,
+        cpu usage, etc.)
+    * If an update fails, that presumably means that another recovery call is ongoing and has taken
+      over responsibility for the updates, the job has started canceling,
+      or something is very wrong. In any case throw an error and do not update the job state.
+  * If the job is in the ERROR state, this may indicate that all containers completed
+    successfully but a transient error (e.g. a Mongo or S3 failure) prevented `_complete_job`
+    from recording the COMPLETE state, causing the job to land in ERROR via the normal error
+    handler. In this case:
+    * Acquire the recovery lock (ERROR -> RECOVERING) with no cooldown enforcement as
+      described below
+    * Reset the main job to DOWNLOAD_SUBMITTED (same operation as the standard held-container
+      recovery path below)
+    * Advance the job state through to COMPLETE, as above, re-running the full completion
+      verification (condor stats, checksum checks, etc.)
+    * If the completion attempt fails again with a transient error, the exception propagates
+      to the caller who can retry. The job is left in whatever intermediate state the last
+      successful transition reached.
+    * If the completion attempt finds a non-transient error (e.g. checksum mismatch, no
+      output files), the job is moved to ERROR as normal
+   * Otherwise throw a 500 error, something is broken
 * If there are running but no held processes in HTC, there is nothing to do, throw an
   informative error.
 * Otherwise, set the job to the new RECOVERING state
@@ -152,6 +181,14 @@ RECOVERING state.
   now
 * We check for held containers to restart in HTC rather than Mongo as a container may be held
   and unable to update its state to `error` 
+
+## Potential future improvements
+
+* A `FATAL_ERROR` job state for errors where recovery is definitively impossible (e.g. CRC
+  mismatch, no output files). Currently `ERROR` serves double duty — transient failures that
+  recovery can fix and permanent failures that it cannot. A distinct `FATAL_ERROR` state
+  would make that explicit in the API and prevent pointless recovery attempts. Not implemented
+  now since only admins can run recovery and are expected to inspect the error before retrying.
 
 ## Appendix 1: Mongo operations
 
