@@ -1,5 +1,6 @@
+import datetime
 import pytest
-from unittest.mock import create_autospec, patch, PropertyMock
+from unittest.mock import call, create_autospec, patch, PropertyMock
 
 from cdmtaskservice.condor.client import CondorClient, ProcState
 from cdmtaskservice.config_s3 import S3Config
@@ -314,6 +315,7 @@ async def test_update_container_state_terminal_complete():
             cpu_factor=_CPU_FACTOR,
             max_memory=_MAX_MEM,
         ),
+        update_time=None,
     )
 
 
@@ -478,7 +480,7 @@ async def test_update_container_state_complete_job_no_outputs():
 
 
 async def test_update_container_state_complete_job_checksum_mismatch():
-    """A CRC mismatch in _complete_job propagates as an exception to handle_exception."""
+    """A CRC mismatch in _complete_job transitions the job to ERROR directly."""
     runner, mongo, condor, updates, s3 = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
     outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaaaaaaaaaa")]
@@ -498,13 +500,15 @@ async def test_update_container_state_complete_job_checksum_mismatch():
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.get_subjobs.assert_called_once_with("jid")
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
-    exc = updates.handle_exception.call_args.args[0]
-    assert isinstance(exc, ValueError)
-    assert str(exc) == (
-        "Expected CRC64/NVME checksum aaaaaaaaaaaa but got bbbbbbbbbbbb "
-        "for uploaded file bucket/f.txt"
+    updates.handle_exception.assert_not_called()
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Expected CRC64/NVME checksum aaaaaaaaaaaa but got bbbbbbbbbbbb "
+            "for uploaded file bucket/f.txt",
+            user_error="An unexpected error occurred",
+        ),
     )
-    updates.handle_exception.assert_called_once_with(exc, "jid", "updating job state")
 
 
 ######
@@ -611,6 +615,214 @@ async def test_recover_job_force_running_containers():
         match="^Cannot force recover while containers are running\\.",
     ):
         await runner.recover_job(job, force=True)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.update_job_state.assert_not_called()
+
+
+@pytest.mark.parametrize("start_state, state_updates", [
+    (models.JobState.DOWNLOAD_SUBMITTED, [
+        (models.JobState.JOB_SUBMITTING, update_state.submitting_job()),
+        (models.JobState.JOB_SUBMITTED, update_state.submitted_job()),
+        (models.JobState.UPLOAD_SUBMITTING, update_state.submitting_upload()),
+        (models.JobState.UPLOAD_SUBMITTED, update_state.submitted_upload()),
+    ]),
+    (models.JobState.JOB_SUBMITTING, [
+        (models.JobState.JOB_SUBMITTED, update_state.submitted_job()),
+        (models.JobState.UPLOAD_SUBMITTING, update_state.submitting_upload()),
+        (models.JobState.UPLOAD_SUBMITTED, update_state.submitted_upload()),
+    ]),
+    (models.JobState.JOB_SUBMITTED, [
+        (models.JobState.UPLOAD_SUBMITTING, update_state.submitting_upload()),
+        (models.JobState.UPLOAD_SUBMITTED, update_state.submitted_upload()),
+    ]),
+    (models.JobState.UPLOAD_SUBMITTING, [
+        (models.JobState.UPLOAD_SUBMITTED, update_state.submitted_upload()),
+    ]),
+    (models.JobState.UPLOAD_SUBMITTED, []),
+])
+async def test_recover_job_standard_advance_to_complete(start_state, state_updates):
+    runner, mongo, condor, updates, s3 = _make_runner()
+    job = _recovery_job(state=start_state)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    complete_time = _T + datetime.timedelta(seconds=len(state_updates) + 1)
+    parent_updates = [
+        ParentJobUpdate(state, _T + datetime.timedelta(seconds=i + 1))
+        for i, (state, _) in enumerate(state_updates)
+    ] + [ParentJobUpdate(models.JobState.COMPLETE, complete_time)]
+    updates.get_parent_job_update.side_effect = parent_updates
+
+    outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
+    sj = models.SubJob.model_construct(outputs=outputs)
+    mongo.get_subjobs.return_value = [sj]
+    s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")
+    s3.get_object_meta.return_value = [s3obj]
+    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_classads.assert_called_once_with(123)
+    mongo.get_subjobs.assert_called_once_with("jid")
+    s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
+
+    expected_times = [_T + datetime.timedelta(seconds=i + 1) for i in range(len(state_updates))]
+    expected_update_calls = [
+        call("jid", upd, update_time=t) for (_, upd), t in zip(state_updates, expected_times)
+    ] + [call(
+        "jid",
+        update_state.complete(
+            [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")],
+            cpu_hours=_CPU_HOURS,
+            cpu_factor=_CPU_FACTOR,
+            max_memory=_MAX_MEM,
+        ),
+        update_time=complete_time,
+    )]
+    updates.update_job_state.assert_has_calls(expected_update_calls)
+    assert updates.update_job_state.call_count == len(expected_update_calls)
+
+    expected_parent_calls = [
+        call(job, state) for state, _ in state_updates
+    ] + [call(job, models.JobState.COMPLETE)]
+    updates.get_parent_job_update.assert_has_calls(expected_parent_calls)
+    assert updates.get_parent_job_update.call_count == len(expected_parent_calls)
+
+
+async def test_recover_job_complete_job_no_outputs():
+    runner, mongo, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.UPLOAD_SUBMITTED)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
+    sj = models.SubJob.model_construct(outputs=[])
+    mongo.get_subjobs.return_value = [sj]
+    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_classads.assert_called_once_with(123)
+    mongo.get_subjobs.assert_called_once_with("jid")
+    updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "The job produced no output files",
+            user_error="The job produced no output files",
+        ),
+    )
+
+
+async def test_recover_job_complete_job_checksum_mismatch():
+    runner, mongo, condor, updates, s3 = _make_runner()
+    job = _recovery_job(state=models.JobState.UPLOAD_SUBMITTED)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
+    outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaaaaaaaaaa")]
+    sj = models.SubJob.model_construct(outputs=outputs)
+    mongo.get_subjobs.return_value = [sj]
+    s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "bbbbbbbbbbbb")
+    s3.get_object_meta.return_value = [s3obj]
+    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_classads.assert_called_once_with(123)
+    mongo.get_subjobs.assert_called_once_with("jid")
+    s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
+    updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Expected CRC64/NVME checksum aaaaaaaaaaaa but got bbbbbbbbbbbb "
+            "for uploaded file bucket/f.txt",
+            user_error="An unexpected error occurred",
+        ),
+    )
+
+
+async def test_recover_job_complete_job_condor_stats_timeout():
+    """Unlike update_container_state, the IOError propagates directly to the caller."""
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.UPLOAD_SUBMITTED)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
+    condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        with pytest.raises(IOError, match="Condor jobs didn't complete"):
+            await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
+    assert condor.get_cluster_classads.call_count == 12
+    condor.get_cluster_classads.assert_called_with(123)
+    updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_standard_advance_invalid_state():
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.CREATED)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+
+    with pytest.raises(RuntimeError, match="Unexpected job state"):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_standard_advance_update_raises():
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.DOWNLOAD_SUBMITTED)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.JOB_SUBMITTING, _T
+    )
+    updates.update_job_state.side_effect = InvalidJobStateError("job was canceled")
+
+    with pytest.raises(InvalidJobStateError, match="job was canceled"):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.get_parent_job_update.assert_called_once_with(job, models.JobState.JOB_SUBMITTING)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_job(), update_time=_T
+    )
+
+
+async def test_recover_job_standard_advance_parent_update_none():
+    """
+    get_parent_job_update returning None means not all subjobs reached that state;
+    raise RuntimeError.
+    """
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.DOWNLOAD_SUBMITTED)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    updates.get_parent_job_update.return_value = None
+
+    with pytest.raises(RuntimeError, match="Not all subjobs have reached state"):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.get_parent_job_update.assert_called_once_with(job, models.JobState.JOB_SUBMITTING)
+    updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_standard_running_only():
+    runner, _, condor, updates, _ = _make_runner()
+    job = _recovery_job()
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.RUNNING]
+
+    with pytest.raises(
+        InvalidJobStateError,
+        match="^No held containers to recover$",
+    ):
+        await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123)
     updates.update_job_state.assert_not_called()
