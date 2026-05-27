@@ -46,6 +46,7 @@ from cdmtaskservice.timestamp import utcdatetime
 
 _RETRY_DELAY_SEC = 5 * 60  # configurable?
 _RECOVERY_COOLDOWN = datetime.timedelta(minutes=10)
+_STANDARD_PATH_STATES = frozenset(update_state.JOB_COMPLETED_PATH[1:-1])
 
 
 class KBaseRunner(JobFlow):
@@ -346,12 +347,20 @@ class KBaseRunner(JobFlow):
             max_memory=max_mem,
         ))
         
-    async def _complete_job(self, job: models.AdminJobDetails):
+    async def _complete_job(
+        self, job: models.AdminJobDetails, update_time: datetime.datetime | None = None
+    ):
+        # Errors that indicate the job is permanently dead (no outputs, CRC mismatch) are
+        # handled here by transitioning to ERROR, since the original data is gone and recovery
+        # cannot help. Transient infrastructure errors (e.g. condor stats timeout) are allowed
+        # to propagate so the caller can retry without killing the job.
+        # update_time, if provided, is the subjob-derived completion timestamp. Error paths
+        # intentionally ignore it — they represent newly discovered failures.
         cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
         subjobs = await self.get_subjobs(job.id)
         filechecksums = {}
         for sj in subjobs:
-            # TODO ERRORHANDLING if two containers write to the same path, it's possible a 
+            # TODO ERRORHANDLING if two containers write to the same path, it's possible a
             #                    checksum mismatch could occur here. Options - maintain a list
             #                    of checksums and check that one matches or throw an error on
             #                    duplicate paths. NERSC based runs effectively choose one
@@ -367,17 +376,22 @@ class KBaseRunner(JobFlow):
         outfiles = []
         for o in s3objs:
             if o.crc64nvme != filechecksums[o.path]:
-                raise ValueError(
+                err = (
                     f"Expected CRC64/NVME checksum {filechecksums[o.path]} but got "
-                    + f"{o.crc64nvme} for uploaded file {o.path}"
+                    f"{o.crc64nvme} for uploaded file {o.path}"
                 )
+                await self._updates.update_job_state(
+                    # no way the user can fix this, something went very wrong
+                    job.id, update_state.error(err, user_error="An unexpected error occurred")
+                )
+                return
             outfiles.append(models.S3File(file=o.path, crc64nvme=o.crc64nvme))
         await self._updates.update_job_state(job.id, update_state.complete(
             outfiles,
             cpu_hours=cpu_hours,
             cpu_factor=cpu_factor,
             max_memory=max_mem
-        ))
+        ), update_time=update_time)
         
     async def cancel_job(self, job: models.AdminJobDetails):
         """ Cancel a job. """
@@ -460,13 +474,48 @@ class KBaseRunner(JobFlow):
         if job.state.is_canceling():
             raise InvalidJobStateError(
                 f"Job is in cancel state {job.state.value} and cannot be recovered."
+        )
+
+    async def _advance_job_to_complete(
+        self,
+        job: models.AdminJobDetails,
+        from_state: models.JobState | None = None,
+        use_subjob_times: bool = True,
+    ):
+        effective_state = from_state if from_state is not None else job.state
+        if effective_state not in _STANDARD_PATH_STATES:
+            raise RuntimeError(
+                f"Unexpected job state {effective_state.value!r} when advancing to complete"
             )
+        start = update_state.JOB_COMPLETED_PATH.index(effective_state) + 1
+        for state in update_state.JOB_COMPLETED_PATH[start:]:
+            if use_subjob_times:
+                parent_update = await self._updates.get_parent_job_update(job, state)
+                if not parent_update:
+                    raise RuntimeError(
+                        f"Not all subjobs have reached state {state.value!r} but "
+                        "all containers completed successfully; this is a bug"
+                    )
+                update_time = parent_update.time
+            else:
+                update_time = self._timestamp_fn()
+            if state == models.JobState.COMPLETE:
+                await self._complete_job(job, update_time=update_time)
+            else:
+                await self._updates.update_job_state(
+                    job.id, self._JOB_STATE_TO_UPDATE_FUNC[state](None),
+                    update_time=update_time
+                )
 
     async def _standard_recover(self, job: models.AdminJobDetails):
         self._check_standard_recoverable(job)
         cluster_id = self._get_cluster_id_or_raise(job)
         held_nums, running_nums = await self._get_held_and_running(cluster_id)
-        # TODO CHUNK_B: advance to complete if not held_nums and not running_nums
+        if not held_nums and not running_nums:
+            await self._advance_job_to_complete(job)
+            return
+        if not held_nums:
+            raise InvalidJobStateError("No held containers to recover")
         # TODO CHUNK_C: acquire lock and do recovery if held_nums
 
     async def _force_recover(self, job: models.AdminJobDetails):
