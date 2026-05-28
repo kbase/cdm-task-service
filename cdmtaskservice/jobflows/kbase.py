@@ -566,8 +566,18 @@ class KBaseRunner(JobFlow):
                 "Cannot force recover while containers are running. All containers must be "
                 "held or complete before forcing recovery."
             )
-        # TODO CHUNK_D: handle all-complete case (not held_procs)
-        # TODO CHUNK_E: handle held containers
+        # Validates job is in RECOVERING state and cooldown has expired; raises otherwise.
+        lock_time = await self._acquire_recovery_lock(job, force=True)
+        if not held_procs:
+            await self._mongo.recover_job(job.id, self._timestamp_fn(), self._trans_id_fn())
+            # use_subjob_times=False: subjob timestamps predate the current RECOVERING
+            # transition; reusing them would make transition_times go backwards.
+            await self._advance_job_to_complete(
+                job, from_state=models.JobState.DOWNLOAD_SUBMITTED, use_subjob_times=False
+            )
+        else:
+            # TODO CHUNK_E: handle held containers
+            pass
 
     async def recover_job(self, job: models.AdminJobDetails, force: bool = False):
         """ Recover a job from a stuck or failed state. """

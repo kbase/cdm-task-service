@@ -1075,3 +1075,117 @@ async def test_recover_job_force_running_containers():
 
     condor.get_cluster_proc_states.assert_called_once_with(123)
     updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_force_all_complete():
+    """
+    Force recovery, all containers complete (no held) → lock acquired with force_recovering()
+    and _RECOVERY_COOLDOWN; mongo.recover_job archives history and resets to
+    DOWNLOAD_SUBMITTED; then advanced from DOWNLOAD_SUBMITTED all the way to COMPLETE.
+
+    use_subjob_times=False: subjob timestamps predate the current RECOVERING transition
+    (they completed during the previous failed recovery window), so reusing them would make
+    transition_times go backwards.
+    """
+    lock_time = _T
+    reset_time = _T + datetime.timedelta(seconds=1)
+    advance_times = [_T + datetime.timedelta(seconds=2 + i) for i in range(5)]
+    ts = iter([lock_time, reset_time] + advance_times)
+    runner, mongo, condor, updates, s3 = _make_runner(_timestamp_fn=lambda: next(ts))
+    job = _recovery_job(state=models.JobState.RECOVERING)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+
+    outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
+    sj = models.SubJob.model_construct(outputs=outputs)
+    mongo.get_subjobs.return_value = [sj]
+    s3.get_object_meta.return_value = [S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")]
+    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.recover_job(job, force=True)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_classads.assert_called_once_with(123)
+    mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
+    mongo.get_subjobs.assert_called_once_with("jid")
+    s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
+    updates.get_parent_job_update.assert_not_called()
+
+    expected_update_calls = [
+        call(
+            "jid", update_state.force_recovering(),
+            update_time=lock_time, recovery_cooldown=datetime.timedelta(minutes=10),
+        ),
+        call("jid", update_state.submitting_job(), update_time=advance_times[0]),
+        call("jid", update_state.submitted_job(), update_time=advance_times[1]),
+        call("jid", update_state.submitting_upload(), update_time=advance_times[2]),
+        call("jid", update_state.submitted_upload(), update_time=advance_times[3]),
+        call(
+            "jid",
+            update_state.complete(
+                [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")],
+                cpu_hours=_CPU_HOURS, cpu_factor=_CPU_FACTOR, max_memory=_MAX_MEM,
+            ),
+            update_time=advance_times[4],
+        ),
+    ]
+    updates.update_job_state.assert_has_calls(expected_update_calls)
+    assert updates.update_job_state.call_count == len(expected_update_calls)
+
+
+async def test_recover_job_force_all_complete_advance_fails():
+    """
+    Force all-complete: lock acquired and mongo.recover_job called, but
+    _advance_job_to_complete fails; exception propagates; job left in RECOVERING.
+    """
+    lock_time = _T
+    reset_time = _T + datetime.timedelta(seconds=1)
+    advance_time = _T + datetime.timedelta(seconds=2)
+    ts = iter([lock_time, reset_time, advance_time])
+    runner, mongo, condor, updates, s3 = _make_runner(_timestamp_fn=lambda: next(ts))
+    job = _recovery_job(state=models.JobState.RECOVERING)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    # First call (force RECOVERING lock) succeeds; second (first state advance) raises.
+    updates.update_job_state.side_effect = [None, IOError("mongo blew up")]
+
+    with pytest.raises(IOError, match="mongo blew up"):
+        await runner.recover_job(job, force=True)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_classads.assert_not_called()
+    mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
+    mongo.get_subjobs.assert_not_called()
+    s3.get_object_meta.assert_not_called()
+    updates.get_parent_job_update.assert_not_called()
+    updates.update_job_state.assert_has_calls([
+        call(
+            "jid", update_state.force_recovering(),
+            update_time=lock_time, recovery_cooldown=datetime.timedelta(minutes=10),
+        ),
+        call("jid", update_state.submitting_job(), update_time=advance_time),
+    ])
+    assert updates.update_job_state.call_count == 2
+
+
+async def test_recover_job_force_all_complete_lock_fails():
+    """
+    Force all-complete: lock acquisition fails (job not in RECOVERING or cooldown not yet
+    expired); exception propagates; mongo.recover_job is not called.
+    """
+    runner, mongo, condor, updates, s3 = _make_runner()
+    job = _recovery_job(state=models.JobState.RECOVERING)
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    updates.update_job_state.side_effect = InvalidJobStateError("not in RECOVERING state")
+
+    with pytest.raises(InvalidJobStateError, match="not in RECOVERING state"):
+        await runner.recover_job(job, force=True)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_classads.assert_not_called()
+    mongo.recover_job.assert_not_called()
+    mongo.get_subjobs.assert_not_called()
+    s3.get_object_meta.assert_not_called()
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.force_recovering(),
+        update_time=_T, recovery_cooldown=datetime.timedelta(minutes=10),
+    )
