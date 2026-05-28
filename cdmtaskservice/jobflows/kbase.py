@@ -512,29 +512,6 @@ class KBaseRunner(JobFlow):
         )
         return now
 
-    async def _standard_recover(self, job: models.AdminJobDetails):
-        self._check_standard_recoverable(job)
-        if job.state == models.JobState.CANCELING:
-            await self._cancel_job(job)
-            return
-        held_procs, running_procs = await self._get_held_and_running(job)
-        if not held_procs and not running_procs:
-            if job.state == models.JobState.ERROR:
-                await self._acquire_recovery_lock(job)
-                await self._mongo.recover_job(job.id, self._timestamp_fn(), self._trans_id_fn())
-                # use_subjob_times=False: subjob timestamps predate the RECOVERING
-                # transition; reusing them would make transition_times go backwards.
-                await self._advance_job_to_complete(
-                    job, from_state=models.JobState.DOWNLOAD_SUBMITTED, use_subjob_times=False
-                )
-            else:
-                await self._advance_job_to_complete(job)
-            return
-        if not held_procs:
-            raise InvalidJobStateError("No held containers to recover")
-        lock_time = await self._acquire_recovery_lock(job)
-        await self._do_recovery(job, held_procs, lock_time)
-
     async def _do_recovery(
         self,
         job: models.AdminJobDetails,
@@ -559,6 +536,29 @@ class KBaseRunner(JobFlow):
         # state transition request.
         await self._mongo.recover_job(job.id, reset_time, self._trans_id_fn())
 
+    async def _standard_recover(self, job: models.AdminJobDetails):
+        self._check_standard_recoverable(job)
+        if job.state == models.JobState.CANCELING:
+            await self._cancel_job(job)
+            return
+        held_procs, running_procs = await self._get_held_and_running(job)
+        if not held_procs and not running_procs:
+            if job.state == models.JobState.ERROR:
+                await self._acquire_recovery_lock(job)
+                await self._mongo.recover_job(job.id, self._timestamp_fn(), self._trans_id_fn())
+                # use_subjob_times=False: subjob timestamps predate the RECOVERING
+                # transition; reusing them would make transition_times go backwards.
+                await self._advance_job_to_complete(
+                    job, from_state=models.JobState.DOWNLOAD_SUBMITTED, use_subjob_times=False
+                )
+            else:
+                await self._advance_job_to_complete(job)
+            return
+        if not held_procs:
+            raise InvalidJobStateError("No held containers to recover")
+        lock_time = await self._acquire_recovery_lock(job)
+        await self._do_recovery(job, held_procs, lock_time)
+
     async def _force_recover(self, job: models.AdminJobDetails):
         held_procs, running_procs = await self._get_held_and_running(job)
         if running_procs:
@@ -576,11 +576,34 @@ class KBaseRunner(JobFlow):
                 job, from_state=models.JobState.DOWNLOAD_SUBMITTED, use_subjob_times=False
             )
         else:
-            # TODO CHUNK_E: handle held containers
-            pass
+            await self._do_recovery(job, held_procs, lock_time)
 
     async def recover_job(self, job: models.AdminJobDetails, force: bool = False):
-        """ Recover a job from a stuck or failed state. """
+        """
+        Recover a job from a stuck or failed state.
+
+        job - the job to recover.
+        force - if False (standard recovery), attempts to advance the job based on its current
+            state and the state of its HTCondor containers:
+            * CANCELING: retries the cancel operation.
+            * No held or running containers, job in ERROR: acquires the RECOVERING lock, resets
+              the job to DOWNLOAD_SUBMITTED, and advances to COMPLETE.
+            * No held or running containers, job not in ERROR: advances directly to COMPLETE
+              without acquiring the lock.
+            * Held containers present: acquires the RECOVERING lock and resets the held containers
+              and the main job to DOWNLOAD_SUBMITTED, then lets HTCondor re-run them.
+            * Running containers only (no held): raises InvalidJobStateError.
+            Standard recovery raises InvalidJobStateError if the job is already COMPLETE,
+            CANCELED, or RECOVERING.
+
+            If True (force recovery), the job must be in RECOVERING state and the previous
+            recovery attempt must have occurred at least 10 minutes ago. Force recovery:
+            * No held containers (all complete): resets the job to DOWNLOAD_SUBMITTED and
+              advances to COMPLETE.
+            * Held containers present: resets the held containers and the main job to
+              DOWNLOAD_SUBMITTED, then lets HTCondor re-run them.
+            * Running containers: raises InvalidJobStateError regardless of force.
+        """
         _not_falsy(job, "job")
         if force:
             await self._force_recover(job)
