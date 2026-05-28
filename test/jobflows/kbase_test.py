@@ -1175,9 +1175,11 @@ async def test_recover_job_force_all_complete_lock_fails():
     runner, mongo, condor, updates, s3 = _make_runner()
     job = _recovery_job(state=models.JobState.RECOVERING)
     condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
-    updates.update_job_state.side_effect = InvalidJobStateError("not in RECOVERING state")
+    updates.update_job_state.side_effect = InvalidJobStateError(
+        "Job 'jid' is in state 'error', expected 'recovering'"
+    )
 
-    with pytest.raises(InvalidJobStateError, match="not in RECOVERING state"):
+    with pytest.raises(InvalidJobStateError, match="expected 'recovering'"):
         await runner.recover_job(job, force=True)
 
     condor.get_cluster_proc_states.assert_called_once_with(123)
@@ -1247,15 +1249,15 @@ async def test_recover_job_force_held_release_fails():
 
 async def test_recover_job_force_held_lock_fails():
     """
-    Force held: lock acquisition fails (job not in RECOVERING or cooldown not yet expired);
-    exception propagates; no subjob resets or HTC calls are made.
+    Force held: cooldown not yet expired → JobRecoveryError propagates; no subjob resets
+    or HTC calls are made.
     """
     runner, mongo, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.RECOVERING)
     condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
-    updates.update_job_state.side_effect = InvalidJobStateError("cooldown not expired")
+    updates.update_job_state.side_effect = JobRecoveryError("cooldown not expired")
 
-    with pytest.raises(InvalidJobStateError, match="cooldown not expired"):
+    with pytest.raises(JobRecoveryError, match="cooldown not expired"):
         await runner.recover_job(job, force=True)
 
     condor.get_cluster_proc_states.assert_called_once_with(123)

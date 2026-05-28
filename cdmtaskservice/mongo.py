@@ -19,7 +19,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     verify_aware_datetime
 )
-from cdmtaskservice.exceptions import JobRecoveryError
+from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
 from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 
 
@@ -463,7 +463,7 @@ class MongoDAO:
             ]
         return query
 
-    async def _update_job_state_err(
+    async def _update_job_state_diagnose_err(
         self,
         col: AsyncIOMotorCollection,
         job_id: str,
@@ -472,29 +472,59 @@ class MongoDAO:
         subjob_id: int | None = None,
         recovery_cooldown: datetime.timedelta | None = None,
     ):
-        if recovery_cooldown and recovery_cooldown > datetime.timedelta(0):
-            # Distinguish cooldown violation from state/existence mismatch: re-query without
-            # the cooldown constraint to check if the job exists and is in the right state
-            diag_query = self._update_job_state_query(job_id, time, update)
-            doc = await col.find_one(diag_query, {_FLD_MONGO_ID: 0, _FLD_LAST_RECOVER: 1})
-            if doc is not None:
-                remaining = (doc[_FLD_LAST_RECOVER] + recovery_cooldown) - time
-                raise JobRecoveryError(
-                    f"Job '{job_id}' was recovered too recently; "
-                    f"must wait {remaining} more before forcing recovery again"
-                )
-        statestr = ""
-        if update.current_state:
-            statestr = f"in state {update.current_state.value} "
-        if update.disallowed_current_states:
-            statestr = "not in states " + str(
-                sorted([s.value for s in update.disallowed_current_states])
-            ) + " "
+        if not recovery_cooldown or recovery_cooldown <= datetime.timedelta(0):
+            recovery_cooldown = None
+        id_query = {models.FLD_COMMON_ID: job_id}
         if subjob_id is not None:
-            raise NoSuchSubJobError(
-                f"No job with ID '{job_id}' and subjob ID {subjob_id} {statestr}exists"
+            id_query[models.FLD_SUBJOB_ID] = subjob_id
+        doc = await col.find_one(
+            id_query,
+            {
+                _FLD_MONGO_ID: 0,
+                models.FLD_COMMON_STATE: 1,
+                _FLD_LAST_RECOVER: 1,
+                _FLD_UPDATE_TIME: 1,
+            },
+        )
+        if doc is None:
+            if subjob_id is not None:
+                raise NoSuchSubJobError(
+                    f"No job with ID '{job_id}' and subjob ID {subjob_id} exists"
+                )
+            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+        entity = f"Job '{job_id}'"
+        if subjob_id is not None:
+            entity = f"Job '{job_id}' with subjob ID {subjob_id}"
+        actual_state = doc[models.FLD_COMMON_STATE]
+        if update.current_state and actual_state != update.current_state.value:
+            raise InvalidJobStateError(
+                f"{entity} is in state {actual_state!r}, "
+                f"expected {update.current_state.value!r}"
             )
-        raise NoSuchJobError(f"No job with ID '{job_id}' {statestr}exists")
+        if (
+            update.disallowed_current_states
+            and actual_state in {s.value for s in update.disallowed_current_states}
+        ):
+            raise InvalidJobStateError(f"{entity} is in disallowed state {actual_state!r}")
+        if doc[_FLD_UPDATE_TIME] > time:
+            raise ValueError(
+                f"{entity} last update time is after the provided time"
+            )
+        # State constraints and timestamp are satisfied; the cooldown is the only
+        # remaining cause. Both recovery_cooldown and _last_recover are guaranteed
+        # non-null — unless the document changed between the original query and this
+        # diagnostic read (race condition), in which case we can't diagnose further.
+        last_recover = doc.get(_FLD_LAST_RECOVER)
+        if not recovery_cooldown or last_recover is None:
+            raise ValueError(  # This is too painful to test
+                f"{entity}: could not diagnose update failure; "
+                "the document may have changed between queries"
+            )
+        remaining = (last_recover + recovery_cooldown) - time
+        raise JobRecoveryError(
+            f"Job '{job_id}' was recovered too recently; "
+            f"must wait {remaining} more before forcing recovery again"
+        )
 
     async def _update_job_state(
         self,
@@ -536,10 +566,7 @@ class MongoDAO:
             },
         )
         if not res.matched_count:
-            # This doesn't account for missing matches due to a too-early `time` argument,
-            # but that generally shouldn't happen unless someone is deliberately being a pain
-            # YAGNI for now, improve later if necessary
-            await self._update_job_state_err(
+            await self._update_job_state_diagnose_err(
                 col, job_id, update, time, subjob_id, recovery_cooldown
             )
 

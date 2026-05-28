@@ -8,7 +8,7 @@ from typing import Coroutine, Callable, Any
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
-from cdmtaskservice.exceptions import JobRecoveryError
+from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
 from cdmtaskservice.mongo import (
     MissingSubJobError,
     MongoDAO,
@@ -391,13 +391,13 @@ async def test_update_job_fail(mondb):
     await fail_update_job(mc, "foo", u, dt, None, ValueError("trans_id is required"))
     await fail_update_job(mc, "foo", u, dt, "   \t    ", ValueError("trans_id is required"))
     await fail_update_job(mc, "bar", u, dt, tid, NoSuchJobError(
-        "No job with ID 'bar' in state download_submitted exists"
+        "No job with ID 'bar' exists"
     ))
-    await fail_update_job(mc, "foo", submitting_upload(), dt, tid, NoSuchJobError(
-        "No job with ID 'foo' in state job_submitted exists"
+    await fail_update_job(mc, "foo", submitting_upload(), dt, tid, InvalidJobStateError(
+        "Job 'foo' is in state 'download_submitted', expected 'job_submitted'"
     ))
     await fail_update_job(mc, "foo", u, _SAFE_TIME + datetime.timedelta(milliseconds=-1), tid,
-        NoSuchJobError("No job with ID 'foo' in state download_submitted exists")
+        ValueError("Job 'foo' last update time is after the provided time")
     )
 
 
@@ -409,19 +409,18 @@ async def test_update_job_and_subjob_fail_update_to_error(mondb):
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
     tid = "1"
     
-    disallowed_str = "['canceled', 'canceling', 'complete', 'error', 'recovering']"
     for state in (
-        models.JobState.terminal_states() | 
+        models.JobState.terminal_states() |
         models.JobState.canceling_states() |
         {models.JobState.RECOVERING}
     ):
         await mondb.jobs.update_one({}, {"$set": {"state": state.value}})
         await mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
-        await fail_update_job(mc, "foo", u, dt, tid, NoSuchJobError(
-            f"No job with ID 'foo' not in states {disallowed_str} exists"
+        await fail_update_job(mc, "foo", u, dt, tid, InvalidJobStateError(
+            f"Job 'foo' is in disallowed state {state.value!r}"
         ))
-        await fail_update_subjob(mc, "bar", 0, u, dt, NoSuchSubJobError(
-            f"No job with ID 'bar' and subjob ID 0 not in states {disallowed_str} exists"
+        await fail_update_subjob(mc, "bar", 0, u, dt, InvalidJobStateError(
+            f"Job 'bar' with subjob ID 0 is in disallowed state {state.value!r}"
         ))
 
 
@@ -543,15 +542,15 @@ async def test_update_job_force_recovery_no_prior_recover(mondb):
 
 
 async def test_update_job_recovery_cooldown_state_mismatch(mondb):
-    # A positive cooldown on a job in the wrong state should raise NoSuchJobError, not
-    # JobRecoveryError — the diagnostic query must correctly attribute the failure to state
+    # A positive cooldown on a job in the wrong state should raise InvalidJobStateError, not
+    # JobRecoveryError — the cooldown diagnostic query must not mask a state mismatch
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)  # state = DOWNLOAD_SUBMITTED
 
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
     # force_recovering requires current state = RECOVERING, but job is DOWNLOAD_SUBMITTED
-    with pytest.raises(NoSuchJobError, match=(
-        r"^No job with ID 'foo' in state recovering exists$"
+    with pytest.raises(InvalidJobStateError, match=(
+        r"^Job 'foo' is in state 'download_submitted', expected 'recovering'$"
     )):
         await mc.update_job_state(
             "foo", force_recovering(), dt, "tid1",
@@ -865,16 +864,16 @@ async def test_update_subjob_fail(mondb):
     await fail_update_subjob(mc, "bar", 0, None, dt, ValueError("update is required"))
     await fail_update_subjob(mc, "bar", 0, u, None, ValueError("time is required"))
     await fail_update_subjob(mc, "foo", 0, u, dt, NoSuchSubJobError(
-        "No job with ID 'foo' and subjob ID 0 in state created exists"
+        "No job with ID 'foo' and subjob ID 0 exists"
     ))
     await fail_update_subjob(mc, "bar", 1, u, dt, NoSuchSubJobError(
-        "No job with ID 'bar' and subjob ID 1 in state created exists"
+        "No job with ID 'bar' and subjob ID 1 exists"
     ))
-    await fail_update_subjob(mc, "bar", 0, submitting_upload(), dt, NoSuchSubJobError(
-        "No job with ID 'bar' and subjob ID 0 in state job_submitted exists"
+    await fail_update_subjob(mc, "bar", 0, submitting_upload(), dt, InvalidJobStateError(
+        "Job 'bar' with subjob ID 0 is in state 'created', expected 'job_submitted'"
     ))
     await fail_update_subjob(mc, "bar", 0, u, _SAFE_TIME + datetime.timedelta(milliseconds=-1),
-         NoSuchSubJobError("No job with ID 'bar' and subjob ID 0 in state created exists")
+        ValueError("Job 'bar' with subjob ID 0 last update time is after the provided time")
     )
 
 
