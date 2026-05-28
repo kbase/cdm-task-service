@@ -1189,3 +1189,80 @@ async def test_recover_job_force_all_complete_lock_fails():
         "jid", update_state.force_recovering(),
         update_time=_T, recovery_cooldown=datetime.timedelta(minutes=10),
     )
+
+
+async def test_recover_job_force_held_containers():
+    """
+    Force recovery with held containers → lock acquired with force_recovering() and
+    _RECOVERY_COOLDOWN; recover_subjobs resets held subjobs; release_job releases them;
+    recover_job archives history and resets main job.
+    """
+    lock_time = _T
+    reset_time = _T + datetime.timedelta(seconds=1)
+    ts = iter([lock_time, reset_time])
+    runner, mongo, condor, updates, _ = _make_runner(_timestamp_fn=lambda: next(ts))
+    job = _recovery_job(state=models.JobState.RECOVERING)
+    # Container 0 complete, containers 1 and 2 held.
+    condor.get_cluster_proc_states.return_value = [
+        ProcState.COMPLETE, ProcState.HELD, ProcState.HELD
+    ]
+
+    await runner.recover_job(job, force=True)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.force_recovering(),
+        update_time=lock_time, recovery_cooldown=datetime.timedelta(minutes=10),
+    )
+    mongo.recover_subjobs.assert_called_once_with("jid", [1, 2], lock_time, reset_time)
+    condor.release_job.assert_called_once_with(123)
+    mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
+
+
+async def test_recover_job_force_held_release_fails():
+    """
+    Force held: release_job raises → JobRecoveryError is raised; recover_job (main job
+    reset) is not called; job is left in RECOVERING for the admin to retry.
+    """
+    lock_time = _T
+    reset_time = _T + datetime.timedelta(seconds=1)
+    ts = iter([lock_time, reset_time])
+    runner, mongo, condor, updates, _ = _make_runner(_timestamp_fn=lambda: next(ts))
+    job = _recovery_job(state=models.JobState.RECOVERING)
+    condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
+    condor.release_job.side_effect = IOError("condor unavailable")
+
+    with pytest.raises(JobRecoveryError, match="Failed to release held HTCondor processes"):
+        await runner.recover_job(job, force=True)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.force_recovering(),
+        update_time=lock_time, recovery_cooldown=datetime.timedelta(minutes=10),
+    )
+    mongo.recover_subjobs.assert_called_once_with("jid", [0, 1], lock_time, reset_time)
+    condor.release_job.assert_called_once_with(123)
+    mongo.recover_job.assert_not_called()
+
+
+async def test_recover_job_force_held_lock_fails():
+    """
+    Force held: lock acquisition fails (job not in RECOVERING or cooldown not yet expired);
+    exception propagates; no subjob resets or HTC calls are made.
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.RECOVERING)
+    condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
+    updates.update_job_state.side_effect = InvalidJobStateError("cooldown not expired")
+
+    with pytest.raises(InvalidJobStateError, match="cooldown not expired"):
+        await runner.recover_job(job, force=True)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.force_recovering(),
+        update_time=_T, recovery_cooldown=datetime.timedelta(minutes=10),
+    )
+    mongo.recover_subjobs.assert_not_called()
+    condor.release_job.assert_not_called()
+    mongo.recover_job.assert_not_called()
