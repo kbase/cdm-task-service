@@ -28,6 +28,7 @@ from cdmtaskservice.exceptions import (
     UnauthorizedError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
+    JobRecoveryError,
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
@@ -518,8 +519,8 @@ class KBaseRunner(JobFlow):
             await self._cancel_job(job)
             return
         cluster_id = self._get_cluster_id_or_raise(job)
-        held_nums, running_nums = await self._get_held_and_running(cluster_id)
-        if not held_nums and not running_nums:
+        held_procs, running_procs = await self._get_held_and_running(cluster_id)
+        if not held_procs and not running_procs:
             if job.state == models.JobState.ERROR:
                 await self._acquire_recovery_lock(job)
                 await self._mongo.recover_job(job.id, self._timestamp_fn(), self._trans_id_fn())
@@ -531,19 +532,44 @@ class KBaseRunner(JobFlow):
             else:
                 await self._advance_job_to_complete(job)
             return
-        if not held_nums:
+        if not held_procs:
             raise InvalidJobStateError("No held containers to recover")
-        # TODO CHUNK_C: acquire lock and do recovery if held_nums
+        lock_time = await self._acquire_recovery_lock(job)
+        await self._do_recovery(job, held_procs, lock_time)
+
+    async def _do_recovery(
+        self,
+        job: models.AdminJobDetails,
+        held_procs: list[int],
+        lock_time: datetime.datetime,
+    ):
+        reset_time = self._timestamp_fn()
+        await self._mongo.recover_subjobs(job.id, held_procs, lock_time, reset_time)
+        try:
+            await self._condor.release_job(job.htcondor_details.cluster_id[-1])
+        except Exception as e:
+            raise JobRecoveryError(
+                f"Failed to release held HTCondor processes for job {job.id}. "
+                "The job is stuck in RECOVERING state. Fix the HTCondor issue and "
+                "use force recovery to retry."
+            ) from e
+        # It's theoretically possible that all the containers could transition to
+        # JOB_SUBMITTING and therefore trigger a main job transition, which will fail, prior
+        # to this update being applied to the DB. That seems impossible in practice
+        # so we don't worry about it. If it starts occurring, could have the remote job wait
+        # for the main job to transition to DOWNLOAD_SUBMITTED before submitting its
+        # state transition request.
+        await self._mongo.recover_job(job.id, reset_time, self._trans_id_fn())
 
     async def _force_recover(self, job: models.AdminJobDetails):
         cluster_id = self._get_cluster_id_or_raise(job)
-        held_nums, running_nums = await self._get_held_and_running(cluster_id)
-        if running_nums:
+        held_procs, running_procs = await self._get_held_and_running(cluster_id)
+        if running_procs:
             raise InvalidJobStateError(
                 "Cannot force recover while containers are running. All containers must be "
                 "held or complete before forcing recovery."
             )
-        # TODO CHUNK_D: handle all-complete case (not held_nums)
+        # TODO CHUNK_D: handle all-complete case (not held_procs)
         # TODO CHUNK_E: handle held containers
 
     async def recover_job(self, job: models.AdminJobDetails, force: bool = False):
