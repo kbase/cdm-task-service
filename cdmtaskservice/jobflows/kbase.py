@@ -438,18 +438,17 @@ class KBaseRunner(JobFlow):
         """
         pass # Intentionally do nothing
 
-    def _get_cluster_id_or_raise(self, job: models.AdminJobDetails) -> int:
+    async def _get_held_and_running(
+        self, job: models.AdminJobDetails
+    ) -> tuple[list[int], list[int]]:
         if not job.htcondor_details or not job.htcondor_details.cluster_id:
             raise InvalidJobStateError(
                 "Job has no HTCondor cluster ID. If the job was just submitted, retry in a "
                 "moment. If submission failed, create a new job rather than recovering."
             )
-        return job.htcondor_details.cluster_id[-1]
-
-    async def _get_held_and_running(
-        self, cluster_id: int
-    ) -> tuple[list[int], list[int]]:
-        proc_states = await self._condor.get_cluster_proc_states(cluster_id)
+        proc_states = await self._condor.get_cluster_proc_states(
+            job.htcondor_details.cluster_id[-1]
+        )
         if ProcState.OTHER in set(proc_states):
             raise InvalidJobStateError(
                 "HTCondor cluster contains processes in an unexpected state (Removed or "
@@ -518,8 +517,7 @@ class KBaseRunner(JobFlow):
         if job.state == models.JobState.CANCELING:
             await self._cancel_job(job)
             return
-        cluster_id = self._get_cluster_id_or_raise(job)
-        held_procs, running_procs = await self._get_held_and_running(cluster_id)
+        held_procs, running_procs = await self._get_held_and_running(job)
         if not held_procs and not running_procs:
             if job.state == models.JobState.ERROR:
                 await self._acquire_recovery_lock(job)
@@ -562,8 +560,7 @@ class KBaseRunner(JobFlow):
         await self._mongo.recover_job(job.id, reset_time, self._trans_id_fn())
 
     async def _force_recover(self, job: models.AdminJobDetails):
-        cluster_id = self._get_cluster_id_or_raise(job)
-        held_procs, running_procs = await self._get_held_and_running(cluster_id)
+        held_procs, running_procs = await self._get_held_and_running(job)
         if running_procs:
             raise InvalidJobStateError(
                 "Cannot force recover while containers are running. All containers must be "
