@@ -460,7 +460,9 @@ def error(
     return JobUpdate(
         )._set_new_state(models.JobState.ERROR
         )._set_disallowed_current_states(
-            models.JobState.terminal_states() | {models.JobState.RECOVERING}
+            models.JobState.terminal_states()
+            | models.JobState.canceling_states()
+            | {models.JobState.RECOVERING}
         )._set_fields(flds)
 
 

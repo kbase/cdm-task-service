@@ -24,8 +24,8 @@ flowchart TD
     EPSIng --> EPSd[ERROR_PROCESSING_SUBMITTED]
     EPSd   --> ERROR[ERROR]
 
-    %% Representative: any non-terminal state can reach ERROR directly
-    JSIng -.->|"any non-terminal, non-RECOVERING"| ERROR
+    %% Representative: any non-terminal state can reach ERROR directly (not CANCELING)
+    JSIng -.->|"any non-terminal, non-RECOVERING, non-canceling"| ERROR
 
     %% ── Cancel path ─────────────────────────────────────────────────
     %% Representative: any non-terminal, non-RECOVERING state can cancel

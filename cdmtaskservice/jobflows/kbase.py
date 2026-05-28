@@ -402,23 +402,19 @@ class KBaseRunner(JobFlow):
         
     async def _cancel_job(self, job: models.AdminJobDetails):
         _not_falsy(job, "job")
-        try:
-            # refresh the job state in case it changed after passing it to the cancel_job method
-            job = await self._mongo.get_job(job.id, as_admin=True)
-            cpu_hours = None
-            cpu_factor = None
-            max_mem = None
-            if job.htcondor_details and job.htcondor_details.cluster_id:
-                # assume there's only one job in the list for now
-                await self._condor.cancel_job(job.htcondor_details.cluster_id[-1])
-                cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
-            await self._updates.update_job_state(job.id, update_state.canceled(
-                cpu_hours=cpu_hours,
-                cpu_factor=cpu_factor,
-                max_memory=max_mem
-            ))
-        except Exception as e:
-            await self._updates.handle_exception(e, job.id, "canceling")
+        # Refresh: in the normal path this coroutine is spawned asynchronously and state
+        # may have changed; in the recovery path the job is up-to-date but re-fetching is harmless.
+        job = await self._mongo.get_job(job.id, as_admin=True)
+        cpu_hours = cpu_factor = max_mem = None
+        if job.htcondor_details and job.htcondor_details.cluster_id:
+            # assume there's only one job in the list for now
+            await self._condor.cancel_job(job.htcondor_details.cluster_id[-1])
+            cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
+        await self._updates.update_job_state(job.id, update_state.canceled(
+            cpu_hours=cpu_hours,
+            cpu_factor=cpu_factor,
+            max_memory=max_mem
+        ))
 
     async def _get_condor_stats(self, job: models.AdminJobDetails) -> tuple[float, float, int]:
         attempts = 0
@@ -471,10 +467,8 @@ class KBaseRunner(JobFlow):
             raise InvalidJobStateError(
                 "Job is already being recovered. If recovery is stuck, use force recovery."
             )
-        if job.state.is_canceling():
-            raise InvalidJobStateError(
-                f"Job is in cancel state {job.state.value} and cannot be recovered."
-        )
+        if job.state == js.CANCELED:
+            raise InvalidJobStateError("Job has already been canceled.")
 
     async def _advance_job_to_complete(
         self,
@@ -509,6 +503,9 @@ class KBaseRunner(JobFlow):
 
     async def _standard_recover(self, job: models.AdminJobDetails):
         self._check_standard_recoverable(job)
+        if job.state == models.JobState.CANCELING:
+            await self._cancel_job(job)
+            return
         cluster_id = self._get_cluster_id_or_raise(job)
         held_nums, running_nums = await self._get_held_and_running(cluster_id)
         if not held_nums and not running_nums:
