@@ -501,6 +501,17 @@ class KBaseRunner(JobFlow):
                     update_time=update_time
                 )
 
+    async def _acquire_recovery_lock(
+        self, job: models.AdminJobDetails, force: bool = False
+    ) -> datetime.datetime:
+        now = self._timestamp_fn()
+        update = update_state.force_recovering() if force else update_state.recovering()
+        cooldown = _RECOVERY_COOLDOWN if force else datetime.timedelta(0)
+        await self._updates.update_job_state(
+            job.id, update, update_time=now, recovery_cooldown=cooldown
+        )
+        return now
+
     async def _standard_recover(self, job: models.AdminJobDetails):
         self._check_standard_recoverable(job)
         if job.state == models.JobState.CANCELING:
@@ -509,7 +520,16 @@ class KBaseRunner(JobFlow):
         cluster_id = self._get_cluster_id_or_raise(job)
         held_nums, running_nums = await self._get_held_and_running(cluster_id)
         if not held_nums and not running_nums:
-            await self._advance_job_to_complete(job)
+            if job.state == models.JobState.ERROR:
+                await self._acquire_recovery_lock(job)
+                await self._mongo.recover_job(job.id, self._timestamp_fn(), self._trans_id_fn())
+                # use_subjob_times=False: subjob timestamps predate the RECOVERING
+                # transition; reusing them would make transition_times go backwards.
+                await self._advance_job_to_complete(
+                    job, from_state=models.JobState.DOWNLOAD_SUBMITTED, use_subjob_times=False
+                )
+            else:
+                await self._advance_job_to_complete(job)
             return
         if not held_nums:
             raise InvalidJobStateError("No held containers to recover")
