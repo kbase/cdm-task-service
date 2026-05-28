@@ -419,15 +419,13 @@ class NERSCJAWSRunner(JobFlow):
         
     async def _cancel_job(self, job: models.AdminJobDetails):
         _not_falsy(job, "job")
-        try:
-            # refresh state as it might have changed since it was passed to the cancel_job method
-            job = await self._mongo.get_job(job.id, as_admin=True)
-            if job.jaws_details and job.jaws_details.run_id:
-                # assume only 1 run ID for now.
-                await self._jaws.cancel(job.jaws_details.run_id[-1]) 
-            await self._updates.update_job_state(job.id, canceled())
-        except Exception as e:
-            await self._updates.handle_exception(e, job.id, "canceling")
+        # Refresh: state may have changed since cancel_job was called. Exceptions propagate so
+        # the job stays in CANCELING rather than landing in ERROR via handle_exception.
+        job = await self._mongo.get_job(job.id, as_admin=True)
+        if job.jaws_details and job.jaws_details.run_id:
+            # assume only 1 run ID for now.
+            await self._jaws.cancel(job.jaws_details.run_id[-1])
+        await self._updates.update_job_state(job.id, canceled())
 
     async def error_log_upload_complete(self, job: models.AdminJobDetails):
         """

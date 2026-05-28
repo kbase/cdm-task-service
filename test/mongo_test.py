@@ -409,16 +409,19 @@ async def test_update_job_and_subjob_fail_update_to_error(mondb):
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
     tid = "1"
     
-    for state in models.JobState.terminal_states():
+    disallowed_str = "['canceled', 'canceling', 'complete', 'error', 'recovering']"
+    for state in (
+        models.JobState.terminal_states() | 
+        models.JobState.canceling_states() |
+        {models.JobState.RECOVERING}
+    ):
         await mondb.jobs.update_one({}, {"$set": {"state": state.value}})
         await mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
         await fail_update_job(mc, "foo", u, dt, tid, NoSuchJobError(
-            "No job with ID 'foo' not in states "
-            + "['canceled', 'complete', 'error', 'recovering'] exists"
+            f"No job with ID 'foo' not in states {disallowed_str} exists"
         ))
         await fail_update_subjob(mc, "bar", 0, u, dt, NoSuchSubJobError(
-            "No job with ID 'bar' and subjob ID 0 not in states "
-            + "['canceled', 'complete', 'error', 'recovering'] exists"
+            f"No job with ID 'bar' and subjob ID 0 not in states {disallowed_str} exists"
         ))
 
 

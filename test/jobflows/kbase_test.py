@@ -590,19 +590,78 @@ async def test_recover_job_standard_recovering_state():
     updates.update_job_state.assert_not_called()
 
 
-@pytest.mark.parametrize("cancel_state", list(models.JobState.canceling_states()))
-async def test_recover_job_standard_canceling_state(cancel_state):
+async def test_recover_job_standard_canceled_state():
     runner, _, condor, updates, _ = _make_runner()
-    job = _recovery_job(state=cancel_state)
+    job = _recovery_job(state=models.JobState.CANCELED)
 
-    with pytest.raises(
-        InvalidJobStateError,
-        match=f"^Job is in cancel state {cancel_state.value} and cannot be recovered\\.$",
-    ):
+    with pytest.raises(InvalidJobStateError, match="^Job has already been canceled\\.$"):
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_not_called()
     updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_standard_canceling_with_cluster_id():
+    """CANCELING: refreshed job has a cluster ID → full cancel flow runs."""
+    runner, mongo, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.CANCELING)
+    refreshed_job = _recovery_job(state=models.JobState.CANCELING)
+    mongo.get_job.return_value = refreshed_job
+    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.recover_job(job)
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.cancel_job.assert_called_once_with(123)
+    condor.get_cluster_classads.assert_called_once_with(123)
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.canceled(cpu_hours=_CPU_HOURS, cpu_factor=_CPU_FACTOR, max_memory=_MAX_MEM),
+    )
+
+
+@pytest.mark.parametrize("cluster_ids", [
+    pytest.param(None, id="no_htcondor_details"),
+    pytest.param([], id="empty_cluster_id"),
+])
+async def test_recover_job_standard_canceling_no_cluster_id(cluster_ids):
+    """
+    CANCELING: refreshed job has no cluster ID (either no htcondor_details or empty cluster_id
+    list) → condor skipped, CANCELED written with no stats.
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.CANCELING)
+    refreshed_job = _recovery_job(state=models.JobState.CANCELING, cluster_ids=cluster_ids)
+    mongo.get_job.return_value = refreshed_job
+
+    await runner.recover_job(job)
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.cancel_job.assert_not_called()
+    condor.get_cluster_classads.assert_not_called()
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.canceled(cpu_hours=None, cpu_factor=None, max_memory=None),
+    )
+
+
+async def test_recover_job_standard_canceling_error_propagates():
+    """CANCELING: a transient error in _cancel_job propagates; job stays in CANCELING."""
+    runner, mongo, _, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.CANCELING)
+    refreshed_job = _recovery_job(state=models.JobState.CANCELING, cluster_ids=None)
+    mongo.get_job.return_value = refreshed_job
+    updates.update_job_state.side_effect = IOError("mongo unavailable")
+
+    with pytest.raises(IOError, match="mongo unavailable"):
+        await runner.recover_job(job)
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.canceled(cpu_hours=None, cpu_factor=None, max_memory=None),
+    )
 
 
 async def test_recover_job_force_running_containers():
