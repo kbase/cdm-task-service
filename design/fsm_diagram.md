@@ -25,7 +25,7 @@ flowchart TD
     EPSd   --> ERROR[ERROR]
 
     %% Representative: any non-terminal state can reach ERROR directly (not CANCELING)
-    JSIng -.->|"any non-terminal, non-RECOVERING, non-canceling"| ERROR
+    JSIng -.->|"any non-terminal, non-canceling, non-RECOVERING"| ERROR
 
     %% ── Cancel path ─────────────────────────────────────────────────
     %% Representative: any non-terminal, non-RECOVERING state can cancel
@@ -34,7 +34,7 @@ flowchart TD
 
     %% ── Recovery ────────────────────────────────────────────────────
     %% Representative: any except COMPLETE, RECOVERING, and cancel states
-    DS -.->|"any except COMPLETE, RECOVERING, canceling"| RECOVERING[RECOVERING]
+    DS -.->|"any non-canceling, non-COMPLETE, non-RECOVERING"| RECOVERING[RECOVERING]
     RECOVERING -->|"force (10 min cooldown)"| RECOVERING
     RECOVERING -.->|reset| DS
 
