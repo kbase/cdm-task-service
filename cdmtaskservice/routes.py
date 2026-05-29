@@ -854,6 +854,42 @@ async def cancel_job_admin(
     await flow.cancel_job(job)
 
 
+@ROUTER_ADMIN.put(
+    "/jobs/{job_id}/recover",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Recover a failed job",
+    description="Recover a stuck or failed job.\n\n"
+        + "**Standard recovery** (`force=false`, the default) inspects the job's current state "
+        + "and attempts to advance the job to COMPLETE:\n"
+        + "- A job stuck in CANCELING will have its cancel retried.\n"
+        + "- A job with no failed or running containers will be advanced directly to COMPLETE.\n"
+        + "- A job with failed containers will have them restarted and the job reset to "
+        + "DOWNLOAD_SUBMITTED for re-execution.\n"
+        + "- A job with running containers only (no failed) raises an error — wait for containers "
+        + "to finish or fail first.\n\n"
+        + "**Force recovery** (`force=true`) requires the job to be in RECOVERING state and "
+        + "the previous recovery attempt to be at least 10 minutes old. Use force recovery when "
+        + "standard recovery left the job stuck in RECOVERING (e.g. after an container restart "
+        + "failure). Force recovery will re-attempt the restart of failed containers, or advance "
+        + "the job to COMPLETE if all containers have already finished.\n\n"
+)
+async def recover_job_admin(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    force: Annotated[bool, Query(
+        description="If true, force recovery. The job must be in RECOVERING state and the "
+            + "previous recovery attempt must be at least 10 minutes old."
+    )] = False,
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can recover jobs.")
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    await flow.recover_job(job, force=force)
+
+
 class UpdateAdminMeta(BaseModel):
     """ A specification for how to alter a job's administrative metadata. """
     
