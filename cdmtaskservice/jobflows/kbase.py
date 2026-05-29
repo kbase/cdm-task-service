@@ -443,7 +443,8 @@ class KBaseRunner(JobFlow):
     ) -> tuple[list[int], list[int]]:
         if not job.htcondor_details or not job.htcondor_details.cluster_id:
             raise InvalidJobStateError(
-                "Job has no HTCondor cluster ID. If the job was just submitted, retry in a "
+                "Job has no submission record for the external processor. "
+                "If the job was just submitted, retry in a "
                 "moment. If submission failed, create a new job rather than recovering."
             )
         proc_states = await self._condor.get_cluster_proc_states(
@@ -451,8 +452,8 @@ class KBaseRunner(JobFlow):
         )
         if ProcState.OTHER in set(proc_states):
             raise InvalidJobStateError(
-                "HTCondor cluster contains processes in an unexpected state (Removed or "
-                "Suspended). Investigate the HTCondor cluster before retrying recovery."
+                "External processor contains processes in an unexpected state. Unable to recover "
+                "job."
             )
         held = [i for i, s in enumerate(proc_states) if s == ProcState.HELD]
         running = [i for i, s in enumerate(proc_states) if s == ProcState.RUNNING]
@@ -524,9 +525,8 @@ class KBaseRunner(JobFlow):
             await self._condor.release_job(job.htcondor_details.cluster_id[-1])
         except Exception as e:
             raise JobRecoveryError(
-                f"Failed to release held HTCondor processes for job {job.id}. "
-                "The job is stuck in RECOVERING state. Fix the HTCondor issue and "
-                "use force recovery to retry."
+                f"Failed to restart processes for job {job.id}. The job is stuck in the "
+                "recovering state. Use force recovery to retry."
             ) from e
         # It's theoretically possible that all the containers could transition to
         # JOB_SUBMITTING and therefore trigger a main job transition, which will fail, prior
