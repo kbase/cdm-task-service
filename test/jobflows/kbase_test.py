@@ -529,7 +529,7 @@ async def test_recover_job_no_cluster_id(force, cluster_ids):
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(cluster_ids=cluster_ids)
 
-    with pytest.raises(InvalidJobStateError, match="Job has no HTCondor cluster ID"):
+    with pytest.raises(InvalidJobStateError, match="Job has no submission record for the external processor"):
         await runner.recover_job(job, force=force)
 
     condor.get_cluster_proc_states.assert_not_called()
@@ -544,7 +544,7 @@ async def test_recover_job_other_proc_state(force):
 
     with pytest.raises(
         InvalidJobStateError,
-        match="HTCondor cluster contains processes in an unexpected state",
+        match="External processor contains processes in an unexpected state",
     ):
         await runner.recover_job(job, force=force)
 
@@ -1026,7 +1026,7 @@ async def test_recover_job_standard_held_release_fails():
     condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
     condor.release_job.side_effect = IOError("condor unavailable")
 
-    with pytest.raises(JobRecoveryError, match="Failed to release held HTCondor processes"):
+    with pytest.raises(JobRecoveryError, match="Failed to restart processes for job .* Use force recovery to retry"):
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123)
@@ -1234,7 +1234,7 @@ async def test_recover_job_force_held_release_fails():
     condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
     condor.release_job.side_effect = IOError("condor unavailable")
 
-    with pytest.raises(JobRecoveryError, match="Failed to release held HTCondor processes"):
+    with pytest.raises(JobRecoveryError, match="Failed to restart processes for job .* Use force recovery to retry"):
         await runner.recover_job(job, force=True)
 
     condor.get_cluster_proc_states.assert_called_once_with(123)
