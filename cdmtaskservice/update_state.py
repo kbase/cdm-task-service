@@ -52,6 +52,9 @@ class UpdateField(StrEnum):
     
     EXIT_CODE = auto()
     """ The exit code of the job container / subjob. """
+
+    RUNTIME = auto()
+    """ The wall-clock runtime of a container in seconds. """
     
     USER_ERROR = auto()
     """ Error information about a process targeted at a user. """
@@ -235,15 +238,28 @@ def submitting_upload(cpu_hours: float = None) -> JobUpdate:
     )
 
 
-def submitting_upload_with_exit_code(exit_code: int) -> JobUpdate:
+def submitting_upload_with_exit_code(
+    exit_code: int,
+    *,
+    cpu_hours: float | None = None,
+    max_memory: int | None = None,
+    runtime_seconds: float | None = None,
+) -> JobUpdate:
     """
-    Update a container's state from job submitted to upload submitting and set the
-    exit code.
+    Update a container's state from job submitted to upload submitting and set the exit code,
+    and optionally cpu hours, max memory, and runtime.
     """
+    flds = {UpdateField.EXIT_CODE: _check_num(exit_code, "exit_code", minimum=0)}
+    if cpu_hours is not None:
+        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
+    if max_memory is not None:
+        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
+    if runtime_seconds is not None:
+        flds[UpdateField.RUNTIME] = _check_num(runtime_seconds, "runtime_seconds", minimum=0)
     return JobUpdate(
         )._set_current_state(models.JobState.JOB_SUBMITTED
         )._set_new_state(models.JobState.UPLOAD_SUBMITTING
-        )._set_fields({UpdateField.EXIT_CODE: _check_num(exit_code, "exit_code", minimum=0)}
+        )._set_fields(flds
     )
 
 
@@ -387,15 +403,28 @@ def submitting_error_processing(cpu_hours: float | None = None) -> JobUpdate:
     )
 
 
-def submitting_error_processing_with_exit_code(exit_code: int) -> JobUpdate:
+def submitting_error_processing_with_exit_code(
+    exit_code: int,
+    *,
+    cpu_hours: float | None = None,
+    max_memory: int | None = None,
+    runtime_seconds: float | None = None,
+) -> JobUpdate:
     """
     Update a container's state from job submitted to error processing submitting and set the
-    exit code.
+    exit code, and optionally cpu hours, max memory, and runtime.
     """
+    flds = {UpdateField.EXIT_CODE: _check_num(exit_code, "exit_code", minimum=0)}
+    if cpu_hours is not None:
+        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
+    if max_memory is not None:
+        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
+    if runtime_seconds is not None:
+        flds[UpdateField.RUNTIME] = _check_num(runtime_seconds, "runtime_seconds", minimum=0)
     return JobUpdate(
         )._set_current_state(models.JobState.JOB_SUBMITTED
         )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTING
-        )._set_fields({UpdateField.EXIT_CODE: _check_num(exit_code, "exit_code", minimum=0)}
+        )._set_fields(flds
     )
 
 

@@ -65,6 +65,7 @@ FLD_JOB_LOGPATH = "logpath"
 FLD_SUBJOB_ID = "sub_id"
 FLD_SUBJOB_EXIT_CODE = "exit_code"
 FLD_SUBJOB_EXIT_CODE_HISTORY = "exit_code_history"
+FLD_SUBJOB_RUNTIME = "runtime_seconds"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
@@ -917,6 +918,18 @@ class SubJob(_JobBase):
             + "Populated when the subjob is reset during job recovery."
     )] = None
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
+    cpu_hours: Annotated[float | None, Field(
+        examples=[1.5],
+        description="The total CPU hours used by the container, if available."
+    )] = None
+    max_memory: Annotated[int | None, Field(
+        examples=[1032000000],
+        description="The maximum memory in bytes used by the container, if available."
+    )] = None
+    runtime_seconds: Annotated[float | None, Field(
+        examples=[42.3],
+        description="The wall-clock runtime of the container in seconds, if available."
+    )] = None
 
 
 class JobStatus(_JobBase):
@@ -1139,6 +1152,21 @@ class ContainerUpdate(BaseModel):
     )] = None
     traceback: Annotated[str | None, Field(
         description="The error's traceback. Ignored if the new state isn't the error state."
+    )] = None
+    cpu_hours: Annotated[float | None, Field(
+        examples=[1.5],
+        description="The total CPU hours used by the container. Ignored if the new state isn't "
+            + "error processing submitting or upload submitting."
+    )] = None
+    max_memory_bytes: Annotated[int | None, Field(
+        examples=[1032000000],
+        description="The maximum memory in bytes used by the container. Ignored if the new state "
+            + "isn't error processing submitting or upload submitting."
+    )] = None
+    runtime_seconds: Annotated[float | None, Field(
+        examples=[42.3],
+        description="The wall-clock runtime of the container in seconds. Ignored if the new "
+            + "state isn't error processing submitting or upload submitting."
     )] = None
 
 
