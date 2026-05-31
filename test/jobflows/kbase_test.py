@@ -375,7 +375,7 @@ async def test_update_container_state_terminal_complete():
             cpu_factor=_CPU_FACTOR,
             max_memory=_MAX_MEM,
         ),
-        update_time=None,
+        update_time=_T,
     )
 
 
