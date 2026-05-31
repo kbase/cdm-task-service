@@ -90,6 +90,53 @@ class KBaseRunner(JobFlow):
         self._timestamp_fn = _timestamp_fn
         self._trans_id_fn = _trans_id_fn
         self._logr = logging.getLogger(__name__)
+        self._setup_subjob_handlers()
+        
+    def _setup_subjob_handlers(self):
+        # the cancel states are deliberately not included. Subjobs should not transition to
+        # canceling, only the main job
+        self._subjob_state_update_fns = {
+            models.JobState.JOB_SUBMITTING: lambda _: update_state.submitting_job(),
+            models.JobState.JOB_SUBMITTED: lambda _: update_state.submitted_job(),
+            models.JobState.UPLOAD_SUBMITTING: lambda update:
+                update_state.submitting_upload_with_exit_code(
+                    update.exit_code, cpu_hours=update.cpu_hours,
+                    max_memory=update.max_memory_bytes, runtime_seconds=update.runtime_seconds,
+                ),
+            models.JobState.UPLOAD_SUBMITTED: lambda _: update_state.submitted_upload(),
+            models.JobState.ERROR_PROCESSING_SUBMITTING: lambda update:
+                update_state.submitting_error_processing_with_exit_code(
+                    update.exit_code, cpu_hours=update.cpu_hours,
+                    max_memory=update.max_memory_bytes, runtime_seconds=update.runtime_seconds,
+                ),
+            models.JobState.ERROR_PROCESSING_SUBMITTED: lambda _:
+                update_state.submitted_error_processing(),
+            models.JobState.COMPLETE: lambda update: update_state.complete(update.outputs),
+            models.JobState.ERROR: lambda update: update_state.error(
+                update.admin_error, traceback=update.traceback
+            ),
+        }
+        # Handlers for parent job updates when all sujobs have reached a state 
+        self._job_state_update_fns = {
+            models.JobState.JOB_SUBMITTING: lambda job, t: self._updates.update_job_state(
+                job.id, update_state.submitting_job(), update_time=t
+            ),
+            models.JobState.JOB_SUBMITTED: lambda job, t: self._updates.update_job_state(
+                job.id, update_state.submitted_job(), update_time=t
+            ),
+            models.JobState.UPLOAD_SUBMITTING: self._submitting_upload_handler,
+            models.JobState.UPLOAD_SUBMITTED: lambda job, t: self._updates.update_job_state(
+                job.id, update_state.submitted_upload(), update_time=t
+            ),
+            models.JobState.ERROR_PROCESSING_SUBMITTING:
+                self._submitting_error_processing_handler,
+            models.JobState.ERROR_PROCESSING_SUBMITTED: lambda job, t:
+                self._updates.update_job_state(
+                    job.id, update_state.submitted_error_processing(), update_time=t
+                ),
+            models.JobState.COMPLETE: lambda job, t: self._complete_job(job, update_time=t),
+            models.JobState.ERROR: lambda job, t: self._error_job(job),
+        }
 
     async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
         """
@@ -240,40 +287,6 @@ class KBaseRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
-    _COMMON_STATE_TO_UPDATE_FUNC = {
-        models.JobState.JOB_SUBMITTING: lambda _: update_state.submitting_job(),
-        models.JobState.JOB_SUBMITTED: lambda _: update_state.submitted_job(),
-        models.JobState.UPLOAD_SUBMITTED: lambda _: update_state.submitted_upload(),
-        models.JobState.ERROR_PROCESSING_SUBMITTED: lambda _:
-            update_state.submitted_error_processing(),
-    }
-    
-    # the cancel states are deliberately not included. Subjobs should not transition to
-    # canceling, only the main job
-    _SUBJOB_STATE_TO_UPDATE_FUNC = {
-        **_COMMON_STATE_TO_UPDATE_FUNC,
-        models.JobState.UPLOAD_SUBMITTING: lambda update:
-            update_state.submitting_upload_with_exit_code(
-                update.exit_code, cpu_hours=update.cpu_hours, max_memory=update.max_memory_bytes,
-                runtime_seconds=update.runtime_seconds,
-            ),
-        models.JobState.COMPLETE: lambda update: update_state.complete(update.outputs),
-        models.JobState.ERROR_PROCESSING_SUBMITTING: lambda update:
-            update_state.submitting_error_processing_with_exit_code(
-                update.exit_code, cpu_hours=update.cpu_hours, max_memory=update.max_memory_bytes,
-                runtime_seconds=update.runtime_seconds,
-            ),
-        models.JobState.ERROR: lambda update: update_state.error(
-            update.admin_error, traceback=update.traceback
-        ),
-    }
-    
-    _JOB_STATE_TO_UPDATE_FUNC = {
-        **_COMMON_STATE_TO_UPDATE_FUNC,
-        models.JobState.UPLOAD_SUBMITTING: lambda _: update_state.submitting_upload(),
-        models.JobState.ERROR_PROCESSING_SUBMITTING: lambda _:
-            update_state.submitting_error_processing()
-    }
     
     async def update_container_state(
         self,
@@ -294,11 +307,11 @@ class KBaseRunner(JobFlow):
         _check_num(container_num, "container_num", minimum=0)
         _not_falsy(new_state, "new_state")
         _not_falsy(update, "update")
-        if new_state not in self._SUBJOB_STATE_TO_UPDATE_FUNC:
+        if new_state not in self._subjob_state_update_fns:
             raise UnsupportedOperationError(
                 f"Cannot update a container to state {new_state.value}"
         )
-        mongo_update = self._SUBJOB_STATE_TO_UPDATE_FUNC[new_state](update)
+        mongo_update = self._subjob_state_update_fns[new_state](update)
         # Just throw the error, don't error out the job. If the caller thinks this is an error
         # they can try and set the error state.
         await self._mongo.update_subjob_state(job.id, container_num, mongo_update, update.time)
@@ -318,21 +331,25 @@ class KBaseRunner(JobFlow):
             parent_update = await self._updates.get_parent_job_update(job, new_state)
             if not parent_update:
                 return
-            if parent_update.state.is_terminal():
-                if parent_update.state == models.JobState.ERROR:
-                    await self._error_job(job)
-                else:
-                    await self._complete_job(job)
-            else:
-                # May not be the same update func as the subjob
-                mongo_update = self._JOB_STATE_TO_UPDATE_FUNC[parent_update.state](update)
-                # If this fails all the containers have transitioned to an equivalent state and
-                # so the job is stuck, so we error out if possible.
-                await self._updates.update_job_state(
-                    job.id, mongo_update, update_time=parent_update.time
-                )
+            # If this fails all the containers have transitioned to an equivalent state and
+            # so the job is stuck, so we error out if possible.
+            await self._job_state_update_fns[parent_update.state](job, parent_update.time)
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "updating job state")
+
+    async def _submitting_upload_handler(
+        self, job: models.AdminJobDetails, update_time: datetime.datetime
+    ):
+        await self._updates.update_job_state(
+            job.id, update_state.submitting_upload(), update_time=update_time
+        )
+
+    async def _submitting_error_processing_handler(
+        self, job: models.AdminJobDetails, update_time: datetime.datetime
+    ):
+        await self._updates.update_job_state(
+            job.id, update_state.submitting_error_processing(), update_time=update_time
+        )
 
     async def _error_job(self, job: models.AdminJobDetails):
         cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
@@ -500,13 +517,7 @@ class KBaseRunner(JobFlow):
                 update_time = parent_update.time
             else:
                 update_time = self._timestamp_fn()
-            if state == models.JobState.COMPLETE:
-                await self._complete_job(job, update_time=update_time)
-            else:
-                await self._updates.update_job_state(
-                    job.id, self._JOB_STATE_TO_UPDATE_FUNC[state](None),
-                    update_time=update_time
-                )
+            await self._job_state_update_fns[state](job, update_time)
 
     async def _acquire_recovery_lock(
         self, job: models.AdminJobDetails, force: bool = False
