@@ -67,9 +67,17 @@ def _recovery_job(state=models.JobState.ERROR, cluster_ids=_UNSET):
 _JOB = _job()
 
 
-def _update(admin_error=None, exit_code=None, outputs=None, traceback=None):
+def _update(admin_error=None, exit_code=None, outputs=None, traceback=None,
+            cpu_hours=None, max_memory_bytes=None, runtime_seconds=None):
     return models.ContainerUpdate(
-        time=_T, admin_error=admin_error, exit_code=exit_code, outputs=outputs, traceback=traceback
+        time=_T,
+        admin_error=admin_error,
+        exit_code=exit_code,
+        outputs=outputs,
+        traceback=traceback,
+        cpu_hours=cpu_hours,
+        max_memory_bytes=max_memory_bytes,
+        runtime_seconds=runtime_seconds,
     )
 
 
@@ -182,6 +190,31 @@ async def test_update_container_state_upload_submitting():
     )
 
 
+async def test_update_container_state_upload_submitting_with_stats():
+    """UPLOAD_SUBMITTING with stats - all written to subjob."""
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.UPLOAD_SUBMITTING, _T
+    )
+
+    await runner.update_container_state(
+        _JOB, 0, models.JobState.UPLOAD_SUBMITTING,
+        _update(exit_code=0, cpu_hours=1.5, max_memory_bytes=1024, runtime_seconds=42.3),
+    )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0,
+        update_state.submitting_upload_with_exit_code(
+            0, cpu_hours=1.5, max_memory=1024, runtime_seconds=42.3
+        ),
+        _T,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.UPLOAD_SUBMITTING)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_upload(), update_time=_T
+    )
+
+
 async def test_update_container_state_upload_submitted():
     """All subjobs at UPLOAD_SUBMITTED - parent job should transition with submitted_upload."""
     runner, mongo, _, updates, _ = _make_runner()
@@ -213,6 +246,33 @@ async def test_update_container_state_error_processing_submitting():
 
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0, update_state.submitting_error_processing_with_exit_code(1), _T
+    )
+    updates.get_parent_job_update.assert_called_once_with(
+        _JOB, models.JobState.ERROR_PROCESSING_SUBMITTING
+    )
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_error_processing(), update_time=_T
+    )
+
+
+async def test_update_container_state_error_processing_submitting_with_stats():
+    """ERROR_PROCESSING_SUBMITTING with stats - all written to subjob."""
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.ERROR_PROCESSING_SUBMITTING, _T
+    )
+
+    await runner.update_container_state(
+        _JOB, 0, models.JobState.ERROR_PROCESSING_SUBMITTING,
+        _update(exit_code=1, cpu_hours=1.5, max_memory_bytes=1024, runtime_seconds=42.3),
+    )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0,
+        update_state.submitting_error_processing_with_exit_code(
+            1, cpu_hours=1.5, max_memory=1024, runtime_seconds=42.3
+        ),
+        _T,
     )
     updates.get_parent_job_update.assert_called_once_with(
         _JOB, models.JobState.ERROR_PROCESSING_SUBMITTING
@@ -529,7 +589,9 @@ async def test_recover_job_no_cluster_id(force, cluster_ids):
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(cluster_ids=cluster_ids)
 
-    with pytest.raises(InvalidJobStateError, match="Job has no submission record for the external processor"):
+    with pytest.raises(
+        InvalidJobStateError, match="Job has no submission record for the external processor"
+    ):
         await runner.recover_job(job, force=force)
 
     condor.get_cluster_proc_states.assert_not_called()
@@ -1026,7 +1088,10 @@ async def test_recover_job_standard_held_release_fails():
     condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
     condor.release_job.side_effect = IOError("condor unavailable")
 
-    with pytest.raises(JobRecoveryError, match="Failed to restart processes for job .* Use force recovery to retry"):
+    with pytest.raises(
+        JobRecoveryError,
+        match="Failed to restart processes for job .* Use force recovery to retry"
+    ):
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123)
@@ -1234,7 +1299,10 @@ async def test_recover_job_force_held_release_fails():
     condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
     condor.release_job.side_effect = IOError("condor unavailable")
 
-    with pytest.raises(JobRecoveryError, match="Failed to restart processes for job .* Use force recovery to retry"):
+    with pytest.raises(
+        JobRecoveryError,
+        match="Failed to restart processes for job .* Use force recovery to retry"
+    ):
         await runner.recover_job(job, force=True)
 
     condor.get_cluster_proc_states.assert_called_once_with(123)

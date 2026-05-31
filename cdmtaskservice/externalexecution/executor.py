@@ -75,9 +75,9 @@ class Executor:
             await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
             result = await self._run_container(job)  # updates to JOB_SUBMITTED
             if result.exit_code > 0:
-                await self._process_error_state(job, result.exit_code)
+                await self._process_error_state(job, result)
             else:
-                await self._process_complete_state(job)
+                await self._process_complete_state(job, result)
             return result.exit_code
         except Exception as e:
             self._logr.exception(f"Job failed: {e}")
@@ -125,6 +125,9 @@ class Executor:
         state: models.JobState,
         *,
         exit_code: int = None,
+        cpu_hours: float = None,
+        max_memory_bytes: int = None,
+        runtime_seconds: float = None,
         outputs: list[models.S3File] = None,
         admin_error: str = None,
         exception: Exception = None
@@ -140,6 +143,9 @@ class Executor:
                     job,
                     state,
                     exit_code=exit_code,
+                    cpu_hours=cpu_hours,
+                    max_memory_bytes=max_memory_bytes,
+                    runtime_seconds=runtime_seconds,
                     outputs=outputs,
                     admin_error=admin_error,
                     exception=exception
@@ -176,6 +182,9 @@ class Executor:
         *,
         outputs: list[models.S3File] = None,
         exit_code: int = None,
+        cpu_hours: float = None,
+        max_memory_bytes: int = None,
+        runtime_seconds: float = None,
         admin_error: str = None,
         exception: Exception = None
     ):
@@ -192,6 +201,12 @@ class Executor:
             data["admin_error"] = admin_error
         if exit_code is not None:
             data['exit_code'] = exit_code
+        if cpu_hours is not None:
+            data['cpu_hours'] = cpu_hours
+        if max_memory_bytes is not None:
+            data['max_memory_bytes'] = max_memory_bytes
+        if runtime_seconds is not None:
+            data['runtime_seconds'] = runtime_seconds
         if outputs:
             data["outputs"] = [o.model_dump() for o in outputs]
         async with self._sess.put(url, json=data) as resp:
@@ -282,9 +297,15 @@ Local relative path: {loc}
         )
         return result
 
-    async def _process_error_state(self, job: models.AdminJobDetails, exit_code: int):
+    async def _process_error_state(
+        self, job: models.AdminJobDetails, result: container_runner.ContainerResult
+    ):
         await self._update_job_state_loop(
-            job, models.JobState.ERROR_PROCESSING_SUBMITTING, exit_code=exit_code
+            job, models.JobState.ERROR_PROCESSING_SUBMITTING,
+            exit_code=result.exit_code,
+            cpu_hours=result.cpu_hours,
+            max_memory_bytes=result.max_memory_bytes,
+            runtime_seconds=result.runtime_seconds,
         )
         # Nothing to do prior to updating state again
         await self._update_job_state_loop(job, models.JobState.ERROR_PROCESSING_SUBMITTED)
@@ -303,12 +324,18 @@ Local relative path: {loc}
             [outcrc, errcrc]
         )
         await self._update_job_state_loop(
-            job, models.JobState.ERROR, admin_error=f"Container exit code: {exit_code}"
+            job, models.JobState.ERROR, admin_error=f"Container exit code: {result.exit_code}"
         )
-        
-    async def _process_complete_state(self, job: models.AdminJobDetails):
+
+    async def _process_complete_state(
+        self, job: models.AdminJobDetails, result: container_runner.ContainerResult
+    ):
         await self._update_job_state_loop(
-            job, models.JobState.UPLOAD_SUBMITTING, exit_code=0
+            job, models.JobState.UPLOAD_SUBMITTING,
+            exit_code=0,
+            cpu_hours=result.cpu_hours,
+            max_memory_bytes=result.max_memory_bytes,
+            runtime_seconds=result.runtime_seconds,
         )
         # Nothing to do prior to updating state again
         await self._update_job_state_loop(job, models.JobState.UPLOAD_SUBMITTED)

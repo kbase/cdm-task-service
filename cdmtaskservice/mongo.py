@@ -590,6 +590,7 @@ class MongoDAO:
             UpdateField.OUTPUT_FILE_COUNT: (models.FLD_JOB_OUTPUT_FILE_COUNT, False),
             UpdateField.NERSC_LOG_UPLOAD_TASK_ID: (self._FLD_NERSC_LOG_UL_TASK, True),
             UpdateField.EXIT_CODE: (models.FLD_SUBJOB_EXIT_CODE, False),
+            UpdateField.RUNTIME: (models.FLD_SUBJOB_RUNTIME, False),
             UpdateField.USER_ERROR: (models.FLD_COMMON_ERROR, False),
             UpdateField.ADMIN_ERROR: (models.FLD_COMMON_ADMIN_ERROR, False),
             UpdateField.TRACEBACK: (models.FLD_COMMON_TRACEBACK, False),
