@@ -22,18 +22,28 @@ from cdmtaskservice.timestamp import utcdatetime
 _T = utcdatetime()
 _TRANS_ID = "test-trans-id"
 
-# A realistic HTCondor job ClassAd used to exercise cpu_hours / cpu_factor / max_memory paths.
-# RemoteUserCpu=3600s, CommittedTime=1800s, cpus=1 → cpu_hours=1.0, cpu_factor=2.0.
-# MemoryUsage=512 MiB → max_memory=512*1024*1024 bytes.
+# HTCondor ClassAd — RemoteUserCpu=3500s+RemoteSysCpu=100s → cpu_hours=1.0,
+# CommittedTime=1200s → runtime_seconds=1200 (distinct from cpu_hours in seconds and
+# all subjob totals below), MemoryUsage=512 MiB.
 _CONDOR_AD = {
-    "RemoteUserCpu": 3600.0,
-    "RemoteSysCpu": 0.0,
-    "CommittedTime": 1800,
+    "RemoteUserCpu": 3500.0,
+    "RemoteSysCpu": 100.0,
+    "CommittedTime": 1200,
     "MemoryUsage": 512,
 }
-_CPU_HOURS = 1.0
-_CPU_FACTOR = 2.0
-_MAX_MEM = 512 * 1024 * 1024
+_HTC_CPU_HOURS = 1.0
+_HTC_MAX_MEM = 512 * 1024 * 1024
+_HTC_RUNTIME = 1200.0
+
+def _make_subjob(*, cpu_hours=None, max_memory=None, runtime_seconds=None,
+                 exit_code=None, outputs=None):
+    return models.SubJob.model_construct(
+        exit_code=exit_code,
+        cpu_hours=cpu_hours,
+        max_memory=max_memory,
+        runtime_seconds=runtime_seconds,
+        outputs=outputs or [],
+    )
 
 
 class _FakeCoroutineWrangler:
@@ -171,47 +181,104 @@ async def test_update_container_state_job_submitted():
 
 
 async def test_update_container_state_upload_submitting():
-    """All subjobs at UPLOAD_SUBMITTING - subjob carries exit code, parent job does not."""
+    """All subjobs at UPLOAD_SUBMITTING - subjob carries per-container stats, parent job gets
+    aggregated stats from subjobs."""
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.UPLOAD_SUBMITTING, _T
     )
-
-    await runner.update_container_state(
-        _JOB, 0, models.JobState.UPLOAD_SUBMITTING, _update(exit_code=0)
-    )
-
-    mongo.update_subjob_state.assert_called_once_with(
-        "jid", 0, update_state.submitting_upload_with_exit_code(0), _T
-    )
-    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.UPLOAD_SUBMITTING)
-    updates.update_job_state.assert_called_once_with(
-        "jid", update_state.submitting_upload(), update_time=_T
-    )
-
-
-async def test_update_container_state_upload_submitting_with_stats():
-    """UPLOAD_SUBMITTING with stats - all written to subjob."""
-    runner, mongo, _, updates, _ = _make_runner()
-    updates.get_parent_job_update.return_value = ParentJobUpdate(
-        models.JobState.UPLOAD_SUBMITTING, _T
-    )
+    # Container 0 reports its stats; container 1 is already stored. get_subjobs returns both.
+    # cpu_hours 0.6+0.4=1.0; max_memory max(400MB,300MB)=400MB; runtime 1200+600=1800s → factor=2.0
+    mongo.get_subjobs.return_value = [
+        _make_subjob(cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=1200, exit_code=0),
+        _make_subjob(cpu_hours=0.4, max_memory=300*1024*1024, runtime_seconds=600,  exit_code=0),
+    ]
 
     await runner.update_container_state(
         _JOB, 0, models.JobState.UPLOAD_SUBMITTING,
-        _update(exit_code=0, cpu_hours=1.5, max_memory_bytes=1024, runtime_seconds=42.3),
+        _update(exit_code=0, cpu_hours=0.6, max_memory_bytes=400*1024*1024, runtime_seconds=1200),
     )
 
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
         update_state.submitting_upload_with_exit_code(
-            0, cpu_hours=1.5, max_memory=1024, runtime_seconds=42.3
+            0, cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=1200
         ),
         _T,
     )
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.UPLOAD_SUBMITTING)
+    mongo.get_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
-        "jid", update_state.submitting_upload(), update_time=_T
+        "jid",
+        update_state.submitting_upload(cpu_hours=1.0, max_memory=400*1024*1024, cpu_factor=2.0),
+        update_time=_T,
+    )
+
+
+async def test_update_container_state_upload_submitting_partial_stats():
+    """UPLOAD_SUBMITTING: subjobs with None stats are excluded — only non-None values aggregate."""
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.UPLOAD_SUBMITTING, _T
+    )
+    mongo.get_subjobs.return_value = [
+        _make_subjob(cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=1200, exit_code=0),
+        _make_subjob(exit_code=0),
+    ]
+
+    await runner.update_container_state(
+        _JOB, 0, models.JobState.UPLOAD_SUBMITTING,
+        _update(exit_code=0, cpu_hours=0.6, max_memory_bytes=400*1024*1024, runtime_seconds=1200),
+    )
+
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        # Only subjob 0's stats contribute: cpu_factor=(0.6*3600)/(1200*1)=1.8
+        update_state.submitting_upload(cpu_hours=0.6, max_memory=400*1024*1024, cpu_factor=1.8),
+        update_time=_T,
+    )
+
+
+async def test_update_container_state_upload_submitting_no_stats():
+    """UPLOAD_SUBMITTING: no subjobs have stats — job update carries no stats."""
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.UPLOAD_SUBMITTING, _T
+    )
+    mongo.get_subjobs.return_value = [
+        _make_subjob(exit_code=0),
+        _make_subjob(exit_code=0),
+    ]
+
+    await runner.update_container_state(
+        _JOB, 0, models.JobState.UPLOAD_SUBMITTING, _update(exit_code=0),
+    )
+
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_upload(), update_time=_T,
+    )
+
+
+async def test_update_container_state_upload_submitting_no_runtime():
+    """UPLOAD_SUBMITTING: cpu_hours and max_memory present but no runtime → cpu_factor is None."""
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.UPLOAD_SUBMITTING, _T
+    )
+    mongo.get_subjobs.return_value = [
+        _make_subjob(cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=None, exit_code=0),
+        _make_subjob(cpu_hours=0.4, max_memory=300*1024*1024, runtime_seconds=None, exit_code=0),
+    ]
+
+    await runner.update_container_state(
+        _JOB, 0, models.JobState.UPLOAD_SUBMITTING,
+        _update(exit_code=0, cpu_hours=0.6, max_memory_bytes=400*1024*1024),
+    )
+
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.submitting_upload(cpu_hours=1.0, max_memory=400*1024*1024),
+        update_time=_T,
     )
 
 
@@ -234,51 +301,41 @@ async def test_update_container_state_upload_submitted():
 
 
 async def test_update_container_state_error_processing_submitting():
-    """All subjobs at ERROR_PROCESSING_SUBMITTING - subjob carries exit code, parent does not."""
+    """All subjobs at ERROR_PROCESSING_SUBMITTING - subjob carries per-container stats, parent
+    gets aggregated stats from subjobs."""
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.ERROR_PROCESSING_SUBMITTING, _T
     )
-
-    await runner.update_container_state(
-        _JOB, 0, models.JobState.ERROR_PROCESSING_SUBMITTING, _update(exit_code=1)
-    )
-
-    mongo.update_subjob_state.assert_called_once_with(
-        "jid", 0, update_state.submitting_error_processing_with_exit_code(1), _T
-    )
-    updates.get_parent_job_update.assert_called_once_with(
-        _JOB, models.JobState.ERROR_PROCESSING_SUBMITTING
-    )
-    updates.update_job_state.assert_called_once_with(
-        "jid", update_state.submitting_error_processing(), update_time=_T
-    )
-
-
-async def test_update_container_state_error_processing_submitting_with_stats():
-    """ERROR_PROCESSING_SUBMITTING with stats - all written to subjob."""
-    runner, mongo, _, updates, _ = _make_runner()
-    updates.get_parent_job_update.return_value = ParentJobUpdate(
-        models.JobState.ERROR_PROCESSING_SUBMITTING, _T
-    )
+    # Container 0 reports its stats; container 1 is already stored. get_subjobs returns both.
+    # cpu_hours 0.6+0.4=1.0; max_memory max(400MB,300MB)=400MB; runtime 1800+1200=3000s → factor=1.2
+    mongo.get_subjobs.return_value = [
+        _make_subjob(cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=1800, exit_code=1),
+        _make_subjob(cpu_hours=0.4, max_memory=300*1024*1024, runtime_seconds=1200, exit_code=0),
+    ]
 
     await runner.update_container_state(
         _JOB, 0, models.JobState.ERROR_PROCESSING_SUBMITTING,
-        _update(exit_code=1, cpu_hours=1.5, max_memory_bytes=1024, runtime_seconds=42.3),
+        _update(exit_code=1, cpu_hours=0.6, max_memory_bytes=400*1024*1024, runtime_seconds=1800),
     )
 
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
         update_state.submitting_error_processing_with_exit_code(
-            1, cpu_hours=1.5, max_memory=1024, runtime_seconds=42.3
+            1, cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=1800
         ),
         _T,
     )
     updates.get_parent_job_update.assert_called_once_with(
         _JOB, models.JobState.ERROR_PROCESSING_SUBMITTING
     )
+    mongo.get_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
-        "jid", update_state.submitting_error_processing(), update_time=_T
+        "jid",
+        update_state.submitting_error_processing(
+            cpu_hours=1.0, max_memory=400*1024*1024, cpu_factor=1.2
+        ),
+        update_time=_T,
     )
 
 
@@ -313,7 +370,7 @@ async def test_update_container_state_terminal_error():
     mongo.get_exit_codes_for_subjobs.return_value = [1, 0]
     condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
 
-    # asyncio.sleep is patched to make the _get_condor_stats polling loop instant
+    # asyncio.sleep is patched to make the _fetch_condor_classad_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.update_container_state(
             _JOB, 1, models.JobState.ERROR,
@@ -327,6 +384,7 @@ async def test_update_container_state_terminal_error():
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    mongo.get_subjobs.assert_not_called()
     updates.update_job_state.assert_called_once_with(
         "jid",
         update_state.error(
@@ -336,9 +394,9 @@ async def test_update_container_state_terminal_error():
                 "error code. Please examine the logs for details."
             ),
             log_files_path="logs/jid",
-            cpu_hours=_CPU_HOURS,
-            cpu_factor=_CPU_FACTOR,
-            max_memory=_MAX_MEM,
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
     )
 
@@ -348,13 +406,13 @@ async def test_update_container_state_terminal_complete():
     runner, mongo, condor, updates, s3 = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
     outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
-    sj = models.SubJob.model_construct(outputs=outputs)
+    sj = _make_subjob(exit_code=0, outputs=outputs)
     mongo.get_subjobs.return_value = [sj]
     s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")
     s3.get_object_meta.return_value = [s3obj]
     condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
 
-    # asyncio.sleep is patched to make the _get_condor_stats polling loop instant
+    # asyncio.sleep is patched to make the _fetch_condor_classad_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.update_container_state(
             _JOB, 0, models.JobState.COMPLETE, _update(outputs=outputs)
@@ -371,9 +429,9 @@ async def test_update_container_state_terminal_complete():
         "jid",
         update_state.complete(
             [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")],
-            cpu_hours=_CPU_HOURS,
-            cpu_factor=_CPU_FACTOR,
-            max_memory=_MAX_MEM,
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
         update_time=_T,
     )
@@ -417,7 +475,7 @@ async def test_update_container_state_error_job_no_nonzero_exit_codes():
     mongo.get_exit_codes_for_subjobs.return_value = [0, None]
     condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
 
-    # asyncio.sleep is patched to make the _get_condor_stats polling loop instant
+    # asyncio.sleep is patched to make the _fetch_condor_classad_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.update_container_state(
             _JOB, 0, models.JobState.ERROR,
@@ -433,27 +491,28 @@ async def test_update_container_state_error_job_no_nonzero_exit_codes():
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    mongo.get_subjobs.assert_not_called()
     updates.update_job_state.assert_called_once_with(
         "jid",
         update_state.error(
             "Check subjobs / containers for admin errors",
             user_error="An unexpected error occurred.",
-            cpu_hours=_CPU_HOURS,
-            cpu_factor=_CPU_FACTOR,
-            max_memory=_MAX_MEM,
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
     )
 
 
 async def test_update_container_state_error_job_held_running_containers():
-    """_get_condor_stats exits on first iteration when all running containers are held."""
+    """_fetch_condor_classad_stats exits on first iteration when all running containers are held."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     mongo.get_exit_codes_for_subjobs.return_value = [1]
     # running=[held job] triggers an immediate exit via condor_jobs_all_held
     condor.get_cluster_classads.return_value = ([{"JobStatus": 5}], [_CONDOR_AD])
 
-    # asyncio.sleep is patched to make the _get_condor_stats polling loop instant;
+    # asyncio.sleep is patched to make the _fetch_condor_classad_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.update_container_state(
             _JOB, 0, models.JobState.ERROR,
@@ -462,6 +521,7 @@ async def test_update_container_state_error_job_held_running_containers():
 
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    mongo.get_subjobs.assert_not_called()
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
         update_state.error("container failed", traceback="Traceback: container failed"), _T,
@@ -476,15 +536,15 @@ async def test_update_container_state_error_job_held_running_containers():
                 "error code. Please examine the logs for details."
             ),
             log_files_path="logs/jid",
-            cpu_hours=_CPU_HOURS,
-            cpu_factor=_CPU_FACTOR,
-            max_memory=_MAX_MEM,
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
     )
 
 
 async def test_update_container_state_condor_stats_timeout():
-    """_get_condor_stats raises IOError after 12 attempts; handle_exception is called."""
+    """_fetch_condor_classad_stats raises IOError after 12 attempts; handle_exception is called."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     # JobStatus=2 (running, not held) keeps the loop going until the 12-attempt limit
@@ -503,6 +563,8 @@ async def test_update_container_state_condor_stats_timeout():
     )
     assert condor.get_cluster_classads.call_count == 12
     condor.get_cluster_classads.assert_called_with(123)
+    # IOError raised before get_subjobs is reached
+    mongo.get_subjobs.assert_not_called()
     mongo.get_exit_codes_for_subjobs.assert_not_called()
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
     exc = updates.handle_exception.call_args.args[0]
@@ -529,12 +591,14 @@ async def test_update_container_state_complete_job_no_outputs():
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.COMPLETE)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.get_subjobs.assert_called_once_with("jid")
-    # stats are computed but not forwarded on this error path
     updates.update_job_state.assert_called_once_with(
         "jid",
         update_state.error(
             "The job produced no output files",
             user_error="The job produced no output files",
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
     )
 
@@ -567,6 +631,9 @@ async def test_update_container_state_complete_job_checksum_mismatch():
             "Expected CRC64/NVME checksum aaaaaaaaaaaa but got bbbbbbbbbbbb "
             "for uploaded file bucket/f.txt",
             user_error="An unexpected error occurred",
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
     )
 
@@ -664,11 +731,15 @@ async def test_recover_job_standard_canceled_state():
 
 
 async def test_recover_job_standard_canceling_with_cluster_id():
-    """CANCELING: refreshed job has a cluster ID → full cancel flow runs."""
+    """CANCELING: refreshed job has a cluster ID → full cancel flow with condor and subjob stats."""
     runner, mongo, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.CANCELING)
     refreshed_job = _recovery_job(state=models.JobState.CANCELING)
     mongo.get_job.return_value = refreshed_job
+    mongo.get_subjobs.return_value = [
+        _make_subjob(cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=600, exit_code=0),
+        _make_subjob(cpu_hours=0.4, max_memory=300*1024*1024, runtime_seconds=300, exit_code=0),
+    ]
     condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
@@ -677,9 +748,15 @@ async def test_recover_job_standard_canceling_with_cluster_id():
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
     condor.cancel_job.assert_called_once_with(123)
     condor.get_cluster_classads.assert_called_once_with(123)
+    mongo.get_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
         "jid",
-        update_state.canceled(cpu_hours=_CPU_HOURS, cpu_factor=_CPU_FACTOR, max_memory=_MAX_MEM),
+        update_state.canceled(
+            cpu_hours=1.0, max_memory=400*1024*1024, cpu_factor=4.0,
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
+        ),
     )
 
 
@@ -689,22 +766,26 @@ async def test_recover_job_standard_canceling_with_cluster_id():
 ])
 async def test_recover_job_standard_canceling_no_cluster_id(cluster_ids):
     """
-    CANCELING: refreshed job has no cluster ID (either no htcondor_details or empty cluster_id
-    list) → condor skipped, CANCELED written with no stats.
+    CANCELING: refreshed job has no cluster ID → condor skipped, CANCELED written with subjob stats.
     """
     runner, mongo, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.CANCELING)
     refreshed_job = _recovery_job(state=models.JobState.CANCELING, cluster_ids=cluster_ids)
     mongo.get_job.return_value = refreshed_job
+    mongo.get_subjobs.return_value = [
+        _make_subjob(cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=600, exit_code=0),
+        _make_subjob(cpu_hours=0.4, max_memory=300*1024*1024, runtime_seconds=300, exit_code=0),
+    ]
 
     await runner.recover_job(job)
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
     condor.cancel_job.assert_not_called()
     condor.get_cluster_classads.assert_not_called()
+    mongo.get_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
         "jid",
-        update_state.canceled(cpu_hours=None, cpu_factor=None, max_memory=None),
+        update_state.canceled(cpu_hours=1.0, max_memory=400*1024*1024, cpu_factor=4.0),
     )
 
 
@@ -726,6 +807,14 @@ async def test_recover_job_standard_canceling_error_propagates():
     )
 
 
+# Expected parent-job update when all subjobs reach UPLOAD_SUBMITTING in recovery.
+# Matches the 1-subjob stats used in recovery tests: cpu_hours=0.5, max_memory=500MB,
+# runtime=720s → cpu_factor=(0.5*3600)/(720*1)=2.5.
+_UPLOAD_SUBMITTING_JOB_UPDATE = update_state.submitting_upload(
+    cpu_hours=0.5, max_memory=500*1024*1024, cpu_factor=2.5
+)
+
+
 async def test_recover_job_error_state_advance_to_complete():
     """
     Job in ERROR, no held/running containers → RECOVERING lock acquired, job reset via
@@ -745,7 +834,9 @@ async def test_recover_job_error_state_advance_to_complete():
     condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
 
     outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
-    sj = models.SubJob.model_construct(outputs=outputs)
+    # cpu_factor = (0.5*3600) / (720*1) = 2.5
+    sj = _make_subjob(cpu_hours=0.5, max_memory=500*1024*1024, runtime_seconds=720,
+                      exit_code=0, outputs=outputs)
     mongo.get_subjobs.return_value = [sj]
     s3.get_object_meta.return_value = [S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")]
     condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
@@ -756,7 +847,9 @@ async def test_recover_job_error_state_advance_to_complete():
     condor.get_cluster_proc_states.assert_called_once_with(123)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
-    mongo.get_subjobs.assert_called_once_with("jid")
+    # Called twice: once for UPLOAD_SUBMITTING stats, once in _complete_job for outputs
+    mongo.get_subjobs.assert_called_with("jid")
+    assert mongo.get_subjobs.call_count == 2
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
     updates.get_parent_job_update.assert_not_called()
 
@@ -767,13 +860,15 @@ async def test_recover_job_error_state_advance_to_complete():
         ),
         call("jid", update_state.submitting_job(), update_time=advance_times[0]),
         call("jid", update_state.submitted_job(), update_time=advance_times[1]),
-        call("jid", update_state.submitting_upload(), update_time=advance_times[2]),
+        call("jid", _UPLOAD_SUBMITTING_JOB_UPDATE, update_time=advance_times[2]),
         call("jid", update_state.submitted_upload(), update_time=advance_times[3]),
         call(
             "jid",
             update_state.complete(
                 [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")],
-                cpu_hours=_CPU_HOURS, cpu_factor=_CPU_FACTOR, max_memory=_MAX_MEM,
+                htcondor_cpu_hours=_HTC_CPU_HOURS,
+                htcondor_max_memory=_HTC_MAX_MEM,
+                htcondor_runtime_seconds=_HTC_RUNTIME,
             ),
             update_time=advance_times[4],
         ),
@@ -844,16 +939,16 @@ async def test_recover_job_error_state_lock_fails():
     (models.JobState.DOWNLOAD_SUBMITTED, [
         (models.JobState.JOB_SUBMITTING, update_state.submitting_job()),
         (models.JobState.JOB_SUBMITTED, update_state.submitted_job()),
-        (models.JobState.UPLOAD_SUBMITTING, update_state.submitting_upload()),
+        (models.JobState.UPLOAD_SUBMITTING, _UPLOAD_SUBMITTING_JOB_UPDATE),
         (models.JobState.UPLOAD_SUBMITTED, update_state.submitted_upload()),
     ]),
     (models.JobState.JOB_SUBMITTING, [
         (models.JobState.JOB_SUBMITTED, update_state.submitted_job()),
-        (models.JobState.UPLOAD_SUBMITTING, update_state.submitting_upload()),
+        (models.JobState.UPLOAD_SUBMITTING, _UPLOAD_SUBMITTING_JOB_UPDATE),
         (models.JobState.UPLOAD_SUBMITTED, update_state.submitted_upload()),
     ]),
     (models.JobState.JOB_SUBMITTED, [
-        (models.JobState.UPLOAD_SUBMITTING, update_state.submitting_upload()),
+        (models.JobState.UPLOAD_SUBMITTING, _UPLOAD_SUBMITTING_JOB_UPDATE),
         (models.JobState.UPLOAD_SUBMITTED, update_state.submitted_upload()),
     ]),
     (models.JobState.UPLOAD_SUBMITTING, [
@@ -873,7 +968,9 @@ async def test_recover_job_standard_advance_to_complete(start_state, state_updat
     updates.get_parent_job_update.side_effect = parent_updates
 
     outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
-    sj = models.SubJob.model_construct(outputs=outputs)
+    # cpu_factor = (0.5*3600) / (720*1) = 2.5
+    sj = _make_subjob(cpu_hours=0.5, max_memory=500*1024*1024, runtime_seconds=720,
+                      exit_code=0, outputs=outputs)
     mongo.get_subjobs.return_value = [sj]
     s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")
     s3.get_object_meta.return_value = [s3obj]
@@ -884,7 +981,9 @@ async def test_recover_job_standard_advance_to_complete(start_state, state_updat
 
     condor.get_cluster_proc_states.assert_called_once_with(123)
     condor.get_cluster_classads.assert_called_once_with(123)
-    mongo.get_subjobs.assert_called_once_with("jid")
+    # get_subjobs called once per UPLOAD_SUBMITTING (stats) plus once in _complete_job (outputs)
+    mongo.get_subjobs.assert_called_with("jid")
+    assert mongo.get_subjobs.call_count == 2
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
 
     expected_times = [_T + datetime.timedelta(seconds=i + 1) for i in range(len(state_updates))]
@@ -894,9 +993,9 @@ async def test_recover_job_standard_advance_to_complete(start_state, state_updat
         "jid",
         update_state.complete(
             [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")],
-            cpu_hours=_CPU_HOURS,
-            cpu_factor=_CPU_FACTOR,
-            max_memory=_MAX_MEM,
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
         update_time=complete_time,
     )]
@@ -931,6 +1030,9 @@ async def test_recover_job_complete_job_no_outputs():
         update_state.error(
             "The job produced no output files",
             user_error="The job produced no output files",
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
     )
 
@@ -961,6 +1063,9 @@ async def test_recover_job_complete_job_checksum_mismatch():
             "Expected CRC64/NVME checksum aaaaaaaaaaaa but got bbbbbbbbbbbb "
             "for uploaded file bucket/f.txt",
             user_error="An unexpected error occurred",
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
     )
 
@@ -1161,7 +1266,9 @@ async def test_recover_job_force_all_complete():
     condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
 
     outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
-    sj = models.SubJob.model_construct(outputs=outputs)
+    # cpu_factor = (0.5*3600) / (720*1) = 2.5
+    sj = _make_subjob(cpu_hours=0.5, max_memory=500*1024*1024, runtime_seconds=720,
+                      exit_code=0, outputs=outputs)
     mongo.get_subjobs.return_value = [sj]
     s3.get_object_meta.return_value = [S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")]
     condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
@@ -1172,7 +1279,9 @@ async def test_recover_job_force_all_complete():
     condor.get_cluster_proc_states.assert_called_once_with(123)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
-    mongo.get_subjobs.assert_called_once_with("jid")
+    # Called twice: once for UPLOAD_SUBMITTING stats, once in _complete_job for outputs
+    mongo.get_subjobs.assert_called_with("jid")
+    assert mongo.get_subjobs.call_count == 2
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
     updates.get_parent_job_update.assert_not_called()
 
@@ -1183,13 +1292,15 @@ async def test_recover_job_force_all_complete():
         ),
         call("jid", update_state.submitting_job(), update_time=advance_times[0]),
         call("jid", update_state.submitted_job(), update_time=advance_times[1]),
-        call("jid", update_state.submitting_upload(), update_time=advance_times[2]),
+        call("jid", _UPLOAD_SUBMITTING_JOB_UPDATE, update_time=advance_times[2]),
         call("jid", update_state.submitted_upload(), update_time=advance_times[3]),
         call(
             "jid",
             update_state.complete(
                 [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")],
-                cpu_hours=_CPU_HOURS, cpu_factor=_CPU_FACTOR, max_memory=_MAX_MEM,
+                htcondor_cpu_hours=_HTC_CPU_HOURS,
+                htcondor_max_memory=_HTC_MAX_MEM,
+                htcondor_runtime_seconds=_HTC_RUNTIME,
             ),
             update_time=advance_times[4],
         ),

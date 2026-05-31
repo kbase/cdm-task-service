@@ -573,6 +573,9 @@ class MongoDAO:
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
     _FLD_HTC_CLUSTER_ID = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_CLUSTER_ID}"
+    _FLD_HTC_CPU_HOURS = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_CPU_HOURS}"
+    _FLD_HTC_MAX_MEM = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_MAX_MEM}"
+    _FLD_HTC_RUNTIME = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_RUNTIME}"
     _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
     _FLD_NERSC_LOG_UL_TASK = (
         f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
@@ -582,6 +585,9 @@ class MongoDAO:
             UpdateField.NERSC_DOWNLOAD_TASK_ID: (self._FLD_NERSC_DL_TASK, True),
             UpdateField.JAWS_RUN_ID: (self._FLD_JAWS_RUN_ID, True),
             UpdateField.HTCONDOR_CLUSTER_ID: (self._FLD_HTC_CLUSTER_ID, True),
+            UpdateField.HTCONDOR_CPU_HOURS: (self._FLD_HTC_CPU_HOURS, False),
+            UpdateField.HTCONDOR_MAX_MEM: (self._FLD_HTC_MAX_MEM, False),
+            UpdateField.HTCONDOR_RUNTIME: (self._FLD_HTC_RUNTIME, False),
             UpdateField.CPU_HOURS: (models.FLD_JOB_CPU_HOURS, False),
             UpdateField.CPU_FACTOR: (models.FLD_JOB_CPU_FACTOR, False),
             UpdateField.MAX_MEMORY: (models.FLD_JOB_MAX_MEM, False),

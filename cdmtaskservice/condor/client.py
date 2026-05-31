@@ -5,6 +5,7 @@ Task Service.
 
 import asyncio
 from classad2 import ClassAd, ExprTree
+from dataclasses import dataclass
 import enum
 import htcondor2
 import os
@@ -149,29 +150,37 @@ def condor_jobs_all_held(job_classads_as_dict: list[dict[str, Any]]) -> bool:
     _not_falsy(job_classads_as_dict, "job_classads_as_dict")
     return not {ad[_AD_JOB_STATUS] for ad in job_classads_as_dict} - {_JOB_STATUS_HELD}
 
-def condor_job_stats(job_classads_as_dict: list[dict[str, Any]], requested_cpus: int
-) -> tuple[float, float, int]:
+
+@dataclass
+class CondorJobStats:
+    """Stats derived from HTCondor ClassAds for a job."""
+    cpu_hours: float | None
+    max_memory: int | None
+    runtime_seconds: float | None
+
+
+def condor_job_stats(job_classads_as_dict: list[dict[str, Any]]) -> CondorJobStats:
     """
     Given HTCondor job ClassAds converted to dictionaries for a job, compute stats for the job.
-    Returns a tuple of
-    
-    * total cpu hours (RemoteSysCpu + RemoteUserCpu) / 3600
-    * cpu usage factor (cpu time / (CommittedTime * requested_cpus))
-    * maximum memory use in B over each container (e.g. max(list[max_container_mem_usage])
+
+    cpu_hours - total (RemoteSysCpu + RemoteUserCpu) / 3600
+    max_memory - maximum MemoryUsage in bytes across all containers (MemoryUsage is in MiB)
+    runtime_seconds - total CommittedTime in seconds across all containers
     """
     _not_falsy(job_classads_as_dict, "job_classads_as_dict")
-    _check_num(requested_cpus, "requested_cpus")
     # Seems like condor uses MiB, although docs aren't great
     # https://htcondor.readthedocs.io/en/24.x/man-pages/condor_submit.html?utm_source=chatgpt.com#request_memory
     mems = [c[_AD_MEM] for c in job_classads_as_dict if _AD_MEM in c]
-    max_mem = max(mems) * 1024 * 1024 if mems else None
     cpu_sec = 0
-    committed_time = 0
+    runtime_sec = 0
     for c in job_classads_as_dict:
         cpu_sec += (c.get(_AD_CPU_USER) or 0) + (c.get(_AD_CPU_SYS) or 0)
-        committed_time += (c.get(_AD_COMMITTED_TIME) or 0)
-    cpufactor = cpu_sec / (committed_time * requested_cpus) if committed_time else None
-    return cpu_sec / 3600.0 if cpu_sec else None, cpufactor, max_mem
+        runtime_sec += (c.get(_AD_COMMITTED_TIME) or 0)
+    return CondorJobStats(
+        cpu_hours=cpu_sec / 3600.0 if cpu_sec else None,
+        max_memory=max(mems) * 1024 * 1024 if mems else None,
+        runtime_seconds=float(runtime_sec) if runtime_sec else None,
+    )
 
 
 class CondorClient:
