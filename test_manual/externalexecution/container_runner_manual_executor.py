@@ -9,7 +9,7 @@ IMAGE = "ghcr.io/kbasetest/cts_test_image:0.1.2"
 STDOUT = Path("./stdout.txt")
 STDERR = Path("./stderr.txt")
 
-ARGS = ["python", "/opt/tester.py", "-s", "1000"]
+ARGS = ["python", "/opt/tester.py", "-s", "10"]
 
 MOUNTS = {
     str(Path("~/github/kbase/cdm-task-service/mount_test_rw").expanduser()): ("/rw", True),
@@ -23,7 +23,7 @@ async def start_cb():
 
 
 async def main():
-    await run_container(
+    res = await run_container(
         IMAGE,
         STDOUT,
         STDERR,
@@ -32,6 +32,7 @@ async def main():
         post_start_callback=start_cb(),
         sigterm_callback=lambda signum: print(f"exited: {signum}")
     )
+    print(res)
 
 if __name__ == "__main__":
     asyncio.run(main())

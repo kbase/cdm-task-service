@@ -73,12 +73,12 @@ class Executor:
             self._args = ArgumentGenerator(job).get_container_arguments(self._cfg.container_number)
             await self._download_files(job)
             await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
-            exit_code = await self._run_container(job)  # updates to JOB_SUBMITTED
-            if exit_code > 0:
-                await self._process_error_state(job, exit_code)
+            result = await self._run_container(job)  # updates to JOB_SUBMITTED
+            if result.exit_code > 0:
+                await self._process_error_state(job, result.exit_code)
             else:
                 await self._process_complete_state(job)
-            return exit_code
+            return result.exit_code
         except Exception as e:
             self._logr.exception(f"Job failed: {e}")
             await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
@@ -232,7 +232,9 @@ Local relative path: {loc}
     def _get_log_prefix(self, job: models.AdminJobDetails):
         return f"cts-{job.id}-{self._cfg.container_number}-container"
 
-    async def _run_container(self, job: models.AdminJobDetails) -> int:
+    async def _run_container(
+        self, job: models.AdminJobDetails
+    ) -> container_runner.ContainerResult:
         mount = Path.cwd().expanduser().absolute()
         input_ = mount / _INPUT
         output = mount / _OUTPUT
@@ -263,7 +265,7 @@ Local relative path: {loc}
         self._logr.info(
             f"Starting image {job.image.name_with_digest} with command:\n{self._args.args}"
         )
-        exit_code = await container_runner.run_container(
+        result = await container_runner.run_container(
             job.image.name_with_digest,
             Path(".") / (self._get_log_prefix(job) + ".out"),
             Path(".") / (self._get_log_prefix(job) + ".err"),
@@ -273,8 +275,12 @@ Local relative path: {loc}
             post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED),
             sigterm_callback=lambda signum: sys.exit(128 + signum)
         )
-        self._logr.info(f"Container exited with code {exit_code}")
-        return exit_code
+        self._logr.info(
+            f"Container exited with code {result.exit_code}, "
+            f"max memory: {result.max_memory_bytes} bytes, "
+            f"CPU hours: {result.cpu_hours}"
+        )
+        return result
 
     async def _process_error_state(self, job: models.AdminJobDetails, exit_code: int):
         await self._update_job_state_loop(
