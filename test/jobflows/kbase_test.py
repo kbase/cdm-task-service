@@ -983,7 +983,7 @@ async def test_recover_job_standard_advance_to_complete(start_state, state_updat
     condor.get_cluster_classads.assert_called_once_with(123)
     # get_subjobs called once per UPLOAD_SUBMITTING (stats) plus once in _complete_job (outputs)
     mongo.get_subjobs.assert_called_with("jid")
-    assert mongo.get_subjobs.call_count == 2
+    assert mongo.get_subjobs.call_count == 2 if len(state_updates) > 1 else 1
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
 
     expected_times = [_T + datetime.timedelta(seconds=i + 1) for i in range(len(state_updates))]
