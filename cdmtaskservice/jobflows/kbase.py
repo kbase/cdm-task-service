@@ -19,7 +19,7 @@ from cdmtaskservice.arg_checkers import (
     require_string as _require_string,
 )
 from cdmtaskservice.condor.client import (
-    CondorClient, ProcState, condor_job_stats, condor_jobs_all_held
+    CondorClient, CondorJobStats, ProcState, condor_job_stats, condor_jobs_all_held
 )
 from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
@@ -124,12 +124,13 @@ class KBaseRunner(JobFlow):
             models.JobState.JOB_SUBMITTED: lambda job, t: self._updates.update_job_state(
                 job.id, update_state.submitted_job(), update_time=t
             ),
-            models.JobState.UPLOAD_SUBMITTING: self._submitting_upload_handler,
+            models.JobState.UPLOAD_SUBMITTING: lambda job, t:
+                self._submitting_stats_handler(job, t, update_state.submitting_upload),
             models.JobState.UPLOAD_SUBMITTED: lambda job, t: self._updates.update_job_state(
                 job.id, update_state.submitted_upload(), update_time=t
             ),
-            models.JobState.ERROR_PROCESSING_SUBMITTING:
-                self._submitting_error_processing_handler,
+            models.JobState.ERROR_PROCESSING_SUBMITTING: lambda job, t:
+                self._submitting_stats_handler(job, t, update_state.submitting_error_processing),
             models.JobState.ERROR_PROCESSING_SUBMITTED: lambda job, t:
                 self._updates.update_job_state(
                     job.id, update_state.submitted_error_processing(), update_time=t
@@ -287,7 +288,6 @@ class KBaseRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
-    
     async def update_container_state(
         self,
         job: models.AdminJobDetails,
@@ -337,38 +337,32 @@ class KBaseRunner(JobFlow):
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "updating job state")
 
-    async def _submitting_upload_handler(
-        self, job: models.AdminJobDetails, update_time: datetime.datetime
-    ):
+    async def _submitting_stats_handler(self, job, update_time, update_fn):
+        cpu_hours, max_memory, cpu_factor = await self._get_subjob_stats(job)
         await self._updates.update_job_state(
-            job.id, update_state.submitting_upload(), update_time=update_time
-        )
-
-    async def _submitting_error_processing_handler(
-        self, job: models.AdminJobDetails, update_time: datetime.datetime
-    ):
-        await self._updates.update_job_state(
-            job.id, update_state.submitting_error_processing(), update_time=update_time
+            job.id,
+            update_fn(cpu_hours=cpu_hours, cpu_factor=cpu_factor, max_memory=max_memory),
+            update_time=update_time,
         )
 
     async def _error_job(self, job: models.AdminJobDetails):
-        cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
+        condor_stats = await self._fetch_condor_classad_stats(job)
         exit_codes = await self._mongo.get_exit_codes_for_subjobs(job.id)
         # if any exit codes are present and > 0, a container failed. Exit codes can be None
         # if the container never ran
         err_exit = set(exit_codes) - {0, None}
         if err_exit:
-            err = (f"At least one container exited with a non-zero "
+            err = ("At least one container exited with a non-zero "
                    + "error code. Please examine the logs for details.")
         else:
             err = "An unexpected error occurred."
         await self._updates.update_job_state(job.id, update_state.error(
-            "Check subjobs / containers for admin errors",  # maybe improve later,
+            "Check subjobs / containers for admin errors",  # maybe improve later
             user_error=err,
             log_files_path=str(Path(self._s3logdir) / job.id) if err_exit else None,
-            cpu_hours=cpu_hours,
-            cpu_factor=cpu_factor,
-            max_memory=max_mem,
+            htcondor_cpu_hours=condor_stats.cpu_hours,
+            htcondor_max_memory=condor_stats.max_memory,
+            htcondor_runtime_seconds=condor_stats.runtime_seconds,
         ))
         
     async def _complete_job(
@@ -380,7 +374,12 @@ class KBaseRunner(JobFlow):
         # to propagate so the caller can retry without killing the job.
         # update_time, if provided, is the subjob-derived completion timestamp. Error paths
         # intentionally ignore it — they represent newly discovered failures.
-        cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
+        condor_stats = await self._fetch_condor_classad_stats(job)
+        htcondor_kwargs = dict(
+            htcondor_cpu_hours=condor_stats.cpu_hours,
+            htcondor_max_memory=condor_stats.max_memory,
+            htcondor_runtime_seconds=condor_stats.runtime_seconds,
+        )
         subjobs = await self.get_subjobs(job.id)
         filechecksums = {}
         for sj in subjobs:
@@ -394,7 +393,9 @@ class KBaseRunner(JobFlow):
                 filechecksums[f.file] = f.crc64nvme
         if not filechecksums:
             err = "The job produced no output files"
-            await self._updates.update_job_state(job.id, update_state.error(err, user_error=err))
+            await self._updates.update_job_state(
+                job.id, update_state.error(err, user_error=err, **htcondor_kwargs)
+            )
             return
         s3objs = await self._s3.get_object_meta(S3Paths(filechecksums.keys()))
         outfiles = []
@@ -406,15 +407,14 @@ class KBaseRunner(JobFlow):
                 )
                 await self._updates.update_job_state(
                     # no way the user can fix this, something went very wrong
-                    job.id, update_state.error(err, user_error="An unexpected error occurred")
+                    job.id, update_state.error(
+                        err, user_error="An unexpected error occurred", **htcondor_kwargs
+                    )
                 )
                 return
             outfiles.append(models.S3File(file=o.path, crc64nvme=o.crc64nvme))
-        await self._updates.update_job_state(job.id, update_state.complete(
-            outfiles,
-            cpu_hours=cpu_hours,
-            cpu_factor=cpu_factor,
-            max_memory=max_mem
+        await self._updates.update_job_state(
+            job.id, update_state.complete(outfiles, **htcondor_kwargs
         ), update_time=update_time)
         
     async def cancel_job(self, job: models.AdminJobDetails):
@@ -429,18 +429,24 @@ class KBaseRunner(JobFlow):
         # Refresh: in the normal path this coroutine is spawned asynchronously and state
         # may have changed; in the recovery path the job is up-to-date but re-fetching is harmless.
         job = await self._mongo.get_job(job.id, as_admin=True)
-        cpu_hours = cpu_factor = max_mem = None
+        condor_stats = None
         if job.htcondor_details and job.htcondor_details.cluster_id:
             # assume there's only one job in the list for now
             await self._condor.cancel_job(job.htcondor_details.cluster_id[-1])
-            cpu_hours, cpu_factor, max_mem = await self._get_condor_stats(job)
+            condor_stats = await self._fetch_condor_classad_stats(job)
+        cpu_hours, max_mem, cpu_factor = await self._get_subjob_stats(job)
         await self._updates.update_job_state(job.id, update_state.canceled(
             cpu_hours=cpu_hours,
             cpu_factor=cpu_factor,
-            max_memory=max_mem
+            max_memory=max_mem,
+            htcondor_cpu_hours=condor_stats.cpu_hours if condor_stats else None,
+            htcondor_max_memory=condor_stats.max_memory if condor_stats else None,
+            htcondor_runtime_seconds=condor_stats.runtime_seconds if condor_stats else None,
         ))
 
-    async def _get_condor_stats(self, job: models.AdminJobDetails) -> tuple[float, float, int]:
+    async def _fetch_condor_classad_stats(
+        self, job: models.AdminJobDetails
+    ) -> CondorJobStats:
         attempts = 0
         # if cluster_id exists, there's a cluster ID in it
         cluster_id = job.htcondor_details.cluster_id[-1]
@@ -451,9 +457,29 @@ class KBaseRunner(JobFlow):
             # If the condor job errors, it's held with the current setup
             # Means the client and this code is coupled, might need to rethink
             if not running or condor_jobs_all_held(running):
-                return condor_job_stats(running + complete, job.job_input.cpus)
+                return condor_job_stats(running + complete)
             attempts += 1
         raise IOError("Condor jobs didn't complete for 60s after all executors sent termination")
+
+    async def _get_subjob_stats(
+        self, job: models.AdminJobDetails
+    ) -> tuple[float | None, int | None, float | None]:
+        """
+        Fetch subjobs and compute job-level stats.
+        Returns (total_cpu_hours, max_memory_bytes, cpu_factor).
+        """
+        subjobs = await self._mongo.get_subjobs(job.id)
+        cpu_hours_vals = [s.cpu_hours for s in subjobs if s.cpu_hours is not None]
+        memory_vals = [s.max_memory for s in subjobs if s.max_memory is not None]
+        runtime_vals = [s.runtime_seconds for s in subjobs if s.runtime_seconds is not None]
+        total_cpu_hours = sum(cpu_hours_vals) if cpu_hours_vals else None
+        max_memory = max(memory_vals) if memory_vals else None
+        cpu_factor = None
+        if total_cpu_hours is not None:
+            total_runtime_s = sum(runtime_vals)
+            if total_runtime_s:
+                cpu_factor = (total_cpu_hours * 3600) / (total_runtime_s * job.job_input.cpus)
+        return total_cpu_hours, max_memory, cpu_factor
     
     async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
         """

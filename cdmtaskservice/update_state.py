@@ -55,6 +55,15 @@ class UpdateField(StrEnum):
 
     RUNTIME = auto()
     """ The wall-clock runtime of a container in seconds. """
+
+    HTCONDOR_CPU_HOURS = auto()
+    """ The total CPU hours for a job as reported by HTCondor. """
+
+    HTCONDOR_MAX_MEM = auto()
+    """ The peak memory in bytes for a job as reported by HTCondor. """
+
+    HTCONDOR_RUNTIME = auto()
+    """ The total wall-clock runtime in seconds for a job as reported by HTCondor. """
     
     USER_ERROR = auto()
     """ Error information about a process targeted at a user. """
@@ -224,17 +233,21 @@ def submitted_jaws_job(jaws_run_id: str) -> JobUpdate:
     )
 
 
-def submitting_upload(cpu_hours: float = None) -> JobUpdate:
+def submitting_upload(
+    *,
+    cpu_hours: float = None,
+    cpu_factor: float = None,
+    max_memory: int = None,
+) -> JobUpdate:
     """
-    Update a job's state from job submitted to upload submitting and add cpu hours, if available.
+    Update a job's state from job submitted to upload submitting, with optional job-level stats.
     """
+    flds = {}
+    _set_job_stats(flds, cpu_hours, max_memory, cpu_factor)
     return JobUpdate(
         )._set_current_state(models.JobState.JOB_SUBMITTED
         )._set_new_state(models.JobState.UPLOAD_SUBMITTING
-        )._set_fields(
-            {
-                UpdateField.CPU_HOURS: _check_num(cpu_hours, "cpu_hours", minimum=0)
-            } if cpu_hours is not None else {}
+        )._set_fields(flds
     )
 
 
@@ -250,12 +263,7 @@ def submitting_upload_with_exit_code(
     and optionally cpu hours, max memory, and runtime.
     """
     flds = {UpdateField.EXIT_CODE: _check_num(exit_code, "exit_code", minimum=0)}
-    if cpu_hours is not None:
-        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
-    if max_memory is not None:
-        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
-    if runtime_seconds is not None:
-        flds[UpdateField.RUNTIME] = _check_num(runtime_seconds, "runtime_seconds", minimum=0)
+    _set_container_stats(flds, cpu_hours, max_memory, runtime_seconds)
     return JobUpdate(
         )._set_current_state(models.JobState.JOB_SUBMITTED
         )._set_new_state(models.JobState.UPLOAD_SUBMITTING
@@ -285,19 +293,67 @@ def submitted_nersc_upload(task_id: str) -> JobUpdate:
     )
 
 
+def _set_job_stats(
+    flds: dict,
+    cpu_hours: float | None,
+    max_memory: int | None,
+    cpu_factor: float | None,
+):
+    if cpu_hours is not None:
+        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
+    if max_memory is not None:
+        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
+    if cpu_factor is not None:
+        flds[UpdateField.CPU_FACTOR] = _check_num(cpu_factor, "cpu_factor", minimum=0)
+
+
+def _set_container_stats(
+    flds: dict,
+    cpu_hours: float | None,
+    max_memory: int | None,
+    runtime_seconds: float | None,
+):
+    if cpu_hours is not None:
+        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
+    if max_memory is not None:
+        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
+    if runtime_seconds is not None:
+        flds[UpdateField.RUNTIME] = _check_num(runtime_seconds, "runtime_seconds", minimum=0)
+
+
+def _set_htcondor_stats(
+    flds: dict,
+    htcondor_cpu_hours: float | None,
+    htcondor_max_memory: int | None,
+    htcondor_runtime_seconds: float | None,
+):
+    if htcondor_cpu_hours is not None:
+        flds[UpdateField.HTCONDOR_CPU_HOURS] = _check_num(
+            htcondor_cpu_hours, "htcondor_cpu_hours", minimum=0
+        )
+    if htcondor_max_memory is not None:
+        flds[UpdateField.HTCONDOR_MAX_MEM] = _check_num(
+            htcondor_max_memory, "htcondor_max_memory", minimum=0
+        )
+    if htcondor_runtime_seconds is not None:
+        flds[UpdateField.HTCONDOR_RUNTIME] = _check_num(
+            htcondor_runtime_seconds, "htcondor_runtime_seconds", minimum=0
+        )
+
+
 def complete(
     output_file_paths: list[models.S3File],
-    cpu_hours: float = None,
-    cpu_factor: float = None,
-    max_memory: int = None,
+    *,
+    htcondor_cpu_hours: float | None = None,
+    htcondor_max_memory: int | None = None,
+    htcondor_runtime_seconds: float | None = None,
 ) -> JobUpdate:
     """
     Update a job's state from upload submitted to complete.
-    
+
     output_file_paths - the output file paths.
-    cpu_hours - the job cpu hours, if available.
-    cpu_factor - the job's cpu usage factor, if available.
-    max_memory - the maximum memory used by the job in bytes, if available.
+    htcondor_cpu_hours/max_memory/runtime_seconds - HTCondor-reported stats stored in
+        htcondor_details, if available.
     """
     output_file_paths = output_file_paths or []
     out = [o.model_dump() for o in output_file_paths]
@@ -305,12 +361,7 @@ def complete(
         UpdateField.OUTPUT_FILE_PATHS: out,
         UpdateField.OUTPUT_FILE_COUNT: len(out),
     }
-    if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
-        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
-    if cpu_factor is not None:
-        flds[UpdateField.CPU_FACTOR] = _check_num(cpu_factor, "cpu_factor", minimum=0)
-    if max_memory is not None:
-        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
+    _set_htcondor_stats(flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds)
     return JobUpdate(
         )._set_current_state(models.JobState.UPLOAD_SUBMITTED
         )._set_new_state(models.JobState.COMPLETE
@@ -357,25 +408,26 @@ def canceling() -> JobUpdate:
 
 
 def canceled(
+    *,
     cpu_hours: float = None,
     cpu_factor: float = None,
     max_memory: int = None,
+    htcondor_cpu_hours: float | None = None,
+    htcondor_max_memory: int | None = None,
+    htcondor_runtime_seconds: float | None = None,
 ) -> JobUpdate:
     """
     Set a job to the canceled state.
-    
+
     cpu_hours - the job cpu hours, if available.
     cpu_factor - the job's cpu usage factor, if available.
     max_memory - the maximum memory used by the job in bytes, if available.
+    htcondor_cpu_hours/max_memory/runtime_seconds - HTCondor-reported stats stored in
+        htcondor_details, if available.
     """
-    # There are 3 repetitions of this that are pretty similar. Make a dataclass maybe?
     flds = {}
-    if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
-        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
-    if cpu_factor is not None:
-        flds[UpdateField.CPU_FACTOR] = _check_num(cpu_factor, "cpu_factor", minimum=0)
-    if max_memory is not None:
-        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
+    _set_job_stats(flds, cpu_hours, max_memory, cpu_factor)
+    _set_htcondor_stats(flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds)
     return JobUpdate(
         )._set_current_state(models.JobState.CANCELING
         )._set_new_state(models.JobState.CANCELED
@@ -388,18 +440,22 @@ def canceled(
 ####################
 
 
-def submitting_error_processing(cpu_hours: float | None = None) -> JobUpdate:
+def submitting_error_processing(
+    *,
+    cpu_hours: float | None = None,
+    cpu_factor: float | None = None,
+    max_memory: int | None = None,
+) -> JobUpdate:
     """
-    Update a job's state from job submitted to error processing submitting and add cpu hours,
-    if available.
+    Update a job's state from job submitted to error processing submitting, with optional
+    job-level stats.
     """
+    flds = {}
+    _set_job_stats(flds, cpu_hours, max_memory, cpu_factor)
     return JobUpdate(
         )._set_current_state(models.JobState.JOB_SUBMITTED
         )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTING
-        )._set_fields(
-            {
-                UpdateField.CPU_HOURS: _check_num(cpu_hours, "cpu_hours", minimum=0)
-            } if cpu_hours is not None else {}
+        )._set_fields(flds
     )
 
 
@@ -415,12 +471,7 @@ def submitting_error_processing_with_exit_code(
     exit code, and optionally cpu hours, max memory, and runtime.
     """
     flds = {UpdateField.EXIT_CODE: _check_num(exit_code, "exit_code", minimum=0)}
-    if cpu_hours is not None:
-        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
-    if max_memory is not None:
-        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
-    if runtime_seconds is not None:
-        flds[UpdateField.RUNTIME] = _check_num(runtime_seconds, "runtime_seconds", minimum=0)
+    _set_container_stats(flds, cpu_hours, max_memory, runtime_seconds)
     return JobUpdate(
         )._set_current_state(models.JobState.JOB_SUBMITTED
         )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTING
@@ -454,25 +505,25 @@ def submitted_nersc_error_processing(task_id: str) -> JobUpdate:
 
 def error(
     admin_error: str,
+    *,
     user_error: str = None,
     traceback: str = None,
     log_files_path: str = None,
-    cpu_hours: float = None,
-    cpu_factor: float = None,
-    max_memory: int = None,
+    htcondor_cpu_hours: float | None = None,
+    htcondor_max_memory: int | None = None,
+    htcondor_runtime_seconds: float | None = None,
 ) -> JobUpdate:
     """
     Update a job's state to error.
-    
+
     admin_error - an error message targeted towards a service admin.
     user_error - an error message targeted towards a service user. Leave as null to indicate there
         is no error message available appropriate for a user.
     traceback - the error traceback.
     log_files_path - the path to any logs for the job.
-    cpu_hours - the job cpu hours, if available.
-    cpu_factor - the job's cpu usage factor, if available.
-    max_memory - the maximum memory used by the job in bytes, if available.
-    """ 
+    htcondor_cpu_hours/max_memory/runtime_seconds - HTCondor-reported stats stored in
+        htcondor_details, if available.
+    """
     flds = {
         UpdateField.ADMIN_ERROR: _require_string(admin_error, "admin_error"),
         UpdateField.TRACEBACK: traceback,
@@ -480,12 +531,7 @@ def error(
     }
     if user_error is not None:
         flds[UpdateField.USER_ERROR] = user_error
-    if cpu_hours is not None:  # Don't potentially clobber cpu hours if there's nothing to write
-        flds[UpdateField.CPU_HOURS] = _check_num(cpu_hours, "cpu_hours", minimum=0)
-    if cpu_factor is not None:
-        flds[UpdateField.CPU_FACTOR] = _check_num(cpu_factor, "cpu_factor", minimum=0)
-    if max_memory is not None:
-        flds[UpdateField.MAX_MEMORY] = _check_num(max_memory, "max_memory", minimum=0)
+    _set_htcondor_stats(flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds)
     return JobUpdate(
         )._set_new_state(models.JobState.ERROR
         )._set_disallowed_current_states(
@@ -536,6 +582,7 @@ def refdata_complete() -> RefdataUpdate:
 def refdata_error(
     user_error: str,
     admin_error: str,
+    *,
     traceback: str = None,
 ) -> RefdataUpdate:
     """

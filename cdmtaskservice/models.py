@@ -56,6 +56,9 @@ FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_HTC_DETAILS = "htcondor_details"
 FLD_HTC_DETAILS_CLUSTER_ID = "cluster_id"
+FLD_HTC_DETAILS_CPU_HOURS = "cpu_hours"
+FLD_HTC_DETAILS_MAX_MEM = "max_memory"
+FLD_HTC_DETAILS_RUNTIME = "runtime_seconds"
 FLD_JOB_CPU_HOURS = "cpu_hours"
 FLD_JOB_CPU_FACTOR = "cpu_factor"
 FLD_JOB_MAX_MEM = "max_memory"
@@ -1063,6 +1066,20 @@ class HTCondorDetails(BaseModel):
         description="Cluster IDs for a HTCondor job. Multiple cluster IDs indicate job "
             + "retries after failures."
     )]
+    cpu_hours: Annotated[float | None, Field(
+        examples=[1.5],
+        description="Total CPU hours used by the job as reported by HTCondor, if available."
+    )] = None
+    max_memory: Annotated[int | None, Field(
+        examples=[536870912],
+        description="Peak memory in bytes used by any single container as reported by HTCondor, "
+            + "if available."
+    )] = None
+    runtime_seconds: Annotated[float | None, Field(
+        examples=[1800.0],
+        description="Total wall-clock runtime in seconds across all containers as reported by "
+            + "HTCondor, if available."
+    )] = None
 
 
 class AdminJobStateTransition(JobStateTransition):

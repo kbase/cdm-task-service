@@ -25,6 +25,7 @@ from cdmtaskservice.update_state import (
     submitted_nersc_refdata_download,
     submitting_job,
     submitting_upload,
+    submitting_upload_with_exit_code,
 )
 
 from conftest import (
@@ -337,7 +338,7 @@ async def test_update_job(mondb):
     dt2 = dt + datetime.timedelta(minutes=1)
     await mc.update_job_state("foo", submitting_job(), dt, "tid1")  # no fields
     await mc.update_job_state("foo", submitted_jaws_job("123"), dt, "tid2")  # array field
-    await mc.update_job_state("foo", submitting_upload(1.2), dt2, "tid3")  # std field
+    await mc.update_job_state("foo", submitting_upload(cpu_hours=1.2), dt2, "tid3")  # std field
     await mc.update_job_state("foo", error("adminerr", user_error="usererr"), dt2, "tid4")
     got = await mc.get_job("foo", as_admin=True)
     
@@ -375,6 +376,34 @@ async def test_update_job(mondb):
         ),
     ])
     assert got == expected
+
+
+async def test_update_job_htcondor_stats(mondb):
+    """HTCondor stats fields are written to htcondor_details subdocument and read back correctly."""
+    mc = await MongoDAO.create(mondb)
+    # HTCondorDetails.cluster_id is required, so initialise it before setting the stats fields
+    job = _BASEJOB.model_copy(deep=True)
+    job.htcondor_details = models.HTCondorDetails(cluster_id=[42])
+    await mc.save_job(job)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_job_state(
+        "foo",
+        error(
+            "admin err",
+            htcondor_cpu_hours=1.5,
+            htcondor_max_memory=536870912,
+            htcondor_runtime_seconds=1800.0,
+        ),
+        dt, "tid1",
+    )
+    got = await mc.get_job("foo", as_admin=True)
+    assert got.htcondor_details == models.HTCondorDetails(
+        cluster_id=[42],
+        cpu_hours=1.5,
+        max_memory=536870912,
+        runtime_seconds=1800.0,
+    )
 
 
 async def test_update_job_fail(mondb):
@@ -849,6 +878,36 @@ async def test_update_subjob(mondb):
         models.JobStateTransition(state=models.JobState.ERROR, time=dt2),
     ])
     assert got == expected
+
+
+async def test_update_subjob_container_stats(mondb):
+    """Container stats (exit_code, cpu_hours, max_memory, runtime_seconds) stored in subjob."""
+    mc = await MongoDAO.create(mondb)
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    dt2 = dt + datetime.timedelta(minutes=1)
+    sj = models.SubJob(
+        id="bar",
+        sub_id=0,
+        state=models.JobState.JOB_SUBMITTED,
+        transition_times=[models.JobStateTransition(state=models.JobState.JOB_SUBMITTED, time=dt)],
+    )
+    await mc.initialize_subjobs([sj])
+    await mc.update_subjob_state(
+        "bar", 0,
+        submitting_upload_with_exit_code(0, cpu_hours=1.5, max_memory=536870912, runtime_seconds=1800.0),
+        dt2,
+    )
+
+    expected = sj.model_copy(deep=True)
+    expected.state = models.JobState.UPLOAD_SUBMITTING
+    expected.exit_code = 0
+    expected.cpu_hours = 1.5
+    expected.max_memory = 536870912
+    expected.runtime_seconds = 1800.0
+    expected.transition_times.append(
+        models.JobStateTransition(state=models.JobState.UPLOAD_SUBMITTING, time=dt2)
+    )
+    assert await mc.get_subjob("bar", 0) == expected
 
 
 async def test_update_subjob_fail(mondb):
