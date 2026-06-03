@@ -30,7 +30,7 @@ dependencies = [
     "python-json-logger==4.1.0",
     "requests==2.33.1",
     "sfapi-client==0.4.1",
-    "uvicorn[standard]==0.46.0",
+    "uvicorn[standard]==0.48.0",
     "yarl==1.23.0",
 ]
 
