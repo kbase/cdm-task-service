@@ -666,10 +666,11 @@ async def test_recover_job_no_cluster_id(force, cluster_ids):
 
 
 @pytest.mark.parametrize("force", [False, True])
-async def test_recover_job_other_proc_state(force):
+@pytest.mark.parametrize("bad_state", [ProcState.OTHER, ProcState.CANCELED])
+async def test_recover_job_unexpected_proc_state(force, bad_state):
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job()
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.OTHER]
+    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, bad_state]
 
     with pytest.raises(
         InvalidJobStateError,
@@ -1141,7 +1142,8 @@ async def test_recover_job_standard_advance_parent_update_none():
 async def test_recover_job_standard_running_only():
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job()
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.RUNNING]
+    condor.get_cluster_proc_states.return_value = [
+        ProcState.COMPLETE, ProcState.RUNNING, ProcState.QUEUED]
 
     with pytest.raises(
         InvalidJobStateError,
@@ -1232,10 +1234,11 @@ async def test_recover_job_standard_held_lock_fails():
     mongo.recover_job.assert_not_called()
 
 
-async def test_recover_job_force_running_containers():
+@pytest.mark.parametrize("running_state", [ProcState.RUNNING, ProcState.QUEUED])
+async def test_recover_job_force_running_containers(running_state):
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.RECOVERING)
-    condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.RUNNING]
+    condor.get_cluster_proc_states.return_value = [ProcState.HELD, running_state]
 
     with pytest.raises(
         InvalidJobStateError,

@@ -499,13 +499,16 @@ class KBaseRunner(JobFlow):
         proc_states = await self._condor.get_cluster_proc_states(
             job.htcondor_details.cluster_id[-1]
         )
-        if ProcState.OTHER in set(proc_states):
+        if {ProcState.OTHER, ProcState.CANCELED} & set(proc_states):
             raise InvalidJobStateError(
                 "External processor contains processes in an unexpected state. Unable to recover "
                 "job."
             )
         held = [i for i, s in enumerate(proc_states) if s == ProcState.HELD]
-        running = [i for i, s in enumerate(proc_states) if s == ProcState.RUNNING]
+        running = [
+            i for i, s in enumerate(proc_states)
+            if s in {ProcState.RUNNING, ProcState.QUEUED}
+        ]
         return held, running
 
     @staticmethod

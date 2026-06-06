@@ -278,14 +278,14 @@ async def test_get_cluster_proc_states_mixed():
     schedd.query.return_value = [
         {"ProcId": 0, "JobStatus": 2},  # Running → RUNNING
         {"ProcId": 1, "JobStatus": 5},  # Held → HELD
-        {"ProcId": 2, "JobStatus": 1},  # Idle → RUNNING
+        {"ProcId": 2, "JobStatus": 1},  # Idle → QUEUED
         {"ProcId": 3, "JobStatus": 7},  # Suspended → OTHER
         {"ProcId": 4, "JobStatus": 2},  # Running, will be overridden by history
         {"ProcId": 6, "JobStatus": 6},  # Transferring Output → RUNNING
     ]
     schedd.history.return_value = [
         {"ProcId": 4, "JobStatus": 4},  # Completed → COMPLETE (overrides active)
-        {"ProcId": 5, "JobStatus": 3},  # Removed → OTHER
+        {"ProcId": 5, "JobStatus": 3},  # Removed → CANCELED
     ]
 
     states = await client.get_cluster_proc_states(123)
@@ -293,10 +293,10 @@ async def test_get_cluster_proc_states_mixed():
     assert states == [
         ProcState.RUNNING,   # ProcId 0: Running
         ProcState.HELD,      # ProcId 1: Held
-        ProcState.RUNNING,   # ProcId 2: Idle
+        ProcState.QUEUED,    # ProcId 2: Idle
         ProcState.OTHER,     # ProcId 3: Suspended
         ProcState.COMPLETE,  # ProcId 4: overridden by history
-        ProcState.OTHER,     # ProcId 5: Removed (history only)
+        ProcState.CANCELED,  # ProcId 5: Removed (history only)
         ProcState.RUNNING,   # ProcId 6: Transferring Output
     ]
     schedd.query.assert_called_once_with(
