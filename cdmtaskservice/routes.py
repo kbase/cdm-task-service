@@ -75,6 +75,33 @@ def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
         raise UnauthorizedError(err_msg)
 
 
+async def _get_job_and_flow(
+    r: Request, job_id: str, user: CTSUser, *, as_admin: bool = False
+) -> tuple[models.AdminJobDetails, JobFlow]:
+    """
+    Fetch a job with admin-level details and its associated flow. The returned job is an
+    AdminJobDetails instance and MUST NOT be returned directly to non-admin users.
+    """
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_job(job_id, user, as_admin=as_admin, admin_details=True)
+    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    return job, flow
+
+
+async def _admin_get_job_and_flow(
+    r: Request, job_id: str, user: CTSUser, action: str
+) -> tuple[models.AdminJobDetails, JobFlow]:
+    """
+    Verify the user is a full admin, then fetch the job with admin-level details and its
+    associated flow. The returned job is an AdminJobDetails instance and MUST NOT be returned
+    directly to non-admin users.
+
+    action - the action being performed, appended to "Only service administrators can ".
+    """
+    _ensure_admin(user, f"Only service administrators can {action}")
+    return await _get_job_and_flow(r, job_id, user, as_admin=True)
+
+
 class Root(BaseModel):
     """ General information about the service """
     service_name: Annotated[str, Field(description="The name of the service.")]
@@ -450,9 +477,7 @@ async def cancel_job(
     job_id: _ANN_JOB_ID,
     user: CTSUser=Depends(_AUTH),
 ):
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, admin_details=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    job, flow = await _get_job_and_flow(r, job_id, user)
     await flow.cancel_job(job)
 
 
@@ -800,10 +825,7 @@ async def _get_containers(
 ) -> models.SubJob | list[models.SubJob]:
     # TODO CODE could use same strategy as exit codes to allow getting state w/o flow availble.
     #           Since admin only don't worry about it for now
-    _ensure_admin(user, "Only service administrators get container state.")
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    job, flow = await _admin_get_job_and_flow(r, job_id, user, "get container state.")
     return await flow.get_subjobs(job.id, container_num=container_num)
 
 
@@ -828,10 +850,7 @@ async def get_job_runner_status(
     )] = 0,
     user: CTSUser=Depends(_AUTH),
 ) -> dict[str, Any]:
-    _ensure_admin(user, "Only service administrators can get job runner status.")
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    job, flow = await _admin_get_job_and_flow(r, job_id, user, "get job runner status.")
     return await flow.get_job_external_runner_status(job, container_number=container_number)
 
 
@@ -847,10 +866,7 @@ async def cancel_job_admin(
     job_id: _ANN_JOB_ID,
     user: CTSUser=Depends(_AUTH),
 ):
-    _ensure_admin(user, "Only service administrators can cancel any job.")
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    job, flow = await _admin_get_job_and_flow(r, job_id, user, "cancel any job.")
     await flow.cancel_job(job)
 
 
@@ -883,10 +899,7 @@ async def recover_job_admin(
     )] = False,
     user: CTSUser=Depends(_AUTH),
 ):
-    _ensure_admin(user, "Only service administrators can recover jobs.")
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    job, flow = await _admin_get_job_and_flow(r, job_id, user, "recover jobs.")
     await flow.recover_job(job, force=force)
 
 
@@ -1197,8 +1210,8 @@ async def download_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    runner, job = await _callback_handling(r, "Download", job_id)
-    await runner.download_complete(job)
+    job, flow = await _callback_handling(r, "Download", job_id)
+    await flow.download_complete(job)
 
 
 @ROUTER_CALLBACKS.get(
@@ -1236,8 +1249,8 @@ async def job_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    runner, job = await _callback_handling(r, "Remote job", job_id)
-    await runner.job_complete(job)
+    job, flow = await _callback_handling(r, "Remote job", job_id)
+    await flow.job_complete(job)
 
 
 @ROUTER_CALLBACKS.get(
@@ -1252,8 +1265,8 @@ async def upload_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    runner, job = await _callback_handling(r, "Upload", job_id)
-    await runner.upload_complete(job)
+    job, flow = await _callback_handling(r, "Upload", job_id)
+    await flow.upload_complete(job)
 
 
 @ROUTER_CALLBACKS.get(
@@ -1268,8 +1281,8 @@ async def error_log_upload_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    runner, job = await _callback_handling(r, "Error log upload", job_id)
-    await runner.error_log_upload_complete(job)
+    job, flow = await _callback_handling(r, "Error log upload", job_id)
+    await flow.error_log_upload_complete(job)
 
 
 async def _callback_handling(
@@ -1279,9 +1292,7 @@ async def _callback_handling(
         f"{operation} reported as complete for job {job_id}",
         extra={logfields.JOB_ID: job_id},
     )
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, SERVICE_USER, as_admin=True)
-    return await appstate.jobflow_manager.get_flow(job.job_input.cluster), job
+    return await _get_job_and_flow(r, job_id, SERVICE_USER, as_admin=True)
 
 
 @ROUTER_EXTERNAL_EXEC.put(
@@ -1303,9 +1314,7 @@ async def update_container(
     user: CTSUser=Depends(_AUTH),
 ):
     _ensure_executor(user, "Only external job executors can update container state.")
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, as_admin=True)
-    flow =  await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    job, flow = await _get_job_and_flow(r, job_id, user, as_admin=True)
     await flow.update_container_state(job, container_num, new_state, update)
 
 
