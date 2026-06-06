@@ -38,16 +38,18 @@ _JOB_STATUS_HELD = 5
 
 class ProcState(enum.Enum):
     """ The state of an HTCondor process. """
+    QUEUED = "queued"
     RUNNING = "running"
     HELD = "held"
     COMPLETE = "complete"
+    CANCELED = "canceled"
     OTHER = "other"
 
 
 _JOB_STATUS_TO_PROC_STATE = {
-    1:                ProcState.RUNNING,   # Idle
+    1:                ProcState.QUEUED,    # Idle
     2:                ProcState.RUNNING,   # Running
-    3:                ProcState.OTHER,     # Removed
+    3:                ProcState.CANCELED,  # Removed
     4:                ProcState.COMPLETE,  # Completed
     _JOB_STATUS_HELD: ProcState.HELD,      # Held
     6:                ProcState.RUNNING,   # Transferring Output
