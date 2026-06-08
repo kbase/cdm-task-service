@@ -860,6 +860,41 @@ class JobState(str, Enum):
         return self in self.canceling_states()
 
 
+class ExternalRunnerState(str, Enum):
+    """ The state of a job or container on an external compute resource. """
+    NONE = "none"
+    """ The job has not yet been submitted to the external runner. """
+    CREATED = "created"
+    """ The job has been created in the external runner but not yet queued. """
+    QUEUED = "queued"
+    """ The job is queued and waiting for resources. """
+    RUNNING = "running"
+    """ The job is actively running. """
+    COMPLETE = "complete"
+    """ The job completed successfully. """
+    ERROR = "error"
+    """ The job completed with an error. """
+    CANCELED = "canceled"
+    """ The job was canceled. """
+    UNKNOWN = "unknown"
+    """ The external runner reported a state this service does not recognize. """
+
+
+class ExternalRunnerStatus(BaseModel):
+    """ The status of a job as reported by an external compute resource. """
+    manages_containers: Annotated[bool, Field(
+        description="True if the external runner manages all containers as a unit, "
+            + "in which case `states` contains a single entry for the whole job. "
+            + "False if each entry in `states` corresponds to one container."
+    )]
+    states: Annotated[list[ExternalRunnerState], Field(
+        examples=[[ExternalRunnerState.RUNNING]],
+        description="The state of the job or its containers on the external runner. "
+            + "When `manages_containers` is true this list has a single entry for the whole job. "
+            + "When false, each entry corresponds to one container, indexed by container number.",
+    )]
+
+
 class JobStateTransition(BaseModel):
     """
     Denotes the new state and the entry time when a state change occurs.

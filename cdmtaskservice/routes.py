@@ -481,6 +481,26 @@ async def cancel_job(
     await flow.cancel_job(job)
 
 
+@ROUTER_JOBS.get(
+    "/{job_id}/runner_status",
+    response_model=models.ExternalRunnerStatus,
+    summary="Get a job's external runner status",
+    description="Get the status of the job as reported by the external job runner, "
+        + "rather than the service's own state tracking.\n\n"
+        + "**This endpoint is rarely needed.** The standard job state endpoint is faster, "
+        + "cheaper, and sufficient for normal polling. Call this endpoint only when you suspect "
+        + "the service's job state has desynced from the external runner — for example, "
+        + "if a job appears stuck in the service but you want to verify what the runner reports."
+)
+async def get_job_runner_status(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    user: CTSUser=Depends(_AUTH),
+) -> models.ExternalRunnerStatus:
+    job, flow = await _get_job_and_flow(r, job_id, user)
+    return await flow.get_job_external_runner_status(job)
+
+
 _ANN_IMAGE_ID = Annotated[str, FastPath(
     openapi_examples={"image with digest": {
         "value": "ghcr.io/kbase/collections:checkm2_0.1.6"
@@ -839,7 +859,7 @@ async def _get_containers(
         + "If the job has not yet been submitted to an external runner, "
         + "an empty dictionary is returned."
 )
-async def get_job_runner_status(
+async def get_job_runner_details_admin(
     r: Request,
     job_id: _ANN_JOB_ID,
     container_number: Annotated[int, Query(
@@ -851,7 +871,7 @@ async def get_job_runner_status(
     user: CTSUser=Depends(_AUTH),
 ) -> dict[str, Any]:
     job, flow = await _admin_get_job_and_flow(r, job_id, user, "get job runner status.")
-    return await flow.get_job_external_runner_status(job, container_number=container_number)
+    return await flow.get_job_external_runner_details(job, container_number=container_number)
 
 
 @ROUTER_ADMIN.put(
