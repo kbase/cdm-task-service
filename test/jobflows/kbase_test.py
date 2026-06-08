@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import call, create_autospec, patch, PropertyMock
 
 from cdmtaskservice.condor.client import CondorClient, ProcState
+from cdmtaskservice import sites
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError, UnsupportedOperationError
 from cdmtaskservice.jobflows.kbase import KBaseRunner
@@ -108,6 +109,71 @@ def _make_runner(_timestamp_fn=None):
         _trans_id_fn=lambda: _TRANS_ID,
     )
     return runner, mongo, condor, updates, s3
+
+
+######
+# get_job_external_runner_status tests
+######
+
+
+async def test_get_job_external_runner_status_null_job():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^job is required$"):
+        await runner.get_job_external_runner_status(None)
+
+
+async def test_get_job_external_runner_status_wrong_cluster():
+    runner, _, _, _, _ = _make_runner()
+    job = models.AdminJobDetails.model_construct(
+        job_input=models.JobInput.model_construct(cluster=sites.Cluster.PERLMUTTER_JAWS),
+    )
+    with pytest.raises(ValueError, match="Job cluster must match"):
+        await runner.get_job_external_runner_status(job)
+
+
+@pytest.mark.parametrize("htcondor_details", [None, models.HTCondorDetails(cluster_id=[])])
+async def test_get_job_external_runner_status_not_submitted(htcondor_details):
+    runner, _, _, _, _ = _make_runner()
+    job = models.AdminJobDetails.model_construct(
+        job_input=models.JobInput.model_construct(num_containers=3, cluster=sites.Cluster.KBASE),
+        htcondor_details=htcondor_details,
+    )
+    result = await runner.get_job_external_runner_status(job)
+    assert result == models.ExternalRunnerStatus(
+        manages_containers=False,
+        states=[models.ExternalRunnerState.NONE] * 3,
+    )
+
+
+async def test_get_job_external_runner_status_submitted():
+    """All ProcState values map to the correct ExternalRunnerState."""
+    runner, _, condor, _, _ = _make_runner()
+    job = models.AdminJobDetails.model_construct(
+        id="jid",
+        job_input=models.JobInput.model_construct(num_containers=6, cluster=sites.Cluster.KBASE),
+        htcondor_details=models.HTCondorDetails(cluster_id=[123]),
+    )
+    condor.get_cluster_proc_states.return_value = [
+        ProcState.QUEUED,
+        ProcState.RUNNING,
+        ProcState.HELD,
+        ProcState.COMPLETE,
+        ProcState.CANCELED,
+        ProcState.OTHER,
+    ]
+    result = await runner.get_job_external_runner_status(job)
+    assert result == models.ExternalRunnerStatus(
+        manages_containers=False,
+        states=[
+            models.ExternalRunnerState.QUEUED,
+            models.ExternalRunnerState.RUNNING,
+            models.ExternalRunnerState.ERROR,
+            models.ExternalRunnerState.COMPLETE,
+            models.ExternalRunnerState.CANCELED,
+            models.ExternalRunnerState.UNKNOWN,
+        ],
+    )
+    condor.get_cluster_proc_states.assert_called_once_with(123)
 
 
 ######

@@ -52,6 +52,23 @@ from cdmtaskservice.update_state import (
 )
 from cdmtaskservice.user import CTSUser
 
+
+_JAWS_STATUS_TO_EXTERNAL = {
+    jaws_client.JAWSStatus.CREATED:  models.ExternalRunnerState.CREATED,
+    jaws_client.JAWSStatus.QUEUED:   models.ExternalRunnerState.QUEUED,
+    jaws_client.JAWSStatus.RUNNING:  models.ExternalRunnerState.RUNNING,
+    jaws_client.JAWSStatus.COMPLETE: models.ExternalRunnerState.COMPLETE,
+    jaws_client.JAWSStatus.UNKNOWN:  models.ExternalRunnerState.UNKNOWN,
+}
+
+_JAWS_RESULT_TO_EXTERNAL = {
+    jaws_client.JAWSResult.SUCCESS:      models.ExternalRunnerState.COMPLETE,
+    jaws_client.JAWSResult.FAILED:       models.ExternalRunnerState.ERROR,
+    jaws_client.JAWSResult.CANCELED:     models.ExternalRunnerState.CANCELED,
+    jaws_client.JAWSResult.SYSTEM_ERROR: models.ExternalRunnerState.ERROR,
+}
+
+
 # Not sure how other flows would work and how much code they might share. For now just make
 # this work and pull it apart / refactor later.
 
@@ -169,17 +186,17 @@ class NERSCJAWSRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
-    async def get_job_external_runner_status(
+    async def get_job_external_runner_details(
         self,
         job: models.AdminJobDetails,
         container_number: int = None
     ) -> dict[str, Any]:
         """
         Get details from the external job runner (JAWS in this case) about the job.
-        
+
         Returns the JAWS status dict as returned from JAWS. If the job has not yet been submitted
         to JAWS, an empty dict is returned.
-        
+
         Since the containers are managed by JAWS, the container number is ignored.
         """
         # Could get the jaws logs and return container specific info in the future
@@ -190,6 +207,36 @@ class NERSCJAWSRunner(JobFlow):
             return {}  # job not submitted yet
         jaws_id = job.jaws_details.run_id[-1]  # if run_id exists, there's a job ID in it
         return await self._jaws.status(jaws_id)
+
+    async def get_job_external_runner_status(
+        self,
+        job: models.AdminJobDetails,
+    ) -> models.ExternalRunnerStatus:
+        """
+        Get the abstracted status of the job on JAWS.
+
+        Since JAWS manages all containers as a unit, the result is always a single-element list.
+        If the job has not yet been submitted to JAWS, returns NONE. If the job is done, the
+        state is derived from the JAWS result; otherwise it is derived from the JAWS status.
+        """
+        _not_falsy(job, "job")
+        if job.job_input.cluster != self.CLUSTER:
+            raise ValueError(f"Job cluster must match {self.CLUSTER}")
+        if not job.jaws_details or not job.jaws_details.run_id:
+            return models.ExternalRunnerStatus(
+                manages_containers=True,
+                states=[models.ExternalRunnerState.NONE],
+            )
+        jaws_id = job.jaws_details.run_id[-1]
+        jaws_job = await self._jaws.status(jaws_id)
+        if jaws_client.is_done(jaws_job):
+            state = _JAWS_RESULT_TO_EXTERNAL[jaws_client.result(jaws_job)]
+        else:
+            state = _JAWS_STATUS_TO_EXTERNAL[jaws_client.status(jaws_job)]
+        return models.ExternalRunnerStatus(
+            manages_containers=True,
+            states=[state],
+        )
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """

@@ -45,6 +45,15 @@ from cdmtaskservice.user import CTSUser
 from cdmtaskservice.timestamp import utcdatetime
 
 
+_PROC_STATE_TO_EXTERNAL = {
+    ProcState.QUEUED:    models.ExternalRunnerState.QUEUED,
+    ProcState.RUNNING:   models.ExternalRunnerState.RUNNING,
+    ProcState.HELD:      models.ExternalRunnerState.ERROR,
+    ProcState.COMPLETE:  models.ExternalRunnerState.COMPLETE,
+    ProcState.CANCELED:  models.ExternalRunnerState.CANCELED,
+    ProcState.OTHER:     models.ExternalRunnerState.UNKNOWN,
+}
+
 _RETRY_DELAY_SEC = 5 * 60  # configurable?
 _RECOVERY_COOLDOWN = datetime.timedelta(minutes=10)
 _STANDARD_PATH_STATES = frozenset(update_state.JOB_COMPLETED_PATH[1:-1])
@@ -204,14 +213,14 @@ class KBaseRunner(JobFlow):
             return await self._mongo.get_subjob(job_id, container_num)
         return await self._mongo.get_subjobs(job_id)
 
-    async def get_job_external_runner_status(
+    async def get_job_external_runner_details(
         self,
         job: models.AdminJobDetails,
         container_number: int = 0
     ) -> dict[str, Any]:
         """
         Get details from the external job runner (HTCondor in this case) about the job.
-        
+
         Returns the HTC ClassAd dict as returned from HTC. If the job has not yet been submitted
         to HTC, an empty dict is returned.
         """
@@ -229,6 +238,32 @@ class KBaseRunner(JobFlow):
         # if cluster_id exists, there's a cluster ID in it
         cluster_id = job.htcondor_details.cluster_id[-1]
         return await self._condor.get_container_classad(cluster_id, container_number)
+
+    async def get_job_external_runner_status(
+        self,
+        job: models.AdminJobDetails,
+    ) -> models.ExternalRunnerStatus:
+        """
+        Get the abstracted status of the job on HTCondor.
+
+        Returns one ExternalRunnerState per container. If the job has not yet been submitted
+        to HTCondor, all containers are reported as NONE.
+        """
+        _not_falsy(job, "job")
+        if job.job_input.cluster != self.CLUSTER:
+            raise ValueError(f"Job cluster must match {self.CLUSTER}")
+        if not job.htcondor_details or not job.htcondor_details.cluster_id:
+            n = job.job_input.num_containers
+            return models.ExternalRunnerStatus(
+                manages_containers=False,
+                states=[models.ExternalRunnerState.NONE] * n,
+            )
+        cluster_id = job.htcondor_details.cluster_id[-1]
+        proc_states = await self._condor.get_cluster_proc_states(cluster_id)
+        return models.ExternalRunnerStatus(
+            manages_containers=False,
+            states=[_PROC_STATE_TO_EXTERNAL[s] for s in proc_states],
+        )
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
         """

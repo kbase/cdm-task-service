@@ -17,6 +17,70 @@ from cdmtaskservice.arg_checkers import require_string as _require_string, not_f
 from cdmtaskservice.jaws.config import JAWSConfig
 
 
+class JAWSStatus(Enum):
+    """
+    Represents the status of the JAWS job. The many JAWS states are condensed to a small
+    number of states.
+    """
+    CREATED = 1
+    QUEUED = 2
+    RUNNING = 3
+    COMPLETE = 4
+    UNKNOWN = 100
+
+
+_JAWS_DONE = "done"
+
+
+# Maps condensed status enums to the raw JAWS states they cover.
+# States like "succeeded", "failed", and "cancelled" map to RUNNING rather than
+# a terminal status because JAWS always continues post-execution processing (output downloads,
+# permission fixes, notifications) before reaching "done" — nothing before "done" is truly final.
+# Also, most of these states are rare / very quick. In most cases the job is in queued, running,
+# or done.
+_ENUM_TO_STATUS = {
+    JAWSStatus.CREATED: ["created"],
+    JAWSStatus.QUEUED: [
+        "upload queued",
+        "uploading",
+        "upload failed",
+        "upload inactive",
+        "upload complete",
+        "ready",
+        "submitted",
+        "submission failed",
+        "queued",
+    ],
+    JAWSStatus.RUNNING: [
+        "running",
+        "succeeded",
+        "failed",
+        "complete",
+        "finished",
+        "cancel",
+        "cancelled",
+        "download queued",
+        "downloading",
+        "download failed",
+        "download inactive",
+        "download complete",
+        "download skipped",
+        "fix perms queued",
+        "fix perms complete",
+        "fix perms failed",
+        "sync complete",
+        "slack succeeded",
+        "slack failed",
+        "post succeeded",
+        "post failed",
+    ],
+    JAWSStatus.COMPLETE: [_JAWS_DONE],
+}
+
+
+_STATUS_TO_ENUM = {s: e for e, statuses in _ENUM_TO_STATUS.items() for s in statuses}
+
+
 class JAWSResult(Enum):
     """
     An enum of the possible JAWS result states.
@@ -37,6 +101,16 @@ class JAWSResult(Enum):
     """
     A JAWS system error prevented the job from running. Likely no output files are available.
     """
+
+
+_JAWS_RES_TO_ENUM = {
+    "succeeded": JAWSResult.SUCCESS,
+    "failed": JAWSResult.FAILED,
+    "cancelled": JAWSResult.CANCELED,
+    None: JAWSResult.SYSTEM_ERROR,
+}
+# TODO RELIABILITY cancelled is a possible result, but can be cancelled and still be null.
+#                  if null, check the jaws logs for a cancelled state
 
 
 class JAWSClient:
@@ -172,17 +246,15 @@ def is_done(job: dict[str, Any]) -> bool:
     """
     Given a JAWS status dictionary, determine if the job is done.
     """
-    return job["status"] == "done"
+    return job["status"] == _JAWS_DONE
 
 
-_JAWS_RES_TO_ENUM = {
-    "succeeded": JAWSResult.SUCCESS,
-    "failed": JAWSResult.FAILED,
-    "cancelled": JAWSResult.CANCELED,
-    None: JAWSResult.SYSTEM_ERROR,
-}
-# TODO RELIABILITY cancelled is a possible result, but can be cancelled and still be null.
-#                  if null, check the jaws logs for a cancelled state
+def status(job: dict[str, Any]) -> JAWSStatus:
+    """
+    Given a JAWS status dictionary, return the condensed status. Returns JAWSStatus.UNKNOWN
+    if the JAWS state is not recognized.
+    """
+    return _STATUS_TO_ENUM.get(job["status"], JAWSStatus.UNKNOWN)
 
 
 def result(job: dict[str, Any]) -> JAWSResult:
