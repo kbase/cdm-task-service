@@ -409,6 +409,7 @@ async def test_update_job_htcondor_stats(mondb):
 async def test_update_job_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)
+    initial_doc = await mondb.jobs.find_one({"id": "foo"})
     
     u = submitting_job()
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
@@ -424,10 +425,11 @@ async def test_update_job_fail(mondb):
     ))
     await fail_update_job(mc, "foo", submitting_upload(), dt, tid, InvalidJobStateError(
         "Job 'foo' is in state 'download_submitted', expected 'job_submitted'"
-    ))
+    ), expected_actual_state=models.JobState.DOWNLOAD_SUBMITTED)
     await fail_update_job(mc, "foo", u, _SAFE_TIME + datetime.timedelta(milliseconds=-1), tid,
         ValueError("Job 'foo' last update time is after the provided time")
     )
+    assert await mondb.jobs.find_one({"id": "foo"}) == initial_doc
 
 
 async def test_update_job_and_subjob_fail_update_to_error(mondb):
@@ -445,17 +447,27 @@ async def test_update_job_and_subjob_fail_update_to_error(mondb):
     ):
         await mondb.jobs.update_one({}, {"$set": {"state": state.value}})
         await mondb.subjobs.update_one({}, {"$set": {"state": state.value}})
+        expected_job_doc = await mondb.jobs.find_one({"id": "foo"})
+        expected_subjob_doc = await mondb.subjobs.find_one(
+            {"id": "bar", "sub_id": 0}
+        )
         await fail_update_job(mc, "foo", u, dt, tid, InvalidJobStateError(
             f"Job 'foo' is in disallowed state {state.value!r}"
-        ))
+        ), expected_actual_state=state)
+        assert await mondb.jobs.find_one({"id": "foo"}) == expected_job_doc
         await fail_update_subjob(mc, "bar", 0, u, dt, InvalidJobStateError(
             f"Job 'bar' with subjob ID 0 is in disallowed state {state.value!r}"
-        ))
+        ), expected_actual_state=state)
+        assert await mondb.subjobs.find_one(
+            {"id": "bar", "sub_id": 0}
+        ) == expected_subjob_doc
 
 
-async def fail_update_job(mc, job_id, update, dt, tid, expected):
-    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$"):
+async def fail_update_job(mc, job_id, update, dt, tid, expected, expected_actual_state=None):
+    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$") as exc_info:
         await mc.update_job_state(job_id, update, dt, tid)
+    if isinstance(expected, InvalidJobStateError):
+        assert exc_info.value.actual_state == expected_actual_state
 
 
 def check_job_retry_fields(jobdoc: dict[str, Any]):
@@ -577,14 +589,17 @@ async def test_update_job_recovery_cooldown_state_mismatch(mondb):
     await mc.save_job(_BASEJOB)  # state = DOWNLOAD_SUBMITTED
 
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    initial_doc = await mondb.jobs.find_one({"id": "foo"})
     # force_recovering requires current state = RECOVERING, but job is DOWNLOAD_SUBMITTED
     with pytest.raises(InvalidJobStateError, match=(
         r"^Job 'foo' is in state 'download_submitted', expected 'recovering'$"
-    )):
+    )) as exc_info:
         await mc.update_job_state(
             "foo", force_recovering(), dt, "tid1",
             recovery_cooldown=datetime.timedelta(minutes=10),
         )
+    assert exc_info.value.actual_state == models.JobState.DOWNLOAD_SUBMITTED
+    assert await mondb.jobs.find_one({"id": "foo"}) == initial_doc
 
 
 async def test_update_job_recovery_cooldown_fail(mondb):
@@ -599,6 +614,7 @@ async def test_update_job_recovery_cooldown_fail(mondb):
 
     # force recovery within the cooldown window should fail; remaining = 10min - 5min = 5min
     dt2 = dt + datetime.timedelta(minutes=4)
+    expected_doc = await mondb.jobs.find_one({"id": "foo"})
     with pytest.raises(JobRecoveryError, match=(
         r"^Job 'foo' was recovered too recently; "
         r"must wait 0:06:00 more before forcing recovery again$"
@@ -607,9 +623,7 @@ async def test_update_job_recovery_cooldown_fail(mondb):
             "foo", force_recovering(), dt2, "tid2",
             recovery_cooldown=datetime.timedelta(minutes=10),
         )
-    # job state should be unchanged
-    job = await mondb.jobs.find_one({"id": "foo"})
-    assert job["_last_recover"] == dt
+    assert await mondb.jobs.find_one({"id": "foo"}) == expected_doc
 
     # force recovery after the cooldown window should succeed
     dt3 = dt + datetime.timedelta(minutes=11)
@@ -913,6 +927,7 @@ async def test_update_subjob_container_stats(mondb):
 async def test_update_subjob_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB1])
+    initial_doc = await mondb.subjobs.find_one({"id": "bar", "sub_id": 0})
     
     u = submitted_download()
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
@@ -930,15 +945,18 @@ async def test_update_subjob_fail(mondb):
     ))
     await fail_update_subjob(mc, "bar", 0, submitting_upload(), dt, InvalidJobStateError(
         "Job 'bar' with subjob ID 0 is in state 'created', expected 'job_submitted'"
-    ))
+    ), expected_actual_state=models.JobState.CREATED)
     await fail_update_subjob(mc, "bar", 0, u, _SAFE_TIME + datetime.timedelta(milliseconds=-1),
         ValueError("Job 'bar' with subjob ID 0 last update time is after the provided time")
     )
+    assert await mondb.subjobs.find_one({"id": "bar", "sub_id": 0}) == initial_doc
 
 
-async def fail_update_subjob(mc, job_id, subjob_id, update, dt, expected):
-    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$"):
+async def fail_update_subjob(mc, job_id, subjob_id, update, dt, expected, expected_actual_state=None):
+    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$") as exc_info:
         await mc.update_subjob_state(job_id, subjob_id, update, dt)
+    if isinstance(expected, InvalidJobStateError):
+        assert exc_info.value.actual_state == expected_actual_state
 
 
 async def test_subjob_hidden_fields(mondb):

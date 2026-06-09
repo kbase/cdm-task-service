@@ -23,7 +23,6 @@ from cdmtaskservice.arg_checkers import (
     contains_control_characters as _contains_control_characters,
     not_falsy as _not_falsy,
 )
-from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.s3.paths import validate_path, validate_bucket_name, S3PathSyntaxError
 from cdmtaskservice import sites
 from cdmtaskservice.timestamp import utcdatetime
@@ -1324,7 +1323,7 @@ class _ReferenceDataRoot(S3File, RegistrationInfo):
         for s in self.statuses:
             if s.cluster == cluster:
                 return s
-        raise InvalidReferenceDataStateError(
+        raise NoRefdataClusterStatusError(
             f"No status for cluster {cluster.value} for reference data {self.id}"
         )
 
@@ -1365,3 +1364,7 @@ class RefdataUpdate(BaseModel):
     traceback: Annotated[str | None, Field(
         description="The error's traceback. Ignored if the new state isn't the error state."
     )] = None
+
+
+class NoRefdataClusterStatusError(Exception):
+    """ Raised when reference data has no status entry for a requested cluster. """

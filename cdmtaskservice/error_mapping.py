@@ -23,6 +23,7 @@ from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
 from cdmtaskservice.jobflows.flowmanager import InactiveJobFlowError, UnavailableJobFlowError
 from cdmtaskservice.job_state import NoJobLogsError
+from cdmtaskservice.models import NoRefdataClusterStatusError
 from cdmtaskservice.mongo import (
     ImageTagExistsError,
     ImageDigestExistsError,
@@ -81,6 +82,7 @@ _ERR_MAP = {
     InvalidJobStateError: ErrorMapping(ErrorType.INVALID_JOB_STATE, _H400),
     JobRecoveryError: ErrorMapping(ErrorType.JOB_RECOVERY, _H400),
     InvalidReferenceDataStateError: ErrorMapping(ErrorType.INVALID_REFDATA_STATE, _H400),
+    NoRefdataClusterStatusError: ErrorMapping(ErrorType.NO_REFDATA_CLUSTER_STATUS, _H400),
     UnavailableResourceError: ErrorMapping(ErrorType.RESOURCE_UNAVAILABLE, _H400),
     InactiveJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_INACTIVE, _H400),
     UnavailableJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_UNAVAILABLE, _H400),
