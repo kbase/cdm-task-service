@@ -72,6 +72,9 @@ class ErrorType(Enum):
     INVALID_REFDATA_STATE =      (30400, "Invalid reference data state")
     """ The reference data is not in the correct state for the requested operation. """
 
+    NO_REFDATA_CLUSTER_STATUS =  (30410, "No cluster status for reference data")
+    """ The reference data has no status entry for the requested cluster. """
+
     NOT_FOUND =                  (40000, "Not Found")
     """ The requested resource was not found. """
     

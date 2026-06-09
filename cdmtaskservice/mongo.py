@@ -6,7 +6,7 @@ DAO for MongoDB.
 
 import datetime
 from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
-from pymongo import IndexModel, ASCENDING, DESCENDING
+from pymongo import IndexModel, ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from pymongo.results import DeleteResult
 from typing import Any, Awaitable, Callable, Coroutine, Iterable
@@ -443,50 +443,39 @@ class MongoDAO:
         update: JobUpdate,
         subjob_id: int | None = None,
         recovery_cooldown: datetime.timedelta | None = None,
-    ) -> dict[str, Any]:
-        query = {
-            models.FLD_COMMON_ID: _require_string(job_id, "job_id"),
-            _FLD_UPDATE_TIME: {"$lte": _not_falsy(time, "time")},
-        }
-        if update.current_state:
-            query[models.FLD_COMMON_STATE] = update.current_state.value
-        if update.disallowed_current_states:
-            query[models.FLD_COMMON_STATE] = {"$nin": [
-                s.value for s in update.disallowed_current_states
-            ]}
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Returns (filter_, apply_cond) for use in a conditional aggregation pipeline."""
+        filter_ = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
         if subjob_id is not None:
-            query[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
+            filter_[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
+        conditions = [{"$lte": [f"${_FLD_UPDATE_TIME}", _not_falsy(time, "time")]}]
+        if update.current_state:
+            conditions.append(
+                {"$eq": [f"${models.FLD_COMMON_STATE}", update.current_state.value]}
+            )
+        if update.disallowed_current_states:
+            conditions.append({"$not": [{"$in": [
+                f"${models.FLD_COMMON_STATE}",
+                [s.value for s in update.disallowed_current_states],
+            ]}]})
         if recovery_cooldown and recovery_cooldown > datetime.timedelta(0):
-            query["$or"] = [
-                {_FLD_LAST_RECOVER: {"$exists": False}},
-                {_FLD_LAST_RECOVER: {"$lte": time - recovery_cooldown}},
-            ]
-        return query
+            conditions.append({"$or": [
+                {"$eq": [f"${_FLD_LAST_RECOVER}", None]},
+                {"$lte": [f"${_FLD_LAST_RECOVER}", time - recovery_cooldown]},
+            ]})
+        apply_cond = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+        return filter_, apply_cond
 
-    async def _update_job_state_diagnose_err(
+    def _update_job_state_check_result(
         self,
-        col: AsyncIOMotorCollection,
+        pre_doc: dict | None,
         job_id: str,
         update: JobUpdate,
         time: datetime.datetime,
         subjob_id: int | None = None,
         recovery_cooldown: datetime.timedelta | None = None,
     ):
-        if not recovery_cooldown or recovery_cooldown <= datetime.timedelta(0):
-            recovery_cooldown = None
-        id_query = {models.FLD_COMMON_ID: job_id}
-        if subjob_id is not None:
-            id_query[models.FLD_SUBJOB_ID] = subjob_id
-        doc = await col.find_one(
-            id_query,
-            {
-                _FLD_MONGO_ID: 0,
-                models.FLD_COMMON_STATE: 1,
-                _FLD_LAST_RECOVER: 1,
-                _FLD_UPDATE_TIME: 1,
-            },
-        )
-        if doc is None:
+        if pre_doc is None:
             if subjob_id is not None:
                 raise NoSuchSubJobError(
                     f"No job with ID '{job_id}' and subjob ID {subjob_id} exists"
@@ -495,36 +484,28 @@ class MongoDAO:
         entity = f"Job '{job_id}'"
         if subjob_id is not None:
             entity = f"Job '{job_id}' with subjob ID {subjob_id}"
-        actual_state = doc[models.FLD_COMMON_STATE]
-        if update.current_state and actual_state != update.current_state.value:
+        actual_state = models.JobState(pre_doc[models.FLD_COMMON_STATE])
+        if update.current_state and actual_state != update.current_state:
             raise InvalidJobStateError(
-                f"{entity} is in state {actual_state!r}, "
-                f"expected {update.current_state.value!r}"
+                f"{entity} is in state {actual_state.value!r}, "
+                f"expected {update.current_state.value!r}",
+                actual_state=actual_state,
             )
-        if (
-            update.disallowed_current_states
-            and actual_state in {s.value for s in update.disallowed_current_states}
-        ):
-            raise InvalidJobStateError(f"{entity} is in disallowed state {actual_state!r}")
-        if doc[_FLD_UPDATE_TIME] > time:
-            raise ValueError(
-                f"{entity} last update time is after the provided time"
+        if update.disallowed_current_states and actual_state in update.disallowed_current_states:
+            raise InvalidJobStateError(
+                f"{entity} is in disallowed state {actual_state.value!r}",
+                actual_state=actual_state,
             )
-        # State constraints and timestamp are satisfied; the cooldown is the only
-        # remaining cause. Both recovery_cooldown and _last_recover are guaranteed
-        # non-null — unless the document changed between the original query and this
-        # diagnostic read (race condition), in which case we can't diagnose further.
-        last_recover = doc.get(_FLD_LAST_RECOVER)
-        if not recovery_cooldown or last_recover is None:
-            raise ValueError(  # This is too painful to test
-                f"{entity}: could not diagnose update failure; "
-                "the document may have changed between queries"
-            )
-        remaining = (last_recover + recovery_cooldown) - time
-        raise JobRecoveryError(
-            f"Job '{job_id}' was recovered too recently; "
-            f"must wait {remaining} more before forcing recovery again"
-        )
+        if pre_doc[_FLD_UPDATE_TIME] > time:
+            raise ValueError(f"{entity} last update time is after the provided time")
+        if recovery_cooldown and recovery_cooldown > datetime.timedelta(0):
+            last_recover = pre_doc.get(_FLD_LAST_RECOVER)
+            if last_recover and last_recover + recovery_cooldown > time:
+                remaining = (last_recover + recovery_cooldown) - time
+                raise JobRecoveryError(
+                    f"Job '{job_id}' was recovered too recently; "
+                    f"must wait {remaining} more before forcing recovery again"
+                )
 
     async def _update_job_state(
         self,
@@ -536,15 +517,10 @@ class MongoDAO:
         subjob_id: int | None = None,
         recovery_cooldown: datetime.timedelta | None = None,
     ):
-        set_ = {}
-        push = {}
-        for fld, val in _not_falsy(update, "update").update_fields.items():
-            jbfld, ispush = self._FIELD_TO_KEY_AND_PUSH[fld]
-            target = push if ispush else set_
-            target[jbfld] = val
-        query = self._update_job_state_query(job_id, time, update, subjob_id, recovery_cooldown)
-        if recovery_cooldown is not None:
-            set_[_FLD_LAST_RECOVER] = time
+        _not_falsy(update, "update")
+        filter_, apply_cond = self._update_job_state_query(
+            job_id, time, update, subjob_id, recovery_cooldown
+        )
         transition = {
             models.FLD_COMMON_STATE_TRANSITION_STATE: update.new_state.value,
             models.FLD_COMMON_STATE_TRANSITION_TIME: time,
@@ -553,22 +529,41 @@ class MongoDAO:
         if trans_id:
             transition.update({
                 models.FLD_JOB_STATE_TRANSITION_ID: trans_id,
-                models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT: False
+                models.FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT: False,
             })
-        res = await col.update_one(
-            query,
-            {
-                "$push": push | {models.FLD_COMMON_TRANS_TIMES: transition},
-                "$set": set_ | {
-                    models.FLD_COMMON_STATE: update.new_state.value,
-                    _FLD_UPDATE_TIME: time,  # for indexing last state change time
-                }
+        apply_sets: dict[str, Any] = {
+            models.FLD_COMMON_STATE: update.new_state.value,
+            _FLD_UPDATE_TIME: time,  # for indexing last state change time
+            models.FLD_COMMON_TRANS_TIMES: {"$concatArrays": [
+                f"${models.FLD_COMMON_TRANS_TIMES}", [transition]
+            ]},
+        }
+        for fld, val in update.update_fields.items():
+            jbfld, ispush = self._FIELD_TO_KEY_AND_PUSH[fld]
+            if ispush:
+                apply_sets[jbfld] = {"$concatArrays": [{"$ifNull": [f"${jbfld}", []]}, [val]]}
+            else:
+                apply_sets[jbfld] = val
+        if recovery_cooldown is not None:
+            apply_sets[_FLD_LAST_RECOVER] = time
+        pipeline = [{"$set": {
+            key: {"$cond": [apply_cond, val, f"${key}"]}
+            for key, val in apply_sets.items()
+        }}]
+        pre_doc = await col.find_one_and_update(
+            filter_,
+            pipeline,
+            projection={
+                _FLD_MONGO_ID: 0,
+                models.FLD_COMMON_STATE: 1,
+                _FLD_UPDATE_TIME: 1,
+                _FLD_LAST_RECOVER: 1,
             },
+            return_document=ReturnDocument.BEFORE,
         )
-        if not res.matched_count:
-            await self._update_job_state_diagnose_err(
-                col, job_id, update, time, subjob_id, recovery_cooldown
-            )
+        self._update_job_state_check_result(
+            pre_doc, job_id, update, time, subjob_id, recovery_cooldown
+        )
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
