@@ -436,18 +436,14 @@ class MongoDAO:
             # admin details but not file paths. May need to separate files from jobs...
             await operation(self._doc_to_job(j, as_admin=True))
 
-    def _update_job_state_query(
+    def _update_job_state_condition(
         self,
-        job_id: str,
         time: datetime.datetime,
         update: JobUpdate,
-        subjob_id: int | None = None,
         recovery_cooldown: datetime.timedelta | None = None,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Returns (filter_, apply_cond) for use in a conditional aggregation pipeline."""
-        filter_ = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
-        if subjob_id is not None:
-            filter_[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
+    ) -> dict[str, Any]:
+        """Returns the apply_cond expression for use in a conditional aggregation pipeline."""
+        _not_falsy(update, "update")
         conditions = [{"$lte": [f"${_FLD_UPDATE_TIME}", _not_falsy(time, "time")]}]
         if update.current_state:
             conditions.append(
@@ -463,8 +459,7 @@ class MongoDAO:
                 {"$eq": [f"${_FLD_LAST_RECOVER}", None]},
                 {"$lte": [f"${_FLD_LAST_RECOVER}", time - recovery_cooldown]},
             ]})
-        apply_cond = {"$and": conditions} if len(conditions) > 1 else conditions[0]
-        return filter_, apply_cond
+        return {"$and": conditions} if len(conditions) > 1 else conditions[0]
 
     def _update_job_state_check_result(
         self,
@@ -507,20 +502,14 @@ class MongoDAO:
                     f"must wait {remaining} more before forcing recovery again"
                 )
 
-    async def _update_job_state(
+    def _update_job_state_pipeline(
         self,
-        col: AsyncIOMotorCollection,
-        job_id: str,
+        apply_cond: dict[str, Any],
         update: JobUpdate,
         time: datetime.datetime,
         trans_id: str | None = None,
-        subjob_id: int | None = None,
         recovery_cooldown: datetime.timedelta | None = None,
-    ):
-        _not_falsy(update, "update")
-        filter_, apply_cond = self._update_job_state_query(
-            job_id, time, update, subjob_id, recovery_cooldown
-        )
+    ) -> list[dict[str, Any]]:
         transition = {
             models.FLD_COMMON_STATE_TRANSITION_STATE: update.new_state.value,
             models.FLD_COMMON_STATE_TRANSITION_TIME: time,
@@ -544,12 +533,30 @@ class MongoDAO:
                 apply_sets[jbfld] = {"$concatArrays": [{"$ifNull": [f"${jbfld}", []]}, [val]]}
             else:
                 apply_sets[jbfld] = val
-        if recovery_cooldown is not None:
+        if recovery_cooldown is not None:  # timedelta(0) records recovery but enforces no cooldown
             apply_sets[_FLD_LAST_RECOVER] = time
-        pipeline = [{"$set": {
+        return [{"$set": {
             key: {"$cond": [apply_cond, val, f"${key}"]}
             for key, val in apply_sets.items()
         }}]
+
+    async def _update_job_state(
+        self,
+        col: AsyncIOMotorCollection,
+        job_id: str,
+        update: JobUpdate,
+        time: datetime.datetime,
+        trans_id: str | None = None,
+        subjob_id: int | None = None,
+        recovery_cooldown: datetime.timedelta | None = None,
+    ):
+        filter_ = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
+        if subjob_id is not None:
+            filter_[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
+        apply_cond = self._update_job_state_condition(time, update, recovery_cooldown)
+        pipeline = self._update_job_state_pipeline(
+            apply_cond, update, time, trans_id, recovery_cooldown
+        )
         pre_doc = await col.find_one_and_update(
             filter_,
             pipeline,
