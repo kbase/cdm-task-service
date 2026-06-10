@@ -125,7 +125,8 @@ class KBaseRunner(JobFlow):
                 update.admin_error, traceback=update.traceback
             ),
         }
-        # Handlers for parent job updates when all sujobs have reached a state 
+        # Handlers for non-terminal parent job updates when all subjobs have reached a state.
+        # COMPLETE and ERROR are handled directly in _run_terminal_update.
         self._job_state_update_fns = {
             models.JobState.JOB_SUBMITTING: lambda job, t: self._updates.update_job_state(
                 job.id, update_state.submitting_job(), update_time=t
@@ -144,8 +145,6 @@ class KBaseRunner(JobFlow):
                 self._updates.update_job_state(
                     job.id, update_state.submitted_error_processing(), update_time=t
                 ),
-            models.JobState.COMPLETE: lambda job, t: self._complete_job(job, update_time=t),
-            models.JobState.ERROR: lambda job, t: self._error_job(job),
         }
 
     async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
@@ -332,7 +331,7 @@ class KBaseRunner(JobFlow):
     ):
         """
         Update the state of a container / subjob.
-        
+
         job - the parent job of the container.
         container_num - the container / subjob number.
         update - the new state for the container.
@@ -350,27 +349,46 @@ class KBaseRunner(JobFlow):
         # Just throw the error, don't error out the job. If the caller thinks this is an error
         # they can try and set the error state.
         await self._mongo.update_subjob_state(job.id, container_num, mongo_update, update.time)
-        # Allow the method to return so failures in setting the parent job state
-        # don't kill the container. This is particularly important during job recovery
-        # where all state updates will fail
-        # Also, for terminal transitions, the call needs to return so the container can exit
-        await self._coman.run_coroutine(self._update_parent_job(job, new_state, update))
-
-    async def _update_parent_job(
-        self,
-        job: models.AdminJobDetails,
-        new_state: models.JobState,
-        update: models.ContainerUpdate,
-    ):
         try:
             parent_update = await self._updates.get_parent_job_update(job, new_state)
             if not parent_update:
                 return
+            if parent_update.state.is_terminal():
+                # Return first so the executor (condor job) can exit before we query condor
+                # stats — querying while the job is still running causes a deadlock.
+                # This doesn't introduce a race with adjacent states from the same container:
+                # the preceding state is non-terminal and therefore applied synchronously before
+                # the executor receives its response and can send the terminal state, and there
+                # is no subsequent state because terminal states are final.
+                await self._coman.run_coroutine(self._run_terminal_update(job, parent_update))
+                return
+            # Synchronous so the executor can't race ahead with the next state update before
+            # this parent update is applied.
             # If this fails all the containers have transitioned to an equivalent state and
             # so the job is stuck, so we error out if possible.
             await self._job_state_update_fns[parent_update.state](job, parent_update.time)
         except Exception as e:
-            await self._updates.handle_exception(e, job.id, "updating job state")
+            # Don't propagate errors back to the executor — the subjob update succeeded and
+            # the executor should continue running. Parent job errors are handled separately.
+            await self._handle_parent_update_error(e, job.id)
+
+    async def _run_terminal_update(
+        self, job: models.AdminJobDetails, parent_update
+    ):
+        try:
+            if parent_update.state == models.JobState.ERROR:
+                await self._error_job(job)
+            else:
+                await self._complete_job(job, update_time=parent_update.time)
+        except Exception as e:
+            await self._handle_parent_update_error(e, job.id)
+
+    async def _handle_parent_update_error(self, e: Exception, job_id: str):
+        if isinstance(e, InvalidJobStateError) and e.actual_state == models.JobState.RECOVERING:
+            # Job is being recovered — parent updates are expected to fail while the recovery
+            # lock is held. The executor should keep running.
+            return
+        await self._updates.handle_exception(e, job_id, "updating job state")
 
     async def _submitting_stats_handler(self, job, update_time, update_fn):
         cpu_hours, max_memory, cpu_factor = await self._get_subjob_stats(job)
@@ -581,7 +599,10 @@ class KBaseRunner(JobFlow):
                 update_time = parent_update.time
             else:
                 update_time = self._timestamp_fn()
-            await self._job_state_update_fns[state](job, update_time)
+            if state == models.JobState.COMPLETE:
+                await self._complete_job(job, update_time=update_time)
+            else:
+                await self._job_state_update_fns[state](job, update_time)
 
     async def _acquire_recovery_lock(
         self, job: models.AdminJobDetails, force: bool = False
