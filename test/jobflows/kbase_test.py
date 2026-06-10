@@ -520,6 +520,89 @@ async def test_update_container_state_parent_update_fails():
     updates.handle_exception.assert_called_once_with(exc, "jid", "updating job state")
 
 
+async def test_update_container_state_recovering_ignored_nonterminal():
+    """Parent job is in RECOVERING — InvalidJobStateError from parent update is swallowed."""
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.JOB_SUBMITTING, _T
+    )
+    updates.update_job_state.side_effect = InvalidJobStateError(
+        "job is recovering", actual_state=models.JobState.RECOVERING
+    )
+
+    await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.submitting_job(), _T
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.JOB_SUBMITTING)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_job(), update_time=_T
+    )
+    updates.handle_exception.assert_not_called()
+
+
+async def test_update_container_state_recovering_ignored_terminal():
+    """Parent job is in RECOVERING during terminal update — swallowed in coroutine."""
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+    mongo.get_exit_codes_for_subjobs.return_value = [1, 1]
+    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    updates.update_job_state.side_effect = InvalidJobStateError(
+        "job is recovering", actual_state=models.JobState.RECOVERING
+    )
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.update_container_state(
+            _JOB, 0, models.JobState.ERROR,
+            _update(admin_error="container failed", traceback="Traceback: container failed"),
+        )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0,
+        update_state.error("container failed", traceback="Traceback: container failed"), _T,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
+    condor.get_cluster_classads.assert_called_once_with(123)
+    mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Check subjobs / containers for admin errors",
+            user_error=(
+                "At least one container exited with a non-zero "
+                "error code. Please examine the logs for details."
+            ),
+            log_files_path="logs/jid",
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
+        ),
+    )
+    updates.handle_exception.assert_not_called()
+
+
+async def test_update_container_state_invalid_state_error_nonterminal():
+    """InvalidJobStateError with non-RECOVERING actual_state is forwarded to handle_exception."""
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.JOB_SUBMITTING, _T
+    )
+    err = InvalidJobStateError("wrong state", actual_state=models.JobState.ERROR)
+    updates.update_job_state.side_effect = err
+
+    await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.submitting_job(), _T
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.JOB_SUBMITTING)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_job(), update_time=_T
+    )
+    updates.handle_exception.assert_called_once_with(err, "jid", "updating job state")
+
+
 async def test_update_container_state_unsupported_state():
     """A state not in _SUBJOB_STATE_TO_UPDATE_FUNC raises before touching the DB."""
     runner, mongo, _, updates, _ = _make_runner()
