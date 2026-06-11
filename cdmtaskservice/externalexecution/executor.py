@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import time
 import traceback
+import uuid
 from typing import TextIO, Any
 
 from cdmtaskservice.argument_generator import ArgumentGenerator
@@ -58,6 +59,19 @@ class Executor:
         if self._s3cli:
             await self._s3cli.close()
     
+    async def _heartbeat_loop(self, job_id: uuid.UUID):
+        url = (
+            f"{self._url}/external_exec/jobs/{job_id}"
+            f"/container/{self._cfg.container_number}/heartbeat"
+        )
+        while True:
+            try:
+                async with self._sess.put(url) as resp:
+                    await self._check_resp(resp, "Heartbeat failed")
+            except Exception as e:
+                self._logr.warning("Heartbeat failed, will retry next interval: %s", e)
+            await asyncio.sleep(self._cfg.heartbeat_interval_min * 60)
+
     async def execute(self) -> int:
         """
         Run the executor.
@@ -65,24 +79,31 @@ class Executor:
         occurred other than a container error.
         """
         await self._log_service_ver()
-        # If we can't get the job, we presumably can't update the job either, so we just throw any
-        # exceptions.
-        job = await self._get_job()
-        # we assume here that the service has already error checked the job input
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop(self._cfg.job_id))
         try:
-            self._args = ArgumentGenerator(job).get_container_arguments(self._cfg.container_number)
-            await self._download_files(job)
-            await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
-            result = await self._run_container(job)  # updates to JOB_SUBMITTED
-            if result.exit_code > 0:
-                await self._process_error_state(job, result)
-            else:
-                await self._process_complete_state(job, result)
-            return result.exit_code
-        except Exception as e:
-            self._logr.exception(f"Job failed: {e}")
-            await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
-            return -1
+            # If we can't get the job, we presumably can't update the job either,
+            # so we just throw any exceptions.
+            job = await self._get_job()
+            # we assume here that the service has already error checked the job input
+            try:
+                self._args = ArgumentGenerator(job).get_container_arguments(
+                    self._cfg.container_number
+                )
+                await self._download_files(job)
+                await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
+                result = await self._run_container(job)  # updates to JOB_SUBMITTED
+                if result.exit_code > 0:
+                    await self._process_error_state(job, result)
+                else:
+                    await self._process_complete_state(job, result)
+                return result.exit_code
+            except Exception as e:
+                self._logr.exception(f"Job failed: {e}")
+                await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
+                return -1
+        finally:
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
     
     async def _check_resp(self, resp: aiohttp.ClientResponse, action: str
     ) -> dict[str, Any] | None:

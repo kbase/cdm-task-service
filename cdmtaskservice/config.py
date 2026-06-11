@@ -78,6 +78,8 @@ class CDMTaskServiceConfig:
         data is stored.
     external_executor_job_update_timeout_min: int - the number of minutes to wait when trying
         to update the job state in the service before failing.
+    external_executor_heartbeat_interval_min: int - how often, in minutes, the external executor
+        sends a liveness heartbeat to the service.
     external_executor_mount_prefix_override: str - a host container mount path prefix override
         in the form <prefix of path to replace>:<path to replace prefix with>
     code_archive_path: str - the local path to the tgz code archive.
@@ -202,6 +204,9 @@ class CDMTaskServiceConfig:
         self.external_executor_mount_prefix_override = _get_string_optional(
             config, _SEC_EXTERNAL_EXEC, "mount_prefix_override"
         )
+        self.external_executor_heartbeat_interval_min = _get_int_required(
+            config, _SEC_EXTERNAL_EXEC, "heartbeat_interval_min", minimum=1
+        )
         self.code_archive_path = _get_string_required(config, _SEC_EXTERNAL_EXEC, "archive_path")
         self.code_archive_url_override = _get_string_optional(
             config, _SEC_EXTERNAL_EXEC, "archive_url_override"
@@ -323,7 +328,8 @@ class CDMTaskServiceConfig:
             additional_path=self.condor_addl_path,
             cache_dir=self.condor_cache_dir,
             use_S3_external_url=self.condor_use_s3_external_url,
-            refdata_host_path=self.refdata_host_path
+            refdata_host_path=self.refdata_host_path,
+            heartbeat_interval_min=self.external_executor_heartbeat_interval_min,
         )
 
     def print_config(self, output: TextIO):
@@ -364,6 +370,8 @@ class CDMTaskServiceConfig:
                 + str(self.external_executor_job_update_timeout_min),
             "External executor mount prefix override: " +
                 f"{self.external_executor_mount_prefix_override}",  # f string in case it's None
+            "External executor heartbeat interval (min): "
+                + str(self.external_executor_heartbeat_interval_min),
             f"Code archive path: {self.code_archive_path}",
             f"Code archive url override: {self.code_archive_url_override}",
             f"S3 URL: {self.s3_url}",

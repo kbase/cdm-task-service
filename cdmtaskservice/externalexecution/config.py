@@ -105,6 +105,12 @@ class Config(BaseSettings):
         description="A host container mount path prefix override in the form " +
             "<prefix of path to replace>:<path to replace prefix with>",
     )] = None
+    heartbeat_interval_min: Annotated[int, Field(
+        validation_alias="HEARTBEAT_INTERVAL_MIN",
+        examples=[5],
+        description="How often, in minutes, to send a liveness heartbeat to the service.",
+        ge=1,
+    )]
     
     @model_validator(mode='after')
     def check_field_groups(self):
@@ -133,6 +139,7 @@ class Config(BaseSettings):
         "refdata_host_path",
         "job_update_timeout_min",
         "mount_prefix_override",
+        "heartbeat_interval_min",
     }
     
     def safe_dump(self) -> dict[str, Any]:
