@@ -943,6 +943,27 @@ class MongoDAO:
             subjob_id=_check_num(subjob_id, "subjob_id", minimum=0)
         )
 
+    async def update_subjob_heartbeat(
+        self,
+        job_id: str,
+        subjob_id: int,
+        time: datetime.datetime,
+    ):
+        """
+        Update the heartbeat time for a subjob.
+
+        job_id - the job ID.
+        subjob_id - the subjob ID.
+        time - the heartbeat time.
+        """
+        _require_string(job_id, "job_id")
+        _check_num(subjob_id, "subjob_id", minimum=0)
+        _not_falsy(time, "time")
+        await self._col_subjobs.update_one(
+            {models.FLD_COMMON_ID: job_id, models.FLD_SUBJOB_ID: subjob_id},
+            {"$set": {models.FLD_SUBJOB_HEARTBEAT: time}},
+        )
+
     async def recover_subjobs(
         self,
         job_id: str,
@@ -1008,6 +1029,7 @@ class MongoDAO:
                 models.FLD_COMMON_ERROR,
                 models.FLD_COMMON_ADMIN_ERROR,
                 models.FLD_COMMON_TRACEBACK,
+                models.FLD_SUBJOB_HEARTBEAT,
             ]},
         ]
         result = await self._col_subjobs.update_many(

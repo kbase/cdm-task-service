@@ -68,6 +68,7 @@ FLD_SUBJOB_ID = "sub_id"
 FLD_SUBJOB_EXIT_CODE = "exit_code"
 FLD_SUBJOB_EXIT_CODE_HISTORY = "exit_code_history"
 FLD_SUBJOB_RUNTIME = "runtime_seconds"
+FLD_SUBJOB_HEARTBEAT = "heartbeat"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
@@ -966,6 +967,10 @@ class SubJob(_JobBase):
     runtime_seconds: Annotated[float | None, Field(
         examples=[42.3],
         description="The wall-clock runtime of the container in seconds, if available."
+    )] = None
+    heartbeat: Annotated[datetime.datetime | None, Field(
+        description="The last time the external executor running this container sent a heartbeat."
+            "null if the job has not yet started on the external runner"
     )] = None
 
 

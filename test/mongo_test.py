@@ -959,6 +959,43 @@ async def fail_update_subjob(mc, job_id, subjob_id, update, dt, expected, expect
         assert exc_info.value.actual_state == expected_actual_state
 
 
+async def test_update_subjob_heartbeat(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB1])
+
+    hb_time = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_subjob_heartbeat("bar", 0, hb_time)
+
+    got = await mc.get_subjob("bar", 0)
+    expected = _BASESUBJOB1.model_copy(deep=True)
+    expected.heartbeat = hb_time
+    assert got == expected
+
+    hb_time2 = hb_time + datetime.timedelta(minutes=5)
+    await mc.update_subjob_heartbeat("bar", 0, hb_time2)
+
+    got = await mc.get_subjob("bar", 0)
+    expected.heartbeat = hb_time2
+    assert got == expected
+
+
+async def test_update_subjob_heartbeat_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB1])
+    hb_time = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+
+    await _heartbeat_fail(mc, None, 0, hb_time, ValueError("job_id is required"))
+    await _heartbeat_fail(mc, "  \t  ", 0, hb_time, ValueError("job_id is required"))
+    await _heartbeat_fail(mc, "bar", None, hb_time, ValueError("subjob_id is required"))
+    await _heartbeat_fail(mc, "bar", -1, hb_time, ValueError("subjob_id must be >= 0"))
+    await _heartbeat_fail(mc, "bar", 0, None, ValueError("time is required"))
+
+
+async def _heartbeat_fail(mc, job_id, subjob_id, time, expected):
+    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$"):
+        await mc.update_subjob_heartbeat(job_id, subjob_id, time)
+
+
 async def test_subjob_hidden_fields(mondb):
     # Tests that internal fields are set correctly when performinging actions
     # on a subjob. Does not test other job saving / updating code.
@@ -1006,6 +1043,7 @@ async def test_recover_subjobs(mondb):
     sj0.exit_code = 5
     sj0.admin_error = "some admin error"
     sj0.traceback = "some traceback"
+    sj0.heartbeat = dt2
     sj2 = _BASESUBJOB3.model_copy(deep=True)
     sj2.admin_error = "sj2 error"
     await mc.initialize_subjobs([sj0, _BASESUBJOB2, sj2])
@@ -1040,6 +1078,7 @@ async def test_recover_subjobs(mondb):
     assert "exit_code" not in raw0
     assert "admin_error" not in raw0
     assert "traceback" not in raw0
+    assert "heartbeat" not in raw0
 
     # subjob 2: no exit_code → null recorded in history; admin_error captured
     got2 = await mc.get_subjob("bar", 2)
