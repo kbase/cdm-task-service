@@ -28,6 +28,7 @@ def _make_client():
         additional_path=None,
         cache_dir="/cache",
         refdata_host_path="/refdata",
+        heartbeat_interval_min=5,
     )
     s3config = create_autospec(S3Config, spec_set=True, instance=True)
     client = CondorClient(schedd, config, s3config)

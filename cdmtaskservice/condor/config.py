@@ -88,6 +88,11 @@ class CondorClientConfig(BaseModel):
     """
     The root directory of the refdata storage location on the job container host.
     """
+
+    heartbeat_interval_min: Annotated[int, Field(ge=1)]
+    """
+    How often, in minutes, the external executor sends a liveness heartbeat to the service.
+    """
     
     @field_validator("refdata_host_path", mode="after")
     @classmethod

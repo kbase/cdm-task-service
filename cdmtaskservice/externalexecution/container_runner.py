@@ -2,6 +2,7 @@
 Utility to run a container image.
 """
 
+import asyncio
 from dataclasses import dataclass
 import datetime
 import docker
@@ -183,7 +184,8 @@ async def run_container(
         if post_start_callback:
             await post_start_callback
 
-        stats = _stream_data(container, stdout_path, stderr_path)
+        # Run in a thread so the event loop stays free during container execution
+        stats = await asyncio.to_thread(_stream_data, container, stdout_path, stderr_path)
 
         result = container.wait()
         exit_code = result["StatusCode"]
