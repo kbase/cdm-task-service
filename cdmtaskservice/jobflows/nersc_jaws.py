@@ -506,6 +506,12 @@ class NERSCJAWSRunner(JobFlow):
             logpath=os.path.join(self._s3logdir, job.id),
         )
 
+    async def update_subjob_heartbeat(self, job_id: str, container_num: int):
+        """ Throws an error as this method is unsupported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+
     async def update_container_state(
         self,
         job: models.AdminJobDetails,

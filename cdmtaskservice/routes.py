@@ -1339,6 +1339,24 @@ async def update_container(
 
 
 @ROUTER_EXTERNAL_EXEC.put(
+    "/external_exec/jobs/{job_id}/container/{container_num}/heartbeat",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Send a container heartbeat",
+    description="Not for general use.\n\nRecord a liveness heartbeat for a running container.",
+)
+async def container_heartbeat(
+    r: Request,
+    job_id: _ANN_JOB_ID,
+    container_num: _ANN_CONTAINER_NUMBER,
+    user: CTSUser = Depends(_AUTH),
+):
+    _ensure_executor(user, "Only external job executors can send heartbeats.")
+    job, flow = await _get_job_and_flow(r, job_id, user, as_admin=True)
+    await flow.update_subjob_heartbeat(job.id, container_num)
+
+
+@ROUTER_EXTERNAL_EXEC.put(
     "/external_exec/refdata/{refdata_id}/{cluster}/update/{new_state}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,

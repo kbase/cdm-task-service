@@ -322,6 +322,17 @@ class KBaseRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
+    async def update_subjob_heartbeat(self, job_id: str, container_num: int):
+        """
+        Record a liveness heartbeat for a running container / subjob.
+
+        job_id - the job ID.
+        container_num - the container / subjob number.
+        """
+        _require_string(job_id, "job_id")
+        _check_num(container_num, "container_num", minimum=0)
+        await self._mongo.update_subjob_heartbeat(job_id, container_num, self._timestamp_fn())
+
     async def update_container_state(
         self,
         job: models.AdminJobDetails,
@@ -388,7 +399,7 @@ class KBaseRunner(JobFlow):
             # Job is being recovered — parent updates are expected to fail while the recovery
             # lock is held. The executor should keep running.
             return
-        await self._updates.handle_exception(e, job_id, "updating job state")
+        await self._updates.handle_exception(e, job_id, "updating state for")
 
     async def _submitting_stats_handler(self, job, update_time, update_fn):
         cpu_hours, max_memory, cpu_factor = await self._get_subjob_stats(job)

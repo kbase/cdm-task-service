@@ -177,6 +177,29 @@ async def test_get_job_external_runner_status_submitted():
 
 
 ######
+# update_subjob_heartbeat tests
+######
+
+
+async def test_update_subjob_heartbeat_bad_args():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^job_id is required$"):
+        await runner.update_subjob_heartbeat(None, 0)
+    with pytest.raises(ValueError, match="^job_id is required$"):
+        await runner.update_subjob_heartbeat("  \t  ", 0)
+    with pytest.raises(ValueError, match="^container_num is required$"):
+        await runner.update_subjob_heartbeat("jid", None)
+    with pytest.raises(ValueError, match="^container_num must be >= 0$"):
+        await runner.update_subjob_heartbeat("jid", -1)
+
+
+async def test_update_subjob_heartbeat():
+    runner, mongo, _, _, _ = _make_runner()
+    await runner.update_subjob_heartbeat("jid", 0)
+    mongo.update_subjob_heartbeat.assert_called_once_with("jid", 0, _T)
+
+
+######
 # update_container_state tests
 ######
 
@@ -517,7 +540,7 @@ async def test_update_container_state_parent_update_fails():
     exc = updates.handle_exception.call_args.args[0]
     assert isinstance(exc, Exception)
     assert str(exc) == "db error"
-    updates.handle_exception.assert_called_once_with(exc, "jid", "updating job state")
+    updates.handle_exception.assert_called_once_with(exc, "jid", "updating state for")
 
 
 async def test_update_container_state_recovering_ignored_nonterminal():
@@ -600,7 +623,7 @@ async def test_update_container_state_invalid_state_error_nonterminal():
     updates.update_job_state.assert_called_once_with(
         "jid", update_state.submitting_job(), update_time=_T
     )
-    updates.handle_exception.assert_called_once_with(err, "jid", "updating job state")
+    updates.handle_exception.assert_called_once_with(err, "jid", "updating state for")
 
 
 async def test_update_container_state_unsupported_state():
@@ -719,7 +742,7 @@ async def test_update_container_state_condor_stats_timeout():
     exc = updates.handle_exception.call_args.args[0]
     assert isinstance(exc, IOError)
     assert str(exc) == "Condor jobs didn't complete for 60s after all executors sent termination"
-    updates.handle_exception.assert_called_once_with(exc, "jid", "updating job state")
+    updates.handle_exception.assert_called_once_with(exc, "jid", "updating state for")
 
 
 async def test_update_container_state_complete_job_no_outputs():
