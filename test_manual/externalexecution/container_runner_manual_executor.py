@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from cdmtaskservice.externalexecution.container_runner import run_container
+from cdmtaskservice.externalexecution.container_runner import ContainerCreator
 import asyncio
 import logging
 
@@ -18,20 +18,17 @@ MOUNTS = {
 
 logging.basicConfig(level=logging.INFO)
 
-async def start_cb():
-    print("started container")
-
-
 async def main():
-    res = await run_container(
+    creator = ContainerCreator()
+    runner = await creator.start_container(
         IMAGE,
         STDOUT,
         STDERR,
         command=ARGS,
         mounts=MOUNTS,
-        post_start_callback=start_cb(),
-        sigterm_callback=lambda signum: print(f"exited: {signum}")
     )
+    print("started container")
+    res = await runner.wait()
     print(res)
 
 if __name__ == "__main__":

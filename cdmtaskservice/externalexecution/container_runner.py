@@ -6,12 +6,9 @@ import asyncio
 from dataclasses import dataclass
 import datetime
 import docker
-from functools import lru_cache
 import logging
 from pathlib import Path
-import signal
 import threading
-from typing import Awaitable, Callable
 
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
 
@@ -25,18 +22,14 @@ class ContainerResult:
     max_memory_bytes: int | None
 
 
-@lru_cache
-def _get_client():
-    # don't create the client on module load
-    return docker.from_env()
-
-
 def _make_log_thread(
     container: docker.models.containers.Container, path: Path, stdout: bool
 ) -> threading.Thread:
     def stream():
         with path.open("wb") as f:
-            for chunk in container.logs(stdout=stdout, stderr=not stdout, stream=True, follow=True):
+            for chunk in container.logs(
+                stdout=stdout, stderr=not stdout, stream=True, follow=True
+            ):
                 f.write(chunk)
                 f.flush()
     return threading.Thread(target=stream, daemon=True)
@@ -85,127 +78,157 @@ def _make_stats_thread(
     return threading.Thread(target=stream, daemon=True), result
 
 
-def _stream_data(
-    container: docker.models.containers.Container, stdout_path: Path, stderr_path: Path
-) -> dict:
+class RunningContainer:
     """
-    Stream container logs and stats in background threads, blocking until all complete.
-    Returns the stats result dict from _make_stats_thread.
+    A handle to a running Docker container. Not concurrency-safe.
+
+    Obtain instances via ContainerCreator.start_container().
     """
-    stop_stats = threading.Event()
-    stats_thread, stats = _make_stats_thread(container, stop_stats)
-    log_threads = [
-        _make_log_thread(container, stdout_path, stdout=True),
-        _make_log_thread(container, stderr_path, stdout=False),
-    ]
-    for t in [*log_threads, stats_thread]:
-        t.start()
-    for t in log_threads:
-        t.join()
-    stop_stats.set()
-    stats_thread.join()
-    return stats
 
+    def __init__(
+        self,
+        container: docker.models.containers.Container,
+        stdout_path: Path,
+        stderr_path: Path,
+    ):
+        self._container = container
+        self._logr = logging.getLogger(__name__)
+        self._stop_stats = threading.Event()
+        self._stats_thread, self._stats_result = _make_stats_thread(container, self._stop_stats)
+        self._log_threads = [
+            _make_log_thread(container, stdout_path, stdout=True),
+            _make_log_thread(container, stderr_path, stdout=False),
+        ]
+        for t in [*self._log_threads, self._stats_thread]:
+            t.start()
+        self._result: ContainerResult | None = None
 
-async def run_container(
-    image: str,
-    stdout_path: Path,
-    stderr_path: Path,
-    *,
-    command: list[str] | None = None,
-    env: dict[str, str] | None = None,
-    mounts: dict[str, tuple[str, bool]] | None = None,
-    post_start_callback: Awaitable[None] | None = None,
-    sigterm_callback: Callable[[int], None] | None = None,
-) -> ContainerResult:
-    """
-    Run a container and wait for it to complete.
+    async def __aenter__(self):
+        return self
 
-    image - the image to run.
-    stdout_path - a file where stdout logs should be streamed.
-    stderr_path - a file where stderr logs should be streamed.
-    command - a command to provide to the container.
-    env - a map from environment variable to environment value to provide to the container
-    mounts - mounting directives for the container. A map from the host mount path to a tuple of
-        * the container mount path
-        * A boolean denoting whether the mounts should be read write (True) or just read (False)
-    post_start_callback - an awaitable that will be awaited when the container has started but
-        before streaming logs.
-    sigterm_callback - a callable that will be called if a SIGTERM or SIGINT is sent to the
-        process, after a stop signal is sent to the docker container. The argument is the signal
-        number.
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.cancel()
 
-    Returns a ContainerResult with the exit code, wall-clock runtime in seconds from the Docker
-    daemon's StartedAt/FinishedAt timestamps, and optionally peak memory usage in bytes and total
-    CPU usage in hours collected by streaming stats during container execution.
-    """
-    _require_string(image, "image")
-    _not_falsy(stdout_path, "stdout_path")
-    _not_falsy(stderr_path, "stderr_path")
-    logr = logging.getLogger(__name__)
+    def _join_threads(self, timeout: float | None = None):
+        for t in self._log_threads:
+            t.join(timeout=timeout)
+        self._stop_stats.set()
+        self._stats_thread.join(timeout=timeout)
 
-    client = _get_client()
-    mounts = mounts or {}
-    volumes = {
-        host: {"bind": container, "mode": "rw" if rw else "ro"}
-        for host, (container, rw) in mounts.items()
-    }
+    async def _finish(self, *, cancel: bool = False) -> ContainerResult:
+        if self._result:
+            return self._result
+        try:
+            if cancel:
+                await asyncio.to_thread(self._stop_container)
+            # Run in a thread so the event loop stays free dur-ing container execution
+            await asyncio.to_thread(self._join_threads, 30 if cancel else None)
+            # Saved so subsequent calls return the cached result without querying
+            # the removed container if there's a race, since _collect_result is synchronous
+            self._result = self._result or self._collect_result()
+            return self._result
+        finally:
+            self._remove_container()
 
-    container = client.containers.run(
-        image=image,
-        entrypoint=command,
-        environment=env,
-        volumes=volumes,
-        detach=True,
-        tty=False,
-        remove=False,  # Don't remove immediately to ensure logs are written
-        cap_drop=["ALL"],
-        security_opt=["no-new-privileges:true"],
-    )
+    def _stop_container(self):
+        self._logr.info(f"Stopping container {self._container.short_id}")
+        try:
+            self._container.stop(timeout=10)
+            self._logr.info(f"Stopped container {self._container.short_id}")
+        except docker.errors.NotFound:
+            pass
+        except Exception as e:
+            self._logr.exception(f"Failed to stop container: {e}")
 
-    def cleanup(signum, frame):
-        logr.info(f"Got signum {signum}")
-        if container:
-            logr.info(f"Stopping container {container.short_id}")
-            try:
-                container.stop(timeout=10)
-                logr.info(f"Stopped container {container.short_id}")
-            except Exception as e:
-                logr.exception(f"Failed to stop container: {e}")
-        # Probably the right way to do this is to turn this into a class and add a stop()
-        # method or something, but this is internal only code for now and this way is faster.
-        # If needed move the signal catching out of here and make the class.
-        sigterm_callback(signum)
+    async def wait(self) -> ContainerResult:
+        """
+        Wait for the container to complete.
 
-    try:
-        signal.signal(signal.SIGTERM, cleanup)
-        signal.signal(signal.SIGINT, cleanup)
-        logr.info(f"Container started: {container.short_id}")
-        if post_start_callback:
-            await post_start_callback
+        Returns a ContainerResult with the exit code, wall-clock runtime, and optionally
+        peak memory and CPU hours. Idempotent — subsequent calls return the cached result.
+        """
+        return await self._finish()
 
-        # Run in a thread so the event loop stays free during container execution
-        stats = await asyncio.to_thread(_stream_data, container, stdout_path, stderr_path)
+    async def cancel(self) -> ContainerResult:
+        """
+        Stop the container and wait for all log and stats threads to exit.
 
-        result = container.wait()
-        exit_code = result["StatusCode"]
+        Returns a ContainerResult with the exit code, wall-clock runtime, and optionally
+        peak memory and CPU hours. Idempotent — subsequent calls return the cached result.
+        """
+        return await self._finish(cancel=True)
 
-        container.reload()
-        started_at = datetime.datetime.fromisoformat(container.attrs["State"]["StartedAt"])
-        finished_at = datetime.datetime.fromisoformat(container.attrs["State"]["FinishedAt"])
+    def _collect_result(self) -> ContainerResult:
+        exit_code = self._container.wait()["StatusCode"]
+        self._container.reload()
+        started_at = datetime.datetime.fromisoformat(
+            self._container.attrs["State"]["StartedAt"]
+        )
+        finished_at = datetime.datetime.fromisoformat(
+            self._container.attrs["State"]["FinishedAt"]
+        )
         runtime_seconds = (finished_at - started_at).total_seconds()
-
-        cpu_total_ns = stats.get("cpu_total_ns")
-        cpu_hours = cpu_total_ns / (1e9 * 3600) if cpu_total_ns is not None else None
-
+        cpu_total_ns = self._stats_result.get("cpu_total_ns")
         return ContainerResult(
             exit_code=exit_code,
             runtime_seconds=runtime_seconds,
-            cpu_hours=cpu_hours,
-            max_memory_bytes=stats.get("max_memory_bytes"),
+            cpu_hours=cpu_total_ns / (1e9 * 3600) if cpu_total_ns is not None else None,
+            max_memory_bytes=self._stats_result.get("max_memory_bytes"),
         )
-    finally:
+
+    def _remove_container(self):
         try:
-            container.remove(force=True)
+            self._container.remove(force=True)
+        except docker.errors.NotFound:
+            pass
         except docker.errors.APIError as e:
-            logr.exception(f"Cleanup failed: {e}")
+            self._logr.exception(f"Cleanup failed: {e}")
+
+
+
+class ContainerCreator:
+    """Creates and starts Docker containers. Inject this to enable mocking in tests."""
+
+    async def start_container(
+        self,
+        image: str,
+        stdout_path: Path,
+        stderr_path: Path,
+        *,
+        command: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        mounts: dict[str, tuple[str, bool]] | None = None,
+    ) -> RunningContainer:
+        """
+        Start a container and return a handle to it.
+
+        image - the image to run.
+        stdout_path - a file where stdout logs should be streamed.
+        stderr_path - a file where stderr logs should be streamed.
+        command - a command to provide to the container.
+        env - a map from environment variable name to value for the container.
+        mounts - mounting directives. A map from host path to a tuple of:
+            * the container mount path
+            * a boolean: True for read-write, False for read-only.
+        """
+        _require_string(image, "image")
+        _not_falsy(stdout_path, "stdout_path")
+        _not_falsy(stderr_path, "stderr_path")
+        client = docker.from_env()
+        volumes = {
+            host: {"bind": container_path, "mode": "rw" if rw else "ro"}
+            for host, (container_path, rw) in (mounts or {}).items()
+        }
+        container = client.containers.run(
+            image=image,
+            entrypoint=command,
+            environment=env,
+            volumes=volumes,
+            detach=True,
+            tty=False,
+            remove=False,  # Don't remove immediately to ensure logs are written
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges:true"],
+        )
+        logging.getLogger(__name__).info(f"Container started: {container.short_id}")
+        return RunningContainer(container, stdout_path, stderr_path)

@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+import signal
 import sys
 import time
 import traceback
@@ -16,7 +17,11 @@ from typing import TextIO, Any
 from cdmtaskservice.argument_generator import ArgumentGenerator
 from cdmtaskservice.exceptions import ChecksumMismatchError
 from cdmtaskservice.externalexecution.config import Config
-from cdmtaskservice.externalexecution import container_runner
+from cdmtaskservice.externalexecution.container_runner import (
+    ContainerCreator,
+    ContainerResult,
+    RunningContainer,
+)
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 from cdmtaskservice import models
@@ -35,10 +40,11 @@ _OUTPUT = "__output__"
 
 class Executor:
     """ The executor. Note that the executor is not concurrency safe. """
-    
-    def __init__(self, cfg: Config):
+
+    def __init__(self, cfg: Config, container_creator: ContainerCreator):
         """ Create the executor from the configuration. """
         self._cfg = cfg
+        self._creator = container_creator
         self._url = self._cfg.cts_url.rstrip("/")
         self._sess = aiohttp.ClientSession(
             headers={"Authorization": f"Bearer {cfg.get_cts_token()}"}
@@ -46,19 +52,20 @@ class Executor:
         self._logr = logging.getLogger(__name__)
         self._args = None
         self._s3cli = None  # created lazily
-    
+        self._runner: RunningContainer | None = None
+
     async def __aenter__(self):
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
-        
+
     async def close(self):
         """ Close any resources associated with the executor. """
         await self._sess.close()
         if self._s3cli:
             await self._s3cli.close()
-    
+
     async def _heartbeat_loop(self, job_id: uuid.UUID):
         url = (
             f"{self._url}/external_exec/jobs/{job_id}"
@@ -72,6 +79,28 @@ class Executor:
                 self._logr.warning("Heartbeat failed, will retry next interval: %s", e)
             await asyncio.sleep(self._cfg.heartbeat_interval_min * 60)
 
+    def _setup_signal_handlers(self):
+        async def on_signal(signum: int):
+            self._logr.info(f"Received signal {signum}, stopping")
+            if self._runner:
+                await self._runner.cancel()
+            sys.exit(128 + signum)
+
+        def _retrieve_exc(task):
+            # Calling exception() marks it as retrieved, suppressing asyncio's
+            # "Task exception was never retrieved" warning for the SystemExit we raise.
+            if not task.cancelled():
+                task.exception()
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(
+                sig,
+                lambda s=sig: asyncio.create_task(on_signal(s)).add_done_callback(
+                    _retrieve_exc
+                ),
+            )
+
     async def execute(self) -> int:
         """
         Run the executor.
@@ -79,6 +108,7 @@ class Executor:
         occurred other than a container error.
         """
         await self._log_service_ver()
+        self._setup_signal_handlers()
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(self._cfg.job_id))
         try:
             # If we can't get the job, we presumably can't update the job either,
@@ -90,8 +120,7 @@ class Executor:
                     self._cfg.container_number
                 )
                 await self._download_files(job)
-                await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
-                result = await self._run_container(job)  # updates to JOB_SUBMITTED
+                result = await self._run_container(job)
                 if result.exit_code > 0:
                     await self._process_error_state(job, result)
                 else:
@@ -104,7 +133,7 @@ class Executor:
         finally:
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
-    
+
     async def _check_resp(self, resp: aiohttp.ClientResponse, action: str
     ) -> dict[str, Any] | None:
         if resp.status == 204:  # no content
@@ -127,12 +156,12 @@ class Executor:
             # TODO ERRORHANDLING we'll need to see what other errors are possible here
             raise RetryableExecutorError(msg)
         return resjson
-    
+
     async def _log_service_ver(self):
         async with self._sess.get(self._url) as resp:
             root = await self._check_resp(resp, "Failed to contact CDM Task Service")
         self._logr.info(f"CTS version: {root['version']} githash: {root['git_hash']}")
-    
+
     async def _get_job(self) -> models.AdminJobDetails:
         # TODO RELIABILITY retries. Tenatcity might be useful
         url = f"{self._url}/admin/jobs/{self._cfg.job_id}"
@@ -270,7 +299,8 @@ Local relative path: {loc}
 
     async def _run_container(
         self, job: models.AdminJobDetails
-    ) -> container_runner.ContainerResult:
+    ) -> ContainerResult:
+        await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
         mount = Path.cwd().expanduser().absolute()
         input_ = mount / _INPUT
         output = mount / _OUTPUT
@@ -284,7 +314,7 @@ Local relative path: {loc}
             relative_in = input_.relative_to(prefix)
             relative_out = output.relative_to(prefix)
             input_ = replace / relative_in
-            output = replace / relative_out 
+            output = replace / relative_out
         mounts = {
             # if people want to write to their input directory, ok
             str(input_): (job.job_input.params.input_mount_point, True),
@@ -301,16 +331,17 @@ Local relative path: {loc}
         self._logr.info(
             f"Starting image {job.image.name_with_digest} with command:\n{self._args.args}"
         )
-        result = await container_runner.run_container(
+        self._runner = await self._creator.start_container(
             job.image.name_with_digest,
             Path(".") / (self._get_log_prefix(job) + ".out"),
             Path(".") / (self._get_log_prefix(job) + ".err"),
             mounts=mounts,
             command=self._args.args,
             env=self._args.env,
-            post_start_callback=self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED),
-            sigterm_callback=lambda signum: sys.exit(128 + signum)
         )
+        async with self._runner:
+            await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
+            result = await self._runner.wait()
         self._logr.info(
             f"Container exited with code {result.exit_code}, "
             f"max memory: {result.max_memory_bytes} bytes, "
@@ -319,7 +350,7 @@ Local relative path: {loc}
         return result
 
     async def _process_error_state(
-        self, job: models.AdminJobDetails, result: container_runner.ContainerResult
+        self, job: models.AdminJobDetails, result: ContainerResult
     ):
         await self._update_job_state_loop(
             job, models.JobState.ERROR_PROCESSING_SUBMITTING,
@@ -349,7 +380,7 @@ Local relative path: {loc}
         )
 
     async def _process_complete_state(
-        self, job: models.AdminJobDetails, result: container_runner.ContainerResult
+        self, job: models.AdminJobDetails, result: ContainerResult
     ):
         await self._update_job_state_loop(
             job, models.JobState.UPLOAD_SUBMITTING,
@@ -375,12 +406,13 @@ Local relative path: {loc}
         )
 
 
-async def run_executor(stderr: TextIO) -> int:
+async def run_executor(stderr: TextIO, container_creator: ContainerCreator) -> int:
     """
-    Run the job executor. 
-    
+    Run the job executor.
+
     stderr - a stderr stream.
-    
+    container_creator - factory for starting Docker containers.
+
     Returns 0 for success, a positive integer for the container exit code, or -1 if an error
     occurred other than a container error.
     """
@@ -390,8 +422,8 @@ async def run_executor(stderr: TextIO) -> int:
     for k, v in cfg.safe_dump().items():
         stderr.write(f"{k}: {v}\n")
     stderr.write("\n")
-    async with Executor(cfg) as exe:
-        return await exe.execute();
+    async with Executor(cfg, container_creator) as exe:
+        return await exe.execute()
 
 
 class RetryableExecutorError(Exception):
