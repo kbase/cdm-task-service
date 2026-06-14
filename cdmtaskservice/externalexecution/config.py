@@ -111,6 +111,12 @@ class Config(BaseSettings):
         description="How often, in minutes, to send a liveness heartbeat to the service.",
         ge=1,
     )]
+    job_timeout_min: Annotated[int, Field(
+        validation_alias="JOB_TIMEOUT_MIN",
+        examples=[10080],
+        description="Maximum job runtime in minutes before the executor times out the job.",
+        ge=1,
+    )]
     
     @model_validator(mode='after')
     def check_field_groups(self):
@@ -140,6 +146,7 @@ class Config(BaseSettings):
         "job_update_timeout_min",
         "mount_prefix_override",
         "heartbeat_interval_min",
+        "job_timeout_min",
     }
     
     def safe_dump(self) -> dict[str, Any]:
