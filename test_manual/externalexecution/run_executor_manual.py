@@ -49,12 +49,28 @@ def _parse_args():
                         "(default: $KBASE_AUTH_TOKEN)")
     p.add_argument("--sleep", type=int, default=30,
                    help="Seconds for the container to sleep (default: 30)")
+    p.add_argument("-x", "--exit-code", type=int, default=0,
+                   help="Exit code for the container (default: 0). Use non-zero to test "
+                        "error processing.")
     p.add_argument("--s3-url", default="http://localhost:9000", help="Minio URL")
     p.add_argument("--s3-key", default="miniouser", help="S3 access key")
     p.add_argument("--s3-secret", default="miniopassword", help="S3 access secret")
     p.add_argument("--mongo-url", default="mongodb://localhost:27017")
     p.add_argument("--mongo-db", default="cdmtaskservice")
     p.add_argument("--cts-url", default="http://localhost:5000", help="CTS service URL")
+    p.add_argument("--timeout", type=int, default=60, metavar="MINS",
+                   help="Job timeout in minutes (default: 60). "
+                    + "Use a low number to test timeout handling."
+    )
+    p.add_argument("--download-delay", type=float, default=0, metavar="SECS",
+                   help="Pause before downloading input files. Use with --timeout 1 to "
+                        "test cancellation during download.")
+    p.add_argument("--upload-delay", type=float, default=0, metavar="SECS",
+                   help="Pause before uploading output files. Use with --timeout 1 to "
+                        "test cancellation during upload.")
+    p.add_argument("--error-upload-delay", type=float, default=0, metavar="SECS",
+                   help="Pause before uploading error logs. Use with --timeout 1 to "
+                        "test cancellation during error upload.")
     return p.parse_args()
 
 
@@ -130,8 +146,14 @@ async def _setup_mongo(args, s3_path: str, sleep_secs: int) -> str:
                 input_mount_point="/input_files",
                 output_mount_point="/output_files",
                 declobber=False,
-                args=["-s", str(sleep_secs)],
-                environment=None,
+                args=[
+                    "-s", str(sleep_secs),
+                    "-t", "/output_files/somedir/output.txt",
+                     "--out", "stdout_test_output",
+                    "--error", "stderr_test_output",
+                    "-x", str(args.exit_code)
+                ],
+                environment={"PYTHONUNBUFFERED": "1"},
                 refdata_mount_point=None,
             ),
             num_containers=1,
@@ -193,12 +215,18 @@ async def main():
         "REFDATA_HOST_PATH": str(refdata_dir),
         "JOB_UPDATE_TIMEOUT_MIN": "5",
         "HEARTBEAT_INTERVAL_MIN": "1",
+        "JOB_TIMEOUT_MIN": str(args.timeout),
     })
 
     print(f"\nRunning executor (container will sleep {args.sleep}s)...")
     print("Send SIGTERM or Ctrl-C while sleeping to test signal handling.\n")
 
-    exit_code = await run_executor(sys.stderr, ContainerCreator())
+    exit_code = await run_executor(
+        sys.stderr, ContainerCreator(),
+        _download_delay_sec=args.download_delay,
+        _upload_delay_sec=args.upload_delay,
+        _error_upload_delay_sec=args.error_upload_delay,
+    )
     print(f"\nExecutor exited with code {exit_code}")
     return exit_code
 

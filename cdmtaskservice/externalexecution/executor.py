@@ -37,22 +37,44 @@ _EXP_BACKOFF_SEC = [5, 10, 30, 60, 120, 300, 600]
 _INPUT = "__input__"
 _OUTPUT = "__output__"
 
+_PHASE_INIT = "init"
+_PHASE_DOWNLOAD = "download"
+_PHASE_CONTAINER = "container"
+_PHASE_ERROR_PROCESSING = "error_processing"
+_PHASE_UPLOAD = "upload"
+
 
 class Executor:
     """ The executor. Note that the executor is not concurrency safe. """
 
-    def __init__(self, cfg: Config, container_creator: ContainerCreator):
+    def __init__(
+        self,
+        cfg: Config,
+        container_creator: ContainerCreator,
+        *,
+        _session: aiohttp.ClientSession | None = None,
+        _s3_client: S3Client | None = None,
+        _download_delay_sec: float = 0,
+        _upload_delay_sec: float = 0,
+        _error_upload_delay_sec: float = 0,
+    ):
         """ Create the executor from the configuration. """
         self._cfg = cfg
         self._creator = container_creator
+        self._download_delay_sec = _download_delay_sec
+        self._upload_delay_sec = _upload_delay_sec
+        self._error_upload_delay_sec = _error_upload_delay_sec
         self._url = self._cfg.cts_url.rstrip("/")
-        self._sess = aiohttp.ClientSession(
+        self._sess = _session or aiohttp.ClientSession(
             headers={"Authorization": f"Bearer {cfg.get_cts_token()}"}
         )
         self._logr = logging.getLogger(__name__)
         self._args = None
-        self._s3cli = None  # created lazily
+        self._s3cli = _s3_client  # created lazily if not injected
         self._runner: RunningContainer | None = None
+        self._timed_out = False
+        self._phase = _PHASE_INIT
+        self._execute_task: asyncio.Task | None = None
 
     async def __aenter__(self):
         return self
@@ -78,6 +100,29 @@ class Executor:
             except Exception as e:
                 self._logr.warning("Heartbeat failed, will retry next interval: %s", e)
             await asyncio.sleep(self._cfg.heartbeat_interval_min * 60)
+
+    async def _timeout_task(self) -> None:
+        await asyncio.sleep(self._cfg.job_timeout_min * 60)
+        timeout_days = self._cfg.job_timeout_min / (60 * 24)
+        self._logr.info(f"Job timed out after {timeout_days:.3f} days")
+        self._timed_out = True
+        if self._phase == _PHASE_CONTAINER:
+            if self._runner:
+                await self._runner.cancel()
+            # Now allow the error processing to continue and upload logs
+        elif self._phase == _PHASE_ERROR_PROCESSING:
+            self._logr.info(
+                "Timeout fired during error processing, allowing error processing to complete"
+            )
+        else:
+            # Download or upload is in progress — cancel the execute task so state can
+            # be updated before condor's periodic hold fires.
+            # Running out of time during upload should be rare vs.
+            # running out while running the container, so for now we just error out the job.
+            # If we start seeing upload timeouts a lot rethink - admins get a specific error
+            # message but users only see a generic error.
+            if self._execute_task:
+                self._execute_task.cancel()
 
     def _setup_signal_handlers(self):
         async def on_signal(signum: int):
@@ -108,8 +153,10 @@ class Executor:
         occurred other than a container error.
         """
         await self._log_service_ver()
+        self._execute_task = asyncio.current_task()
         self._setup_signal_handlers()
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(self._cfg.job_id))
+        timeout_task = asyncio.create_task(self._timeout_task())
         try:
             # If we can't get the job, we presumably can't update the job either,
             # so we just throw any exceptions.
@@ -119,20 +166,57 @@ class Executor:
                 self._args = ArgumentGenerator(job).get_container_arguments(
                     self._cfg.container_number
                 )
+                self._phase = _PHASE_DOWNLOAD
                 await self._download_files(job)
+                self._phase = _PHASE_CONTAINER
                 result = await self._run_container(job)
+                if self._timed_out:
+                    self._phase = _PHASE_ERROR_PROCESSING
+                    self._append_timeout_to_logs(job)
+                    await self._process_error_state(job, result)
+                    return -1
                 if result.exit_code > 0:
+                    self._phase = _PHASE_ERROR_PROCESSING
                     await self._process_error_state(job, result)
                 else:
+                    self._phase = _PHASE_UPLOAD
                     await self._process_complete_state(job, result)
                 return result.exit_code
+            except asyncio.CancelledError:
+                if not await self._handle_cancel(job, self._phase):
+                    raise
+                return -1
             except Exception as e:
+                self._phase = _PHASE_ERROR_PROCESSING
                 self._logr.exception(f"Job failed: {e}")
                 await self._update_job_state_loop(job, models.JobState.ERROR, exception=e)
                 return -1
         finally:
+            timeout_task.cancel()
             heartbeat_task.cancel()
-            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            await asyncio.gather(timeout_task, heartbeat_task, return_exceptions=True)
+
+    async def _handle_cancel(
+        self, job: models.AdminJobDetails, phase_at_cancel: str
+    ) -> bool:
+        """
+        Handle a CancelledError raised in execute(). Sets phase to error_processing.
+        Returns True if the cancel was a timeout and job state was updated, False if the
+        caller should re-raise (non-timeout cancellation).
+        """
+        self._phase = _PHASE_ERROR_PROCESSING
+        if not self._timed_out:
+            return False
+        timeout_days = self._cfg.job_timeout_min / (60 * 24)
+        admin_error = (
+            f"Job timed out after {timeout_days:.3f} days "
+            f"during the {phase_at_cancel} phase"
+        )
+        self._logr.info(
+            f"Job timed out during {phase_at_cancel} phase, updating state to ERROR"
+        )
+        await self._update_job_state_loop(job, models.JobState.ERROR, admin_error=admin_error)
+        return True
 
     async def _check_resp(self, resp: aiohttp.ClientResponse, action: str
     ) -> dict[str, Any] | None:
@@ -276,13 +360,16 @@ S3 Path: {obj.file}
 Local relative path: {loc}
 """
             )
-        self._logr.info("Processing files:" + "===".join(filerecs))
-        self._s3cli = await S3Client.create(
-            self._cfg.s3_url,
-            self._cfg.s3_access_key,
-            self._cfg.get_s3_access_secret(),
-            insecure_ssl=self._cfg.s3_insecure
-        )
+        self._logr.info("Downloading files:" + "===".join(filerecs))
+        if not self._s3cli:
+            self._s3cli = await S3Client.create(
+                self._cfg.s3_url,
+                self._cfg.s3_access_key,
+                self._cfg.get_s3_access_secret(),
+                insecure_ssl=self._cfg.s3_insecure
+            )
+        if self._download_delay_sec:
+            await asyncio.sleep(self._download_delay_sec)
         # TODO PERFORMACE configure concurrency
         await self._s3cli.download_objects_to_file(S3Paths(s3paths), local_paths)
         for obj, loc in self._args.files.items():
@@ -340,14 +427,29 @@ Local relative path: {loc}
             env=self._args.env,
         )
         async with self._runner:
-            await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
-            result = await self._runner.wait()
+            # Check here in case timeout fired during start_container before self._runner
+            # was assigned — the timeout task couldn't cancel it then, so we do it now.
+            if self._timed_out:
+                result = await self._runner.cancel()
+            else:
+                await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
+                result = await self._runner.wait()
         self._logr.info(
             f"Container exited with code {result.exit_code}, "
             f"max memory: {result.max_memory_bytes} bytes, "
             f"CPU hours: {result.cpu_hours}"
         )
         return result
+
+    def _append_timeout_to_logs(self, job: models.AdminJobDetails) -> None:
+        timeout_days = self._cfg.job_timeout_min / (60 * 24)
+        msg = (
+            f"\n=== Job exceeded the maximum allowed runtime of "
+            f"{timeout_days:.3f} days and was terminated ===\n"
+        ).encode()
+        stderr_path = Path(".") / (self._get_log_prefix(job) + ".err")
+        with open(stderr_path, "ab") as f:
+            f.write(msg)
 
     async def _process_error_state(
         self, job: models.AdminJobDetails, result: ContainerResult
@@ -359,6 +461,7 @@ Local relative path: {loc}
             max_memory_bytes=result.max_memory_bytes,
             runtime_seconds=result.runtime_seconds,
         )
+        self._logr.info("Uploading error logs")
         # Nothing to do prior to updating state again
         await self._update_job_state_loop(job, models.JobState.ERROR_PROCESSING_SUBMITTED)
         stdout = Path(".") / (self._get_log_prefix(job) + ".out")
@@ -366,6 +469,8 @@ Local relative path: {loc}
         outcrc = crc64nvme_b64(stdout)
         errcrc = crc64nvme_b64(stderr)
         s3outpath, s3errpath = get_filenames_for_container(self._cfg.container_number)
+        if self._error_upload_delay_sec:
+            await asyncio.sleep(self._error_upload_delay_sec)
         # TODO PERF config / set concurrency
         await self._s3cli.upload_objects_from_file(
             S3Paths([
@@ -395,7 +500,18 @@ Local relative path: {loc}
         outfiles = [file.relative_to(outdir) for file in outdir.rglob('*') if file.is_file()]
         crcs = [crc64nvme_b64(outdir / o) for o in outfiles]
         s3paths = [f"{job.job_input.output_dir.strip('/')}/{p}" for p in outfiles]
+        filerecs = []
+        for i, (file, crc, s3path) in enumerate(zip(outfiles, crcs, s3paths), start=1):
+            filerecs.append(f"""
+File #{i} CRC64NVME: {crc}
+S3 Path: {s3path}
+Local relative path: {file}
+"""
+            )
+        self._logr.info("Uploading files:" + "===".join(filerecs))
         if outfiles:
+            if self._upload_delay_sec:
+                await asyncio.sleep(self._upload_delay_sec)
             await self._s3cli.upload_objects_from_file(
                 S3Paths(s3paths), [outdir / o for o in outfiles], crcs
             )
@@ -406,7 +522,14 @@ Local relative path: {loc}
         )
 
 
-async def run_executor(stderr: TextIO, container_creator: ContainerCreator) -> int:
+async def run_executor(
+    stderr: TextIO,
+    container_creator: ContainerCreator,
+    *,
+    _download_delay_sec: float = 0,
+    _upload_delay_sec: float = 0,
+    _error_upload_delay_sec: float = 0,
+) -> int:
     """
     Run the job executor.
 
@@ -422,7 +545,12 @@ async def run_executor(stderr: TextIO, container_creator: ContainerCreator) -> i
     for k, v in cfg.safe_dump().items():
         stderr.write(f"{k}: {v}\n")
     stderr.write("\n")
-    async with Executor(cfg, container_creator) as exe:
+    async with Executor(
+        cfg, container_creator,
+        _download_delay_sec=_download_delay_sec,
+        _upload_delay_sec=_upload_delay_sec,
+        _error_upload_delay_sec=_error_upload_delay_sec,
+    ) as exe:
         return await exe.execute()
 
 

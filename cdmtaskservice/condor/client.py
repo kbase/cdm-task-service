@@ -24,6 +24,10 @@ from cdmtaskservice import models
 # to some other condor instance is pretty low, so don't worry about it 
 
 
+_JOB_TIMEOUT_MIN = 7 * 24 * 60
+_JOB_TIMEOUT_FUDGE_FACTOR_MIN = 6 * 60
+
+
 _AD_CLUSTER_ID = "ClusterId"
 _AD_PROC_ID = "ProcId"
 _AD_JOB_ID = "CTSJobID"
@@ -100,6 +104,7 @@ _JOB_STATE = [
     "NumJobStarts",
     "HoldReason",
     "HoldReasonCode",
+    "PeriodicHold",
     "VacateReason",
     "VacateReasonCode",
     "WantGracefulRemoval",
@@ -134,8 +139,6 @@ STATIC_SUB = {
     "JobLeaseDuration": "43200",
     #  Allow up to 12 hours for condor drain
     "MaxJobRetirementTime": "43200",
-    # Hold jobs running longer than 7 days
-    "Periodic_Hold": "( RemoteWallClockTime > 604800 )",
     # If a job exits incorrectly put it on hold
     "on_exit_hold": "ExitCode =!= 0",
     "should_transfer_files": "yes",
@@ -233,6 +236,7 @@ class CondorClient:
             "S3_SECRET_PATH": self._config.s3_access_secret_path,
             "S3_ERROR_LOG_PATH": f"{self._s3config.error_log_path.strip('/')}/{job.id}",
             "JOB_UPDATE_TIMEOUT_MIN": self._config.job_update_timeout_min,
+            "JOB_TIMEOUT_MIN": _JOB_TIMEOUT_MIN,
             "REFDATA_HOST_PATH": self._config.refdata_host_path,
             "HEARTBEAT_INTERVAL_MIN": self._config.heartbeat_interval_min,
         }
@@ -255,6 +259,14 @@ class CondorClient:
         # https://github.com/kbase/execution_engine2/blob/develop/lib/execution_engine2/utils/Condor.py
         mem = str(int(job.job_input.memory / (1024 * 1024)))  # Condor expects MiB
         logprefix = f"cts-{job.id}-$(container_number)-container"
+        # Hold jobs running longer than job_timeout + job_update_timeout + fudge.
+        # The executor times out at job_timeout; the extra time allows it to update state
+        # and upload error logs before condor puts the job on hold.
+        hold_sec = (
+            _JOB_TIMEOUT_MIN
+            + self._config.job_update_timeout_min
+            + _JOB_TIMEOUT_FUDGE_FACTOR_MIN
+        ) * 60
         subdict = {
             "shell": f"bash {self._exe_name}",
             # Has to exist locally and on the condor Schedd host
@@ -268,6 +280,7 @@ class CondorClient:
             "error": f"cts-{job.id}-$(container_number).err",
             "log": f"cts-{job.id}-$(container_number).log",
             "transfer_output_files": f"{logprefix}.out, {logprefix}.err",
+            "Periodic_Hold": f"( RemoteWallClockTime > {hold_sec} )",
             "request_cpus": str(job.job_input.cpus),
             "request_memory": mem,
             # request_disk needed?
