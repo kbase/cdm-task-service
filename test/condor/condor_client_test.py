@@ -264,7 +264,7 @@ async def test_get_cluster_proc_states_all_complete():
 
     states = await client.get_cluster_proc_states(123)
 
-    assert states == [ProcState.COMPLETE, ProcState.COMPLETE]
+    assert states == {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     schedd.query.assert_called_once_with(
         constraint="ClusterId == 123", projection=["ProcId", "JobStatus"]
     )
@@ -291,15 +291,15 @@ async def test_get_cluster_proc_states_mixed():
 
     states = await client.get_cluster_proc_states(123)
 
-    assert states == [
-        ProcState.RUNNING,   # ProcId 0: Running
-        ProcState.HELD,      # ProcId 1: Held
-        ProcState.QUEUED,    # ProcId 2: Idle
-        ProcState.OTHER,     # ProcId 3: Suspended
-        ProcState.COMPLETE,  # ProcId 4: overridden by history
-        ProcState.CANCELED,  # ProcId 5: Removed (history only)
-        ProcState.RUNNING,   # ProcId 6: Transferring Output
-    ]
+    assert states == {
+        0: ProcState.RUNNING,   # Running
+        1: ProcState.HELD,      # Held
+        2: ProcState.QUEUED,    # Idle
+        3: ProcState.OTHER,     # Suspended
+        4: ProcState.COMPLETE,  # overridden by history
+        5: ProcState.CANCELED,  # Removed (history only)
+        6: ProcState.RUNNING,   # Transferring Output
+    }
     schedd.query.assert_called_once_with(
         constraint="ClusterId == 123", projection=["ProcId", "JobStatus"]
     )
@@ -317,6 +317,45 @@ async def test_get_cluster_proc_states_unknown_status():
         with pytest.raises(ValueError, match=f"^Unknown HTCondor job status: {status}$"):
             await client.get_cluster_proc_states(123)
         schedd.reset_mock()
+
+
+async def test_get_cluster_proc_states_empty_proc_ids():
+    """Empty proc_ids list returns empty dict without querying condor."""
+    client, schedd = _make_client()
+
+    states = await client.get_cluster_proc_states(123, proc_ids=[])
+
+    assert states == {}
+    schedd.query.assert_not_called()
+    schedd.history.assert_not_called()
+
+
+async def test_get_cluster_proc_states_proc_ids_filter():
+    """The proc_ids list is pushed into the HTCondor constraint, not filtered in Python."""
+    client, schedd = _make_client()
+    schedd.query.return_value = [{"ProcId": 1, "JobStatus": 5}]   # Held
+    schedd.history.return_value = [{"ProcId": 3, "JobStatus": 4}]  # Complete
+
+    states = await client.get_cluster_proc_states(123, proc_ids=[1, 3])
+
+    assert states == {1: ProcState.HELD, 3: ProcState.COMPLETE}
+    constraint = "ClusterId == 123 && (ProcId == 1 || ProcId == 3)"
+    schedd.query.assert_called_once_with(constraint=constraint, projection=["ProcId", "JobStatus"])
+    schedd.history.assert_called_once_with(constraint=constraint, projection=["ProcId", "JobStatus"])
+
+
+async def test_get_cluster_proc_states_proc_ids_not_found():
+    """Requested proc IDs absent from both queues returns empty dict, not an error."""
+    client, schedd = _make_client()
+    schedd.query.return_value = []
+    schedd.history.return_value = []
+
+    states = await client.get_cluster_proc_states(123, proc_ids=[0, 1])
+
+    assert states == {}
+    constraint = "ClusterId == 123 && (ProcId == 0 || ProcId == 1)"
+    schedd.query.assert_called_once_with(constraint=constraint, projection=["ProcId", "JobStatus"])
+    schedd.history.assert_called_once_with(constraint=constraint, projection=["ProcId", "JobStatus"])
 
 
 async def test_release_job_bad_args():

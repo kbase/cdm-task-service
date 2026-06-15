@@ -121,7 +121,7 @@ class RunningContainer:
         try:
             if cancel:
                 await asyncio.to_thread(self._stop_container)
-            # Run in a thread so the event loop stays free dur-ing container execution
+            # Run in a thread so the event loop stays free during container execution
             await asyncio.to_thread(self._join_threads, 30 if cancel else None)
             # Saved so subsequent calls return the cached result without querying
             # the removed container if there's a race, since _collect_result is synchronous

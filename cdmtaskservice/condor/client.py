@@ -11,7 +11,7 @@ import htcondor2
 import os
 from pathlib import Path
 import posixpath
-from typing import Any
+from typing import Any, Collection
 from yarl import URL
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, check_num as _check_num
@@ -384,9 +384,13 @@ class CondorClient:
         return running, complete
 
     async def _fetch_cluster_ads(
-        self, cluster_id: int, projection: list[str]
+        self, cluster_id: int, projection: list[str],
+        proc_ids: Collection[int] | None = None,
     ) -> tuple[list, list]:
         constraint = f"{_AD_CLUSTER_ID} == {cluster_id}"
+        if proc_ids is not None:
+            proc_constraint = " || ".join(f"{_AD_PROC_ID} == {pid}" for pid in proc_ids)
+            constraint = f"{constraint} && ({proc_constraint})"
         active_ads = await asyncio.to_thread(  # Don't block the event loop
             self._schedd.query,
             constraint=constraint,
@@ -397,26 +401,37 @@ class CondorClient:
             constraint=constraint,
             projection=projection,
         )
-        if not active_ads and not complete_ads:
+        if not active_ads and not complete_ads and proc_ids is None:
             raise ValueError(f"No records found for cluster ID {cluster_id}")
         return active_ads, complete_ads
 
-    async def get_cluster_proc_states(self, cluster_id: int) -> list[ProcState]:
+    async def get_cluster_proc_states(
+        self,
+        cluster_id: int,
+        proc_ids: Collection[int] | None = None,
+    ) -> dict[int, ProcState]:
         """
         Get the state of each process in an HTC cluster using minimal data transfer.
 
-        Returns a list indexed by proc ID (which equals the container number), where each
-        element is a ProcState. Raises ValueError if no records are found for cluster_id.
+        Returns a dict mapping proc ID (== container number) to ProcState.
+        Raises ValueError if no records are found for cluster_id and proc_ids is None.
+
+        cluster_id - the HTCondor cluster ID.
+        proc_ids - if provided, the HTCondor constraint is restricted to these proc IDs and
+            an empty result is returned (rather than an error) if none are found.
+            An empty list returns an empty dict without querying HTCondor.
         """
         _check_num(cluster_id, "cluster_id")
-        active_ads, complete_ads = await self._fetch_cluster_ads(cluster_id, _STATUS_ONLY)
-        states = {}
+        if proc_ids is not None and not proc_ids:
+            return {}
+        active_ads, complete_ads = await self._fetch_cluster_ads(cluster_id, _STATUS_ONLY, proc_ids)
+        states: dict[int, ProcState] = {}
         for ad in active_ads:
             states[ad[_AD_PROC_ID]] = _status_to_proc_state(ad[_AD_JOB_STATUS])
         for ad in complete_ads:
             # override active entry if a proc raced from query to history between calls
             states[ad[_AD_PROC_ID]] = _status_to_proc_state(ad[_AD_JOB_STATUS])
-        return [states[i] for i in range(len(states))]
+        return states
 
     async def release_job(self, cluster_id: int):
         """

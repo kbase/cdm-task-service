@@ -153,14 +153,14 @@ async def test_get_job_external_runner_status_submitted():
         job_input=models.JobInput.model_construct(num_containers=6, cluster=sites.Cluster.KBASE),
         htcondor_details=models.HTCondorDetails(cluster_id=[123]),
     )
-    condor.get_cluster_proc_states.return_value = [
-        ProcState.QUEUED,
-        ProcState.RUNNING,
-        ProcState.HELD,
-        ProcState.COMPLETE,
-        ProcState.CANCELED,
-        ProcState.OTHER,
-    ]
+    condor.get_cluster_proc_states.return_value = {
+        0: ProcState.QUEUED,
+        1: ProcState.RUNNING,
+        2: ProcState.HELD,
+        3: ProcState.COMPLETE,
+        4: ProcState.CANCELED,
+        5: ProcState.OTHER,
+    }
     result = await runner.get_job_external_runner_status(job)
     assert result == models.ExternalRunnerStatus(
         manages_containers=False,
@@ -842,7 +842,7 @@ async def test_recover_job_no_cluster_id(force, cluster_ids):
 async def test_recover_job_unexpected_proc_state(force, bad_state):
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job()
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, bad_state]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: bad_state}
 
     with pytest.raises(
         InvalidJobStateError,
@@ -1004,7 +1004,7 @@ async def test_recover_job_error_state_advance_to_complete():
     ts = iter([lock_time, reset_time] + advance_times)
     runner, mongo, condor, updates, s3 = _make_runner(_timestamp_fn=lambda: next(ts))
     job = _recovery_job(state=models.JobState.ERROR)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
 
     outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
     # cpu_factor = (0.5*3600) / (720*1) = 2.5
@@ -1061,7 +1061,7 @@ async def test_recover_job_error_state_advance_fails():
     ts = iter([lock_time, reset_time, advance_time])
     runner, mongo, condor, updates, s3 = _make_runner(_timestamp_fn=lambda: next(ts))
     job = _recovery_job(state=models.JobState.ERROR)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     # First call (RECOVERING lock) succeeds; second (first state advance) raises.
     updates.update_job_state.side_effect = [None, IOError("mongo blew up")]
 
@@ -1091,7 +1091,7 @@ async def test_recover_job_error_state_lock_fails():
     """
     runner, mongo, condor, updates, s3 = _make_runner()
     job = _recovery_job(state=models.JobState.ERROR)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     updates.update_job_state.side_effect = InvalidJobStateError("concurrent recovery won")
 
     with pytest.raises(InvalidJobStateError, match="concurrent recovery won"):
@@ -1132,7 +1132,7 @@ async def test_recover_job_error_state_lock_fails():
 async def test_recover_job_standard_advance_to_complete(start_state, state_updates):
     runner, mongo, condor, updates, s3 = _make_runner()
     job = _recovery_job(state=start_state)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     complete_time = _T + datetime.timedelta(seconds=len(state_updates) + 1)
     parent_updates = [
         ParentJobUpdate(state, _T + datetime.timedelta(seconds=i + 1))
@@ -1185,7 +1185,7 @@ async def test_recover_job_standard_advance_to_complete(start_state, state_updat
 async def test_recover_job_complete_job_no_outputs():
     runner, mongo, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.UPLOAD_SUBMITTED)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
     sj = models.SubJob.model_construct(outputs=[])
     mongo.get_subjobs.return_value = [sj]
@@ -1213,7 +1213,7 @@ async def test_recover_job_complete_job_no_outputs():
 async def test_recover_job_complete_job_checksum_mismatch():
     runner, mongo, condor, updates, s3 = _make_runner()
     job = _recovery_job(state=models.JobState.UPLOAD_SUBMITTED)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
     outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaaaaaaaaaa")]
     sj = models.SubJob.model_construct(outputs=outputs)
@@ -1247,7 +1247,7 @@ async def test_recover_job_complete_job_condor_stats_timeout():
     """Unlike update_container_state, the IOError propagates directly to the caller."""
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.UPLOAD_SUBMITTED)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
     condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
 
@@ -1265,7 +1265,7 @@ async def test_recover_job_complete_job_condor_stats_timeout():
 async def test_recover_job_standard_advance_invalid_state():
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.CREATED)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
 
     with pytest.raises(RuntimeError, match="Unexpected job state"):
         await runner.recover_job(job)
@@ -1277,7 +1277,7 @@ async def test_recover_job_standard_advance_invalid_state():
 async def test_recover_job_standard_advance_update_raises():
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.DOWNLOAD_SUBMITTED)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.JOB_SUBMITTING, _T
     )
@@ -1300,7 +1300,7 @@ async def test_recover_job_standard_advance_parent_update_none():
     """
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.DOWNLOAD_SUBMITTED)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     updates.get_parent_job_update.return_value = None
 
     with pytest.raises(RuntimeError, match="Not all subjobs have reached state"):
@@ -1314,8 +1314,8 @@ async def test_recover_job_standard_advance_parent_update_none():
 async def test_recover_job_standard_running_only():
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job()
-    condor.get_cluster_proc_states.return_value = [
-        ProcState.COMPLETE, ProcState.RUNNING, ProcState.QUEUED]
+    condor.get_cluster_proc_states.return_value = {
+        0: ProcState.COMPLETE, 1: ProcState.RUNNING, 2: ProcState.QUEUED}
 
     with pytest.raises(
         InvalidJobStateError,
@@ -1338,9 +1338,9 @@ async def test_recover_job_standard_held_containers():
     runner, mongo, condor, updates, _ = _make_runner(_timestamp_fn=lambda: next(ts))
     job = _recovery_job(state=models.JobState.JOB_SUBMITTING)
     # Container 0 complete, containers 1 and 2 held.
-    condor.get_cluster_proc_states.return_value = [
-        ProcState.COMPLETE, ProcState.HELD, ProcState.HELD
-    ]
+    condor.get_cluster_proc_states.return_value = {
+        0: ProcState.COMPLETE, 1: ProcState.HELD, 2: ProcState.HELD
+    }
 
     await runner.recover_job(job)
 
@@ -1364,7 +1364,7 @@ async def test_recover_job_standard_held_release_fails():
     ts = iter([lock_time, reset_time])
     runner, mongo, condor, updates, _ = _make_runner(_timestamp_fn=lambda: next(ts))
     job = _recovery_job(state=models.JobState.JOB_SUBMITTING)
-    condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.HELD, 1: ProcState.HELD}
     condor.release_job.side_effect = IOError("condor unavailable")
 
     with pytest.raises(
@@ -1390,7 +1390,7 @@ async def test_recover_job_standard_held_lock_fails():
     """
     runner, mongo, condor, updates, _ = _make_runner()
     job = _recovery_job()
-    condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.HELD, 1: ProcState.HELD}
     updates.update_job_state.side_effect = InvalidJobStateError("concurrent recovery won")
 
     with pytest.raises(InvalidJobStateError, match="concurrent recovery won"):
@@ -1410,7 +1410,7 @@ async def test_recover_job_standard_held_lock_fails():
 async def test_recover_job_force_running_containers(running_state):
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.RECOVERING)
-    condor.get_cluster_proc_states.return_value = [ProcState.HELD, running_state]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.HELD, 1: running_state}
 
     with pytest.raises(
         InvalidJobStateError,
@@ -1438,7 +1438,7 @@ async def test_recover_job_force_all_complete():
     ts = iter([lock_time, reset_time] + advance_times)
     runner, mongo, condor, updates, s3 = _make_runner(_timestamp_fn=lambda: next(ts))
     job = _recovery_job(state=models.JobState.RECOVERING)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
 
     outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
     # cpu_factor = (0.5*3600) / (720*1) = 2.5
@@ -1495,7 +1495,7 @@ async def test_recover_job_force_all_complete_advance_fails():
     ts = iter([lock_time, reset_time, advance_time])
     runner, mongo, condor, updates, s3 = _make_runner(_timestamp_fn=lambda: next(ts))
     job = _recovery_job(state=models.JobState.RECOVERING)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     # First call (force RECOVERING lock) succeeds; second (first state advance) raises.
     updates.update_job_state.side_effect = [None, IOError("mongo blew up")]
 
@@ -1525,7 +1525,7 @@ async def test_recover_job_force_all_complete_lock_fails():
     """
     runner, mongo, condor, updates, s3 = _make_runner()
     job = _recovery_job(state=models.JobState.RECOVERING)
-    condor.get_cluster_proc_states.return_value = [ProcState.COMPLETE, ProcState.COMPLETE]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     updates.update_job_state.side_effect = InvalidJobStateError(
         "Job 'jid' is in state 'error', expected 'recovering'"
     )
@@ -1556,9 +1556,9 @@ async def test_recover_job_force_held_containers():
     runner, mongo, condor, updates, _ = _make_runner(_timestamp_fn=lambda: next(ts))
     job = _recovery_job(state=models.JobState.RECOVERING)
     # Container 0 complete, containers 1 and 2 held.
-    condor.get_cluster_proc_states.return_value = [
-        ProcState.COMPLETE, ProcState.HELD, ProcState.HELD
-    ]
+    condor.get_cluster_proc_states.return_value = {
+        0: ProcState.COMPLETE, 1: ProcState.HELD, 2: ProcState.HELD
+    }
 
     await runner.recover_job(job, force=True)
 
@@ -1582,7 +1582,7 @@ async def test_recover_job_force_held_release_fails():
     ts = iter([lock_time, reset_time])
     runner, mongo, condor, updates, _ = _make_runner(_timestamp_fn=lambda: next(ts))
     job = _recovery_job(state=models.JobState.RECOVERING)
-    condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.HELD, 1: ProcState.HELD}
     condor.release_job.side_effect = IOError("condor unavailable")
 
     with pytest.raises(
@@ -1608,7 +1608,7 @@ async def test_recover_job_force_held_lock_fails():
     """
     runner, mongo, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.RECOVERING)
-    condor.get_cluster_proc_states.return_value = [ProcState.HELD, ProcState.HELD]
+    condor.get_cluster_proc_states.return_value = {0: ProcState.HELD, 1: ProcState.HELD}
     updates.update_job_state.side_effect = JobRecoveryError("cooldown not expired")
 
     with pytest.raises(JobRecoveryError, match="cooldown not expired"):

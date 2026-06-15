@@ -259,9 +259,10 @@ class KBaseRunner(JobFlow):
             )
         cluster_id = job.htcondor_details.cluster_id[-1]
         proc_states = await self._condor.get_cluster_proc_states(cluster_id)
+        n = job.job_input.num_containers
         return models.ExternalRunnerStatus(
             manages_containers=False,
-            states=[_PROC_STATE_TO_EXTERNAL[s] for s in proc_states],
+            states=[_PROC_STATE_TO_EXTERNAL[proc_states[i]] for i in range(n)],
         )
 
     async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
@@ -563,14 +564,14 @@ class KBaseRunner(JobFlow):
         proc_states = await self._condor.get_cluster_proc_states(
             job.htcondor_details.cluster_id[-1]
         )
-        if {ProcState.OTHER, ProcState.CANCELED} & set(proc_states):
+        if {ProcState.OTHER, ProcState.CANCELED} & set(proc_states.values()):
             raise InvalidJobStateError(
                 "External processor contains processes in an unexpected state. Unable to recover "
                 "job."
             )
-        held = [i for i, s in enumerate(proc_states) if s == ProcState.HELD]
+        held = [i for i, s in proc_states.items() if s == ProcState.HELD]
         running = [
-            i for i, s in enumerate(proc_states)
+            i for i, s in proc_states.items()
             if s in {ProcState.RUNNING, ProcState.QUEUED}
         ]
         return held, running
