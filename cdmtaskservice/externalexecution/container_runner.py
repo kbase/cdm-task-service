@@ -189,6 +189,9 @@ class RunningContainer:
 class ContainerCreator:
     """Creates and starts Docker containers. Inject this to enable mocking in tests."""
 
+    def __init__(self):
+        self._client = docker.from_env()
+
     async def start_container(
         self,
         image: str,
@@ -214,12 +217,11 @@ class ContainerCreator:
         _require_string(image, "image")
         _not_falsy(stdout_path, "stdout_path")
         _not_falsy(stderr_path, "stderr_path")
-        client = docker.from_env()
         volumes = {
             host: {"bind": container_path, "mode": "rw" if rw else "ro"}
             for host, (container_path, rw) in (mounts or {}).items()
         }
-        container = client.containers.run(
+        container = self._client.containers.run(
             image=image,
             entrypoint=command,
             environment=env,
