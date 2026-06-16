@@ -93,6 +93,34 @@ def test_job_state_is_canceling():
         assert s.is_canceling() is term
 
 
+def test_job_state_active_states():
+    assert models.JobState.active_states() == {
+        models.JobState.CREATED,
+        models.JobState.DOWNLOAD_SUBMITTED,
+        models.JobState.JOB_SUBMITTING,
+        models.JobState.JOB_SUBMITTED,
+        models.JobState.UPLOAD_SUBMITTING,
+        models.JobState.UPLOAD_SUBMITTED,
+        models.JobState.ERROR_PROCESSING_SUBMITTING,
+        models.JobState.ERROR_PROCESSING_SUBMITTED,
+    }
+
+
+def test_job_state_is_active():
+    expected = {s: False for s in list(models.JobState)}
+    expected[models.JobState.CREATED] = True
+    expected[models.JobState.DOWNLOAD_SUBMITTED] = True
+    expected[models.JobState.JOB_SUBMITTING] = True
+    expected[models.JobState.JOB_SUBMITTED] = True
+    expected[models.JobState.UPLOAD_SUBMITTING] = True
+    expected[models.JobState.UPLOAD_SUBMITTED] = True
+    expected[models.JobState.ERROR_PROCESSING_SUBMITTING] = True
+    expected[models.JobState.ERROR_PROCESSING_SUBMITTED] = True
+
+    for s, active in expected.items():
+        assert s.is_active() is active
+
+
 def test_refdata_state_terminal_states():
     assert models.ReferenceDataState.terminal_states() == {
         models.ReferenceDataState.ERROR, models.ReferenceDataState.COMPLETE
