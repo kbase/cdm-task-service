@@ -4,6 +4,7 @@ Pydantic models for the CTS.
 
 import datetime
 from enum import Enum
+import functools
 from pydantic import (
     BaseModel,
     ByteSize,
@@ -842,22 +843,43 @@ class JobState(str, Enum):
     ERROR = "error"
     
     @classmethod
-    def terminal_states(cls) -> set[Self]:
+    @functools.cache
+    def terminal_states(cls) -> frozenset[Self]:
         """ Return the set of terminal states. """
-        return {cls.COMPLETE, cls.ERROR, cls.CANCELED}
+        return frozenset({cls.COMPLETE, cls.ERROR, cls.CANCELED})
 
     def is_terminal(self) -> bool:
         """ Return True if this state is a terminal state. """
         return self in self.terminal_states()
-    
+
     @classmethod
-    def canceling_states(cls) -> set[Self]:
+    @functools.cache
+    def canceling_states(cls) -> frozenset[Self]:
         """ Return the set of states in the canceling flow. """
-        return {cls.CANCELING, cls.CANCELED}
-    
+        return frozenset({cls.CANCELING, cls.CANCELED})
+
     def is_canceling(self) -> bool:
         """ Return True if this state is one of the canceling flow states. """
         return self in self.canceling_states()
+
+    @classmethod
+    @functools.cache
+    def active_states(cls) -> frozenset[Self]:
+        """
+        Return states where a job is expected to be actively running.
+
+        Excludes terminal states, canceling states, and RECOVERING.
+        """
+        return frozenset(
+            s for s in cls
+            if not s.is_terminal()
+            and not s.is_canceling()
+            and s is not cls.RECOVERING
+        )
+
+    def is_active(self) -> bool:
+        """ Return True if this state is an active state. """
+        return self in self.active_states()
 
 
 class ExternalRunnerState(str, Enum):
