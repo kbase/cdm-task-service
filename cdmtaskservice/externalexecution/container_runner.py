@@ -187,7 +187,7 @@ class RunningContainer:
 
 
 class ContainerCreator:
-    """Creates and starts Docker containers. Inject this to enable mocking in tests."""
+    """ Creates and starts Docker containers. """
 
     def __init__(self):
         self._client = docker.from_env()

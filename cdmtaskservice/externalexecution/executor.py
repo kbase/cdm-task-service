@@ -4,6 +4,7 @@ The main CTS external executor class.
 
 import aiohttp
 import asyncio
+import datetime
 import json
 import logging
 from pathlib import Path
@@ -12,7 +13,7 @@ import sys
 import time
 import traceback
 import uuid
-from typing import TextIO, Any
+from typing import Callable, TextIO, Any
 
 from cdmtaskservice.argument_generator import ArgumentGenerator
 from cdmtaskservice.exceptions import ChecksumMismatchError
@@ -50,20 +51,31 @@ class Executor:
     def __init__(
         self,
         cfg: Config,
-        container_creator: ContainerCreator,
         *,
+        working_dir: Path = Path(),
         _session: aiohttp.ClientSession | None = None,
         _s3_client: S3Client | None = None,
+        _container_creator: ContainerCreator | None = None,
         _download_delay_sec: float = 0,
         _upload_delay_sec: float = 0,
         _error_upload_delay_sec: float = 0,
+        _timestamp_fn: Callable[[], datetime.datetime] = utcdatetime,
     ):
-        """ Create the executor from the configuration. """
+        """
+        Create the executor from the configuration.
+
+        cfg - the executor configuration.
+        working_dir - the directory used as the root for all file operations (input downloads,
+            output uploads, container log files). Tilde and relative paths are expanded and
+            resolved at construction time. Defaults to the current working directory.
+        """
         self._cfg = cfg
-        self._creator = container_creator
+        self._container_creator = _container_creator or ContainerCreator()
         self._download_delay_sec = _download_delay_sec
         self._upload_delay_sec = _upload_delay_sec
         self._error_upload_delay_sec = _error_upload_delay_sec
+        self._timestamp_fn = _timestamp_fn
+        self._workdir = working_dir.expanduser().resolve()
         self._url = self._cfg.cts_url.rstrip("/")
         self._sess = _session or aiohttp.ClientSession(
             headers={"Authorization": f"Bearer {cfg.get_cts_token()}"}
@@ -167,7 +179,7 @@ class Executor:
                     self._cfg.container_number
                 )
                 self._phase = _PHASE_DOWNLOAD
-                await self._download_files(job)
+                await self._download_files()
                 self._phase = _PHASE_CONTAINER
                 result = await self._run_container(job)
                 if self._timed_out:
@@ -298,8 +310,8 @@ class Executor:
                         + f"next wait period is {backoff} sec: {e}"
                     ) from e
                 self._logr.exception(
-                    f"Failed updating job state to {state.value} at {utcdatetime().isoformat()}, "
-                    + f"trying again in {backoff} seconds: {e}"
+                    f"Failed updating job state to {state.value} at "
+                    + f"{self._timestamp_fn().isoformat()}, trying again in {backoff} seconds: {e}"
                 )
                 backoff_counter += 1
                 await asyncio.sleep(backoff)
@@ -326,8 +338,7 @@ class Executor:
             f"{self._url}/external_exec/jobs/{job.id}/"
             + f"container/{self._cfg.container_number}/update/{state.value}"
         )
-        # TODO TEST need to mockout utcdatetime
-        data = {"time": utcdatetime().isoformat()}
+        data = {"time": self._timestamp_fn().isoformat()}
         if exception:
             data["admin_error"] = str(exception)
             data["traceback"] = traceback.format_exc()
@@ -346,10 +357,10 @@ class Executor:
         async with self._sess.put(url, json=data) as resp:
             await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 
-    async def _download_files(self, job: models.AdminJobDetails) -> dict[models.S3File, str]:
+    async def _download_files(self) -> None:
         s3paths = []
         local_paths = []
-        root = Path(".") / _INPUT
+        root = self._workdir / _INPUT
         filerecs = []
         for i, (obj, loc) in enumerate(self._args.files.items(), start=1):
             s3paths.append(obj.file)
@@ -384,13 +395,9 @@ Local relative path: {loc}
     def _get_log_prefix(self, job: models.AdminJobDetails):
         return f"cts-{job.id}-{self._cfg.container_number}-container"
 
-    async def _run_container(
-        self, job: models.AdminJobDetails
-    ) -> ContainerResult:
-        await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
-        mount = Path.cwd().expanduser().absolute()
-        input_ = mount / _INPUT
-        output = mount / _OUTPUT
+    def _build_mounts(self, job: models.AdminJobDetails) -> dict[str, tuple[str, bool]]:
+        input_ = self._workdir / _INPUT
+        output = self._workdir / _OUTPUT
         if job.job_input.params.declobber:
             output = output / str(self._cfg.container_number)
         # Needs to be global write since the job container user is unknown
@@ -415,24 +422,38 @@ Local relative path: {loc}
                 f"Mounting host refdata at '{host_mount}' to '{job.get_refdata_mount_point()}' "
                 + "in container"
             )
+        return mounts
+
+    async def _run_container(
+        self, job: models.AdminJobDetails
+    ) -> ContainerResult:
+        await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTING)
+        mounts = self._build_mounts(job)
+        stdout_path = self._workdir / (self._get_log_prefix(job) + ".out")
+        stderr_path = self._workdir / (self._get_log_prefix(job) + ".err")
+        # Touch before starting so error processing always has files to upload,
+        # even if the container crashes immediately or times out during start_container.
+        stdout_path.touch()
+        stderr_path.touch()
         self._logr.info(
             f"Starting image {job.image.name_with_digest} with command:\n{self._args.args}"
         )
-        self._runner = await self._creator.start_container(
+        self._runner = await self._container_creator.start_container(
             job.image.name_with_digest,
-            Path(".") / (self._get_log_prefix(job) + ".out"),
-            Path(".") / (self._get_log_prefix(job) + ".err"),
+            stdout_path,
+            stderr_path,
             mounts=mounts,
             command=self._args.args,
             env=self._args.env,
         )
         async with self._runner:
-            # Check here in case timeout fired during start_container before self._runner
-            # was assigned — the timeout task couldn't cancel it then, so we do it now.
+            # inside the context manager so the container gets canceled if this line raises
+            await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
+            # If timeout fired during start_container, self._runner wasn't assigned so the
+            # timeout task couldn't cancel it then; cancel here and proceed to error processing.
             if self._timed_out:
                 result = await self._runner.cancel()
             else:
-                await self._update_job_state_loop(job, models.JobState.JOB_SUBMITTED)
                 result = await self._runner.wait()
         self._logr.info(
             f"Container exited with code {result.exit_code}, "
@@ -447,7 +468,7 @@ Local relative path: {loc}
             f"\n=== Job exceeded the maximum allowed runtime of "
             f"{timeout_days:.3f} days and was terminated ===\n"
         ).encode()
-        stderr_path = Path(".") / (self._get_log_prefix(job) + ".err")
+        stderr_path = self._workdir / (self._get_log_prefix(job) + ".err")
         with open(stderr_path, "ab") as f:
             f.write(msg)
 
@@ -464,8 +485,8 @@ Local relative path: {loc}
         self._logr.info("Uploading error logs")
         # Nothing to do prior to updating state again
         await self._update_job_state_loop(job, models.JobState.ERROR_PROCESSING_SUBMITTED)
-        stdout = Path(".") / (self._get_log_prefix(job) + ".out")
-        stderr = Path(".") / (self._get_log_prefix(job) + ".err")
+        stdout = self._workdir / (self._get_log_prefix(job) + ".out")
+        stderr = self._workdir / (self._get_log_prefix(job) + ".err")
         outcrc = crc64nvme_b64(stdout)
         errcrc = crc64nvme_b64(stderr)
         s3outpath, s3errpath = get_filenames_for_container(self._cfg.container_number)
@@ -496,7 +517,7 @@ Local relative path: {loc}
         )
         # Nothing to do prior to updating state again
         await self._update_job_state_loop(job, models.JobState.UPLOAD_SUBMITTED)
-        outdir = Path(_OUTPUT)
+        outdir = self._workdir / _OUTPUT
         outfiles = [file.relative_to(outdir) for file in outdir.rglob('*') if file.is_file()]
         crcs = [crc64nvme_b64(outdir / o) for o in outfiles]
         s3paths = [f"{job.job_input.output_dir.strip('/')}/{p}" for p in outfiles]
@@ -524,7 +545,6 @@ Local relative path: {file}
 
 async def run_executor(
     stderr: TextIO,
-    container_creator: ContainerCreator,
     *,
     _download_delay_sec: float = 0,
     _upload_delay_sec: float = 0,
@@ -534,7 +554,6 @@ async def run_executor(
     Run the job executor.
 
     stderr - a stderr stream.
-    container_creator - factory for starting Docker containers.
 
     Returns 0 for success, a positive integer for the container exit code, or -1 if an error
     occurred other than a container error.
@@ -546,7 +565,7 @@ async def run_executor(
         stderr.write(f"{k}: {v}\n")
     stderr.write("\n")
     async with Executor(
-        cfg, container_creator,
+        cfg,
         _download_delay_sec=_download_delay_sec,
         _upload_delay_sec=_upload_delay_sec,
         _error_upload_delay_sec=_error_upload_delay_sec,
