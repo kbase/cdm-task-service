@@ -148,10 +148,6 @@ refdata_host_path = "{{ KBCTS_REFDATA_HOST_PATH or "" }}"
 # The default is 6 hours and minimum 1 minute.
 job_update_timeout_min = {{ KBCTS_EXTERNAL_JOB_UPDATE_TIMEOUT_MIN or 360 }}
 
-# How often, in minutes, an external executor sends a liveness heartbeat to the service.
-# The default is 5 minutes; minimum is 1 minute.
-heartbeat_interval_min = {{ KBCTS_EXTERNAL_HEARTBEAT_INTERVAL_MIN or 5 }}
-
 # A prefix override for the input and output data mount path for the job container.
 # This is not a mount string, although it looks like one. By default, the external job
 # executor mounts subdirectories in the current working directory into the job container

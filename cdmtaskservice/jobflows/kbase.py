@@ -348,7 +348,6 @@ class KBaseRunner(JobFlow):
         container_num - the container / subjob number.
         update - the new state for the container.
         """
-        # TODO UPDATE_SUBJOB add other states.
         _not_falsy(job, "job")
         _check_num(container_num, "container_num", minimum=0)
         _not_falsy(new_state, "new_state")
@@ -808,6 +807,8 @@ class KBaseFlowProvider:
     Manages KBase job flow initialization.
     """
     
+    _HEARTBEAT_INTERVAL_MIN = 5
+
     @classmethod
     async def create(
         cls,
@@ -821,7 +822,7 @@ class KBaseFlowProvider:
     ):
         """
         WARNING: this class is not thread safe.
-        
+
         Create the flow provider.
 
         condor_config - the configuration for the condor client.
@@ -832,7 +833,6 @@ class KBaseFlowProvider:
         refserver_url - the url for the refdata server.
         refserver_token - the token to use when communicating with the refdata server.
         """
-    
         kb = cls()
         kb._condor_config = _not_falsy(condor_config, "condor_config")
         kb._mongodao = _not_falsy(mongodao, "mongodao")
@@ -947,7 +947,9 @@ class KBaseFlowProvider:
             schedd_ad = collector.locate(htcondor2.DaemonTypes.Schedd)
             schedd = htcondor2.Schedd(schedd_ad)
             self._logr.info("Done")
-            condor = CondorClient(schedd, self._condor_config, self._s3config)
+            condor = CondorClient(
+                schedd, self._condor_config, self._s3config, self._HEARTBEAT_INTERVAL_MIN
+            )
             self._logr.info("Initializing refdata service client...")
             refcli = await RefdataServiceClient.create(self._refserv_url, self._refserv_token)
             state_updates = SubjobFlowStateUpdates(

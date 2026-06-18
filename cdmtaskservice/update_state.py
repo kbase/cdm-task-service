@@ -162,7 +162,8 @@ class RefdataUpdate(Update[models.ReferenceDataState]):
 
 # The ordered sequence of states a job passes through on the happy path, from creation to
 # completion. Used to replay state transitions during job recovery.
-JOB_COMPLETED_PATH = [
+# Stored here rather than in the JobState enum since this module defines the job state FSM
+JOB_COMPLETED_PATH = (
     models.JobState.CREATED,
     models.JobState.DOWNLOAD_SUBMITTED,
     models.JobState.JOB_SUBMITTING,
@@ -170,7 +171,7 @@ JOB_COMPLETED_PATH = [
     models.JobState.UPLOAD_SUBMITTING,
     models.JobState.UPLOAD_SUBMITTED,
     models.JobState.COMPLETE,
-]
+)
 
 
 def submitted_download() -> JobUpdate:

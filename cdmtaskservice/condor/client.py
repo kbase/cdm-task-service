@@ -49,6 +49,10 @@ class ProcState(enum.Enum):
     CANCELED = "canceled"
     OTHER = "other"
 
+    def is_healthy(self) -> bool:
+        """ Return True if this state does not indicate a problem requiring intervention. """
+        return self in {ProcState.QUEUED, ProcState.RUNNING, ProcState.COMPLETE}
+
 
 _JOB_STATUS_TO_PROC_STATE = {
     1:                ProcState.QUEUED,    # Idle
@@ -193,16 +197,24 @@ class CondorClient:
     The condor client.
     """
 
-    def __init__(self, schedd: htcondor2.Schedd, config: CondorClientConfig, s3config: S3Config):
+    def __init__(
+        self,
+        schedd: htcondor2.Schedd,
+        config: CondorClientConfig,
+        s3config: S3Config,
+        heartbeat_interval_min: int,
+    ):
         """
         Create the client.
-        
+
         schedd: An htcondor Schedd instance, configured to submit jobs to the cluster.
         config - the configuration for the client.
         s3Config - the configuration for the S3 instance where files are stored.
+        heartbeat_interval_min - how often, in minutes, the executor sends a heartbeat.
         """
         self._schedd = _not_falsy(schedd, "schedd")
         self._config = _not_falsy(config, "config")
+        self._heartbeat_interval_min = _check_num(heartbeat_interval_min, "heartbeat_interval_min", minimum=1)
         # Why this has to exist locally is beyond me
         Path(self._config.initial_dir).mkdir(parents=True, exist_ok=True)
         self._exe_url = config.get_executable_url()
@@ -238,7 +250,7 @@ class CondorClient:
             "JOB_UPDATE_TIMEOUT_MIN": self._config.job_update_timeout_min,
             "JOB_TIMEOUT_MIN": _JOB_TIMEOUT_MIN,
             "REFDATA_HOST_PATH": self._config.refdata_host_path,
-            "HEARTBEAT_INTERVAL_MIN": self._config.heartbeat_interval_min,
+            "HEARTBEAT_INTERVAL_MIN": self._heartbeat_interval_min,
         }
         if self._config.mount_prefix_override:
             env["MOUNT_PREFIX_OVERRIDE"] = self._config.mount_prefix_override

@@ -13,7 +13,7 @@ from cdmtaskservice.config_s3 import S3Config
 # TODO TEST add more tests
 
 
-def _make_client():
+def _make_dependencies():
     schedd = create_autospec(htcondor2.Schedd, instance=True)
     config = CondorClientConfig(
         initial_dir=tempfile.mkdtemp(),
@@ -28,11 +28,32 @@ def _make_client():
         additional_path=None,
         cache_dir="/cache",
         refdata_host_path="/refdata",
-        heartbeat_interval_min=5,
     )
     s3config = create_autospec(S3Config, spec_set=True, instance=True)
-    client = CondorClient(schedd, config, s3config)
+    return schedd, config, s3config
+
+
+def _make_client():
+    schedd, config, s3config = _make_dependencies()
+    client = CondorClient(schedd, config, s3config, heartbeat_interval_min=5)
     return client, schedd
+
+
+def test_proc_state_is_healthy():
+    assert ProcState.QUEUED.is_healthy() is True
+    assert ProcState.RUNNING.is_healthy() is True
+    assert ProcState.COMPLETE.is_healthy() is True
+    assert ProcState.HELD.is_healthy() is False
+    assert ProcState.CANCELED.is_healthy() is False
+    assert ProcState.OTHER.is_healthy() is False
+
+
+def test_condor_client_bad_heartbeat_interval():
+    schedd, config, s3config = _make_dependencies()
+    with pytest.raises(ValueError, match="^heartbeat_interval_min is required$"):
+        CondorClient(schedd, config, s3config, heartbeat_interval_min=None)
+    with pytest.raises(ValueError, match="^heartbeat_interval_min must be >= 1$"):
+        CondorClient(schedd, config, s3config, heartbeat_interval_min=0)
 
 
 async def test_get_container_classad_bad_args():
