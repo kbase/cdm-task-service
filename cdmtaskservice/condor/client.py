@@ -11,7 +11,7 @@ import htcondor2
 import os
 from pathlib import Path
 import posixpath
-from typing import Any, Collection
+from typing import Any, Callable, Collection, TypeVar
 from yarl import URL
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, check_num as _check_num
@@ -23,6 +23,8 @@ from cdmtaskservice import models
 # Some of this stuff is pretty specific to KBase but the likelihood we'll ever be submitting
 # to some other condor instance is pretty low, so don't worry about it 
 
+
+_V = TypeVar("_V")
 
 _JOB_TIMEOUT_MIN = 7 * 24 * 60
 _JOB_TIMEOUT_FUDGE_FACTOR_MIN = 6 * 60
@@ -37,6 +39,8 @@ _AD_CPU_USER = "RemoteUserCpu"
 _AD_MEM = "MemoryUsage"
 _AD_COMMITTED_TIME = "CommittedTime"
 _AD_JOB_STATUS = "JobStatus"
+_AD_HOLD_REASON = "HoldReason"
+_AD_HOLD_REASON_CODE = "HoldReasonCode"
 _JOB_STATUS_HELD = 5
 
 
@@ -72,6 +76,7 @@ def _status_to_proc_state(status: int) -> ProcState:
 
 
 _STATUS_ONLY = [_AD_PROC_ID, _AD_JOB_STATUS]
+_STATUS_AND_HOLD = [_AD_PROC_ID, _AD_JOB_STATUS, _AD_HOLD_REASON, _AD_HOLD_REASON_CODE]
 
 _LOCATIONS = ["Iwd", "Err", "Out", "UserLog"]
 _IDS = [_AD_CLUSTER_ID, _AD_PROC_ID, _AD_JOB_ID, _AD_CONTAINER_NUMBER]
@@ -106,8 +111,8 @@ _JOB_STATE = [
     "JobRunCount",
     "NumRestarts",
     "NumJobStarts",
-    "HoldReason",
-    "HoldReasonCode",
+    _AD_HOLD_REASON,
+    _AD_HOLD_REASON_CODE,
     "PeriodicHold",
     "VacateReason",
     "VacateReasonCode",
@@ -158,6 +163,14 @@ def condor_jobs_all_held(job_classads_as_dict: list[dict[str, Any]]) -> bool:
     """
     _not_falsy(job_classads_as_dict, "job_classads_as_dict")
     return not {ad[_AD_JOB_STATUS] for ad in job_classads_as_dict} - {_JOB_STATUS_HELD}
+
+
+@dataclass
+class ProcDetails:
+    """State and hold information for an HTCondor process."""
+    state: ProcState
+    hold_reason: str | None = None
+    hold_reason_code: int | None = None
 
 
 @dataclass
@@ -386,11 +399,10 @@ class CondorClient:
         running_job_ads, complete_job_ads = await self._fetch_cluster_ads(
             cluster_id, _RETURNED_JOB_ADS
         )
-        id2ad = {(ad[_AD_CLUSTER_ID], ad[_AD_PROC_ID]): ad for ad in running_job_ads}
+        id2ad = {ad[_AD_PROC_ID]: ad for ad in running_job_ads}
         for ad in complete_job_ads:
-            job_key = (ad[_AD_CLUSTER_ID], ad[_AD_PROC_ID])
             # remove jobs that have transitioned to complete between the queries
-            id2ad.pop(job_key, None)
+            id2ad.pop(ad[_AD_PROC_ID], None)
         running = [self._classad_to_dict(ad) for ad in id2ad.values()]
         complete = [self._classad_to_dict(ad) for ad in complete_job_ads]
         return running, complete
@@ -417,6 +429,25 @@ class CondorClient:
             raise ValueError(f"No records found for cluster ID {cluster_id}")
         return active_ads, complete_ads
 
+    async def _fetch_proc_map(
+        self,
+        cluster_id: int,
+        projection: list[str],
+        proc_ids: Collection[int] | None,
+        transform: Callable[[Any], _V],
+    ) -> dict[int, _V]:
+        _check_num(cluster_id, "cluster_id")
+        if proc_ids is not None and not proc_ids:
+            return {}
+        active_ads, complete_ads = await self._fetch_cluster_ads(cluster_id, projection, proc_ids)
+        result: dict[int, _V] = {}
+        for ad in active_ads:
+            result[ad[_AD_PROC_ID]] = transform(ad)
+        for ad in complete_ads:
+            # override active entry if a proc raced from query to history between calls
+            result[ad[_AD_PROC_ID]] = transform(ad)
+        return result
+
     async def get_cluster_proc_states(
         self,
         cluster_id: int,
@@ -433,17 +464,35 @@ class CondorClient:
             an empty result is returned (rather than an error) if none are found.
             An empty list returns an empty dict without querying HTCondor.
         """
-        _check_num(cluster_id, "cluster_id")
-        if proc_ids is not None and not proc_ids:
-            return {}
-        active_ads, complete_ads = await self._fetch_cluster_ads(cluster_id, _STATUS_ONLY, proc_ids)
-        states: dict[int, ProcState] = {}
-        for ad in active_ads:
-            states[ad[_AD_PROC_ID]] = _status_to_proc_state(ad[_AD_JOB_STATUS])
-        for ad in complete_ads:
-            # override active entry if a proc raced from query to history between calls
-            states[ad[_AD_PROC_ID]] = _status_to_proc_state(ad[_AD_JOB_STATUS])
-        return states
+        return await self._fetch_proc_map(
+            cluster_id, _STATUS_ONLY, proc_ids,
+            lambda ad: _status_to_proc_state(ad[_AD_JOB_STATUS]),
+        )
+
+    async def get_cluster_proc_details(
+        self,
+        cluster_id: int,
+        proc_ids: Collection[int] | None = None,
+    ) -> dict[int, ProcDetails]:
+        """
+        Get the state and hold details of each process in an HTC cluster.
+
+        Returns a dict mapping proc ID (== container number) to ProcDetails.
+        Raises ValueError if no records are found for cluster_id and proc_ids is None.
+
+        cluster_id - the HTCondor cluster ID.
+        proc_ids - if provided, the HTCondor constraint is restricted to these proc IDs and
+            an empty result is returned (rather than an error) if none are found.
+            An empty list returns an empty dict without querying HTCondor.
+        """
+        return await self._fetch_proc_map(
+            cluster_id, _STATUS_AND_HOLD, proc_ids,
+            lambda ad: ProcDetails(
+                state=_status_to_proc_state(ad[_AD_JOB_STATUS]),
+                hold_reason=ad.get(_AD_HOLD_REASON),
+                hold_reason_code=ad.get(_AD_HOLD_REASON_CODE),
+            ),
+        )
 
     async def release_job(self, cluster_id: int):
         """
