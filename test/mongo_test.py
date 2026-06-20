@@ -15,6 +15,7 @@ from cdmtaskservice.mongo import (
     NoSuchJobError,
     NoSuchReferenceDataError,
     NoSuchSubJobError,
+    SubJobUpdateConflictError,
 )
 from cdmtaskservice.update_state import (
     error,
@@ -134,7 +135,18 @@ async def test_indexes(mongo, mondb):
         "id_1_transition_times.state_1_transition_times._retry_1": {
             "key": [("id", 1), ("transition_times.state", 1), ("transition_times._retry", 1)],
             "v": 2
-        }
+        },
+        "state_1_heartbeat_1": {
+            "v": 2,
+            "key": [("state", 1), ("heartbeat", 1)],
+            "partialFilterExpression": SON([
+                ("state", SON([("$in", [
+                    "created", "download_submitted", "error_processing_submitted",
+                    "error_processing_submitting", "job_submitted", "job_submitting",
+                    "upload_submitted", "upload_submitting",
+                ])]))
+            ]),
+        },
     }
     ecindex = mongo.client[MONGO_TEST_DB]["exitcodes"].index_information()
     assert ecindex == {
@@ -379,7 +391,9 @@ async def test_update_job(mondb):
 
 
 async def test_update_job_htcondor_stats(mondb):
-    """HTCondor stats fields are written to htcondor_details subdocument and read back correctly."""
+    """
+    HTCondor stats fields are written to htcondor_details subdocument and read back correctly.
+    """
     mc = await MongoDAO.create(mondb)
     # HTCondorDetails.cluster_id is required, so initialise it before setting the stats fields
     job = _BASEJOB.model_copy(deep=True)
@@ -908,7 +922,9 @@ async def test_update_subjob_container_stats(mondb):
     await mc.initialize_subjobs([sj])
     await mc.update_subjob_state(
         "bar", 0,
-        submitting_upload_with_exit_code(0, cpu_hours=1.5, max_memory=536870912, runtime_seconds=1800.0),
+        submitting_upload_with_exit_code(
+            0, cpu_hours=1.5, max_memory=536870912, runtime_seconds=1800.0
+        ),
         dt2,
     )
 
@@ -949,14 +965,77 @@ async def test_update_subjob_fail(mondb):
     await fail_update_subjob(mc, "bar", 0, u, _SAFE_TIME + datetime.timedelta(milliseconds=-1),
         ValueError("Job 'bar' with subjob ID 0 last update time is after the provided time")
     )
+    await fail_update_subjob(mc, "bar", 0, u, dt,
+        ValueError("last_update_time must be a timezone aware datetime"),
+        last_update_time=datetime.datetime(2025, 4, 2, 12, 0, 0),
+    )
     assert await mondb.subjobs.find_one({"id": "bar", "sub_id": 0}) == initial_doc
 
 
-async def fail_update_subjob(mc, job_id, subjob_id, update, dt, expected, expected_actual_state=None):
+async def fail_update_subjob(
+    mc, job_id, subjob_id, update, dt, expected, expected_actual_state=None, last_update_time=None
+):
     with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$") as exc_info:
-        await mc.update_subjob_state(job_id, subjob_id, update, dt)
+        await mc.update_subjob_state(
+            job_id, subjob_id, update, dt, last_update_time=last_update_time
+        )
     if isinstance(expected, InvalidJobStateError):
         assert exc_info.value.actual_state == expected_actual_state
+
+
+async def test_update_subjob_last_update_time_conflict(mondb):
+    """
+    When last_update_time is provided, the write is gated on the subjob's _update_time matching
+    that value (optimistic lock). If another write has occurred since the caller read _update_time,
+    SubJobUpdateConflictError is raised and the subjob is unchanged. If the value matches,
+    the write proceeds normally.
+
+    SubJobUpdateConflictError is raised even when the concurrent write's _update_time is after
+    the provided time — i.e. the conflict error takes priority over the time ordering error.
+    """
+    mc = await MongoDAO.create(mondb)
+    dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
+    dt2 = dt1 + datetime.timedelta(minutes=1)
+
+    await mc.initialize_subjobs([_BASESUBJOB1])
+
+    # Advance the subjob to DOWNLOAD_SUBMITTED; _update_time becomes dt1
+    # initial _update_time is _SAFE_TIME — set by initialize_subjobs from the last transition time
+    await mc.update_subjob_state("bar", 0, submitted_download(), dt1)
+
+    conflict_match = "^Job 'bar' subjob 0 _update_time .* does not match expected "
+
+    # Stale lock (_update_time in DB is dt1, not _SAFE_TIME); provided time dt2 > dt1.
+    with pytest.raises(SubJobUpdateConflictError, match=conflict_match):
+        await mc.update_subjob_state(
+            "bar", 0, error("conflict test"), dt2, last_update_time=_SAFE_TIME
+        )
+
+    # Stale lock where the concurrent write's _update_time (dt1) is also after our time
+    # (dt0 < dt1). Without the fix this would raise ValueError("last update time is after...")
+    # instead of SubJobUpdateConflictError.
+    dt0 = _SAFE_TIME - datetime.timedelta(minutes=1)
+    with pytest.raises(SubJobUpdateConflictError, match=conflict_match):
+        await mc.update_subjob_state(
+            "bar", 0, error("conflict test"), dt0, last_update_time=_SAFE_TIME
+        )
+
+    # State is still DOWNLOAD_SUBMITTED (both optimistic-lock-gated writes were rejected)
+    expected = _BASESUBJOB1.model_copy(deep=True)
+    expected.state = models.JobState.DOWNLOAD_SUBMITTED
+    expected.transition_times.append(
+        models.JobStateTransition(state=models.JobState.DOWNLOAD_SUBMITTED, time=dt1)
+    )
+    assert await mc.get_subjob("bar", 0) == expected
+
+    # Writing ERROR with the current _update_time (dt1) succeeds
+    await mc.update_subjob_state("bar", 0, error("conflict test"), dt2, last_update_time=dt1)
+    expected.state = models.JobState.ERROR
+    expected.admin_error = "conflict test"
+    expected.transition_times.append(
+        models.JobStateTransition(state=models.JobState.ERROR, time=dt2)
+    )
+    assert await mc.get_subjob("bar", 0) == expected
 
 
 async def test_update_subjob_heartbeat(mondb):
@@ -1057,7 +1136,7 @@ async def test_recover_subjobs(mondb):
         return models.JobStateTransition(state=state, time=time)
 
     # subjob 0: error fields cleared, trans_history contains all prior transitions,
-    #           exit_code and admin_error captured into history arrays
+    #           exit_code and admin_error captured into history arrays, heartbeat cleared
     got0 = await mc.get_subjob("bar", 0)
     assert got0 == models.SubJob(
         id="bar",
@@ -1080,7 +1159,7 @@ async def test_recover_subjobs(mondb):
     assert "traceback" not in raw0
     assert "heartbeat" not in raw0
 
-    # subjob 2: no exit_code → null recorded in history; admin_error captured
+    # subjob 2: no exit_code → null recorded in history; admin_error captured; heartbeat cleared
     got2 = await mc.get_subjob("bar", 2)
     assert got2 == models.SubJob(
         id="bar",
@@ -1710,3 +1789,87 @@ async def test_process_dirty_refdata_fail(mondb):
 async def _process_dirty_refdata_fail(mc, older_than, op, expected):
     with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
         await mc.process_dirty_refdata(older_than, op)
+
+
+def _make_sj(job_id, sub_id, state=models.JobState.CREATED, *, time=_SAFE_TIME, heartbeat=None):
+    return models.SubJob(
+        id=job_id,
+        sub_id=sub_id,
+        state=state,
+        heartbeat=heartbeat,
+        transition_times=[models.JobStateTransition(state=state, time=time)],
+    )
+
+
+_HB_THRESHOLD  = datetime.datetime(2025, 6, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
+_HB_OLD        = _HB_THRESHOLD - datetime.timedelta(seconds=1)
+_HB_NEW        = _HB_THRESHOLD + datetime.timedelta(seconds=1)
+_HB_T0         = datetime.datetime(2025, 6, 1, 1, tzinfo=datetime.timezone.utc)  # j1/0 absent hb
+_HB_T1         = datetime.datetime(2025, 6, 1, 2, tzinfo=datetime.timezone.utc)  # j1/1 null hb
+_HB_T2         = datetime.datetime(2025, 6, 1, 3, tzinfo=datetime.timezone.utc)  # j2/0 null hb
+_HB_T3         = datetime.datetime(2025, 6, 1, 4, tzinfo=datetime.timezone.utc)  # j3/0 stale hb
+_HB_T4         = datetime.datetime(2025, 6, 1, 5, tzinfo=datetime.timezone.utc)  # j3/1 stale hb
+_HB_T5         = datetime.datetime(2025, 6, 1, 6, tzinfo=datetime.timezone.utc)  # j4/0 stale hb
+
+
+async def _setup_heartbeat_subjobs(mc, mondb):
+    await mc.initialize_subjobs([
+        # heartbeat absent after $unset → missing:in, stale:out
+        _make_sj("j1", 0, time=_HB_T0),
+        # heartbeat null → missing:in, stale:out
+        _make_sj("j1", 1, time=_HB_T1),
+        # heartbeat null, different active state → missing:in, stale:out
+        _make_sj("j2", 0, models.JobState.DOWNLOAD_SUBMITTED, time=_HB_T2),
+        # recent hb on same job → missing:out, stale:out
+        _make_sj("j2", 1, models.JobState.JOB_SUBMITTED, heartbeat=_HB_NEW),
+        # stale hb → missing:out, stale:in
+        _make_sj("j3", 0, models.JobState.JOB_SUBMITTED, heartbeat=_HB_OLD, time=_HB_T3),
+        # stale hb, different active state and time → missing:out, stale:in
+        _make_sj("j3", 1, models.JobState.DOWNLOAD_SUBMITTED, heartbeat=_HB_OLD, time=_HB_T4),
+        # recent hb on same job → missing:out, stale:out
+        _make_sj("j3", 2, heartbeat=_HB_NEW),
+        # stale hb, second job → missing:out, stale:in
+        _make_sj("j4", 0, heartbeat=_HB_OLD, time=_HB_T5),
+        # terminal → neither (one with stale hb, one with no hb)
+        _make_sj("j5", 0, models.JobState.ERROR, heartbeat=_HB_OLD),
+        _make_sj("j5", 1, models.JobState.ERROR),
+        _make_sj("j5", 2, models.JobState.COMPLETE, heartbeat=_HB_OLD),
+        _make_sj("j5", 3, models.JobState.COMPLETE),
+        # canceling → neither (one with stale hb, one with no hb)
+        _make_sj("j6", 0, models.JobState.CANCELING, heartbeat=_HB_OLD),
+        _make_sj("j6", 1, models.JobState.CANCELING),
+        _make_sj("j6", 2, models.JobState.CANCELED, heartbeat=_HB_OLD),
+        _make_sj("j6", 3, models.JobState.CANCELED),
+        # recovering → neither (one with stale hb, one with no hb)
+        _make_sj("j7", 0, models.JobState.RECOVERING, heartbeat=_HB_OLD),
+        _make_sj("j7", 1, models.JobState.RECOVERING),
+    ])
+    await mondb.subjobs.update_one({"id": "j1", "sub_id": 0}, {"$unset": {"heartbeat": ""}})
+
+
+async def test_get_subjobs_with_missing_heartbeat(mondb):
+    mc = await MongoDAO.create(mondb)
+    await _setup_heartbeat_subjobs(mc, mondb)
+
+    assert await mc.get_subjobs_with_missing_heartbeat() == {
+        "j1": {0: _HB_T0, 1: _HB_T1},
+        "j2": {0: _HB_T2},
+    }
+
+
+async def test_get_subjobs_with_stale_heartbeat(mondb):
+    mc = await MongoDAO.create(mondb)
+    await _setup_heartbeat_subjobs(mc, mondb)
+
+    assert await mc.get_subjobs_with_stale_heartbeat(_HB_THRESHOLD) == {
+        "j3": {0: _HB_T3, 1: _HB_T4},
+        "j4": {0: _HB_T5},
+    }
+
+
+async def test_get_subjobs_with_stale_heartbeat_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    with pytest.raises(ValueError, match="^older_than is required$"):
+        await mc.get_subjobs_with_stale_heartbeat(None)
+    with pytest.raises(ValueError, match="^older_than must be a timezone aware datetime$"):
+        await mc.get_subjobs_with_stale_heartbeat(datetime.datetime(2025, 1, 1))
