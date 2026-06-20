@@ -35,6 +35,9 @@ _FLD_TRANS_TIME_SEND = (
 _FLD_RETRY_ATTEMPT = "_retry"  # not really used for now, but preparation for later
 _FLD_LAST_RECOVER = "_last_recover"
 
+# Sorted so the partial index definition is deterministic for tests
+_SUBJOB_ACTIVE_STATES = sorted(s.value for s in models.JobState.active_states())
+
 
 class MongoDAO:
     """
@@ -143,13 +146,25 @@ class MongoDAO:
             ),
             # Find subjobs in a specific state on a specific retry attempt
             # Could make it unique as there should only be one state per retry, but that would
-            # prevent sharding the collection - which seems unlikely but there's no need to 
+            # prevent sharding the collection - which seems unlikely but there's no need to
             # block the ability when a unique index isn't needed
             IndexModel([
                 (models.FLD_COMMON_ID, ASCENDING),
                 (statefield, ASCENDING),
                 (retryfield, ASCENDING)
             ]),
+            # Find active subjobs by heartbeat time for dead-executor detection.
+            # Partial filter restricts the index to non-terminal, non-canceling, non-recovering
+            # subjobs so it stays small and fast.
+            IndexModel(
+                [
+                    (models.FLD_COMMON_STATE, ASCENDING),
+                    (models.FLD_SUBJOB_HEARTBEAT, ASCENDING),
+                ],
+                partialFilterExpression={
+                    models.FLD_COMMON_STATE: {"$in": _SUBJOB_ACTIVE_STATES}
+                },
+            ),
         ])
         await self._col_exitcodes.create_indexes([
             # Ensure there's no duplicate exit code entries for a job
@@ -441,9 +456,12 @@ class MongoDAO:
         time: datetime.datetime,
         update: JobUpdate,
         recovery_cooldown: datetime.timedelta | None = None,
+        last_update_time: datetime.datetime | None = None,
     ) -> dict[str, Any]:
         """Returns the apply_cond expression for use in a conditional aggregation pipeline."""
         _not_falsy(update, "update")
+        if last_update_time is not None:
+            verify_aware_datetime(last_update_time, "last_update_time")
         conditions = [{"$lte": [f"${_FLD_UPDATE_TIME}", _not_falsy(time, "time")]}]
         if update.current_state:
             conditions.append(
@@ -459,6 +477,12 @@ class MongoDAO:
                 {"$eq": [f"${_FLD_LAST_RECOVER}", None]},
                 {"$lte": [f"${_FLD_LAST_RECOVER}", time - recovery_cooldown]},
             ]})
+        if last_update_time is not None:
+            # Optimistic lock: gate the write on the subjob's _update_time not having changed
+            # since the caller read it. If recovery (or any other write) has modified the
+            # subjob since the caller's read, the condition fails and the write is skipped.
+            # _update_job_state_check_result detects this and raises SubJobUpdateConflictError.
+            conditions.append({"$eq": [f"${_FLD_UPDATE_TIME}", last_update_time]})
         return {"$and": conditions} if len(conditions) > 1 else conditions[0]
 
     def _update_job_state_check_result(
@@ -469,6 +493,7 @@ class MongoDAO:
         time: datetime.datetime,
         subjob_id: int | None = None,
         recovery_cooldown: datetime.timedelta | None = None,
+        last_update_time: datetime.datetime | None = None,
     ):
         if pre_doc is None:
             if subjob_id is not None:
@@ -491,6 +516,20 @@ class MongoDAO:
                 f"{entity} is in disallowed state {actual_state.value!r}",
                 actual_state=actual_state,
             )
+        if last_update_time is not None:
+            # The aggregation write was gated on _update_time == last_update_time. If another
+            # write occurred between the caller's read and this write, the pipeline skipped the
+            # update but still returned pre_doc. Detect that by comparing _update_time in
+            # pre_doc against the expected value: if they differ, the lock was not held.
+            # Checked before the time check so that a concurrent write advancing _update_time
+            # past `time` raises SubJobUpdateConflictError rather than the misleading
+            # "last update time is after the provided time" ValueError.
+            actual_update_time = pre_doc[_FLD_UPDATE_TIME]
+            if actual_update_time != last_update_time:
+                raise SubJobUpdateConflictError(
+                    f"Job '{job_id}' subjob {subjob_id} _update_time {actual_update_time!r} "
+                    f"does not match expected {last_update_time!r}"
+                )
         if pre_doc[_FLD_UPDATE_TIME] > time:
             raise ValueError(f"{entity} last update time is after the provided time")
         if recovery_cooldown and recovery_cooldown > datetime.timedelta(0):
@@ -549,11 +588,14 @@ class MongoDAO:
         trans_id: str | None = None,
         subjob_id: int | None = None,
         recovery_cooldown: datetime.timedelta | None = None,
+        last_update_time: datetime.datetime | None = None,
     ):
         filter_ = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
         if subjob_id is not None:
             filter_[models.FLD_SUBJOB_ID] = _check_num(subjob_id, "subjob_id", minimum=0)
-        apply_cond = self._update_job_state_condition(time, update, recovery_cooldown)
+        apply_cond = self._update_job_state_condition(
+            time, update, recovery_cooldown, last_update_time
+        )
         pipeline = self._update_job_state_pipeline(
             apply_cond, update, time, trans_id, recovery_cooldown
         )
@@ -569,7 +611,7 @@ class MongoDAO:
             return_document=ReturnDocument.BEFORE,
         )
         self._update_job_state_check_result(
-            pre_doc, job_id, update, time, subjob_id, recovery_cooldown
+            pre_doc, job_id, update, time, subjob_id, recovery_cooldown, last_update_time
         )
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
@@ -925,14 +967,18 @@ class MongoDAO:
         subjob_id: int,
         update: JobUpdate,
         time: datetime.datetime,
+        last_update_time: datetime.datetime | None = None,
     ):
         """
         Update the sub job state.
-    
+
         job_id - the job ID.
         subjob_id - the subjob ID.
         update - the update to apply to the job.
         time - the time at which the job transitioned to the new state.
+        last_update_time - if provided, gates the write on the subjob's update time matching
+            this value (optimistic lock). If the subjob was modified since this time was read,
+            the write is skipped and SubJobUpdateConflictError is raised.
         """
         await self._update_job_state(
             self._col_subjobs,
@@ -940,7 +986,8 @@ class MongoDAO:
             update,
             time,
             # if not an int, error will occur. Could add a more stringent check later
-            subjob_id=_check_num(subjob_id, "subjob_id", minimum=0)
+            subjob_id=_check_num(subjob_id, "subjob_id", minimum=0),
+            last_update_time=last_update_time,
         )
 
     async def update_subjob_heartbeat(
@@ -964,6 +1011,59 @@ class MongoDAO:
             {"$set": {models.FLD_SUBJOB_HEARTBEAT: time}},
         )
 
+    async def get_subjobs_with_missing_heartbeat(
+        self,
+    ) -> dict[str, dict[int, datetime.datetime]]:
+        """
+        Return a mapping of job ID to {subjob_id: last_update_time} for active subjobs with
+        no heartbeat recorded.
+
+        Active means not terminal, not canceling, and not recovering.
+        Matches subjobs where the heartbeat field is null or absent.
+        """
+        query = {
+            models.FLD_COMMON_STATE: {"$in": _SUBJOB_ACTIVE_STATES},
+            models.FLD_SUBJOB_HEARTBEAT: None,
+        }
+        return await self._aggregate_subjob_job_map(query)
+
+    async def get_subjobs_with_stale_heartbeat(
+        self, older_than: datetime.datetime
+    ) -> dict[str, dict[int, datetime.datetime]]:
+        """
+        Return a mapping of job ID to {subjob_id: last_update_time} for active subjobs whose
+        heartbeat is older than older_than.
+
+        Active means not terminal, not canceling, and not recovering.
+
+        older_than - only subjobs with a heartbeat strictly before this time are returned.
+            Must be timezone-aware.
+        """
+        verify_aware_datetime(older_than, "older_than")
+        query = {
+            models.FLD_COMMON_STATE: {"$in": _SUBJOB_ACTIVE_STATES},
+            models.FLD_SUBJOB_HEARTBEAT: {"$ne": None, "$lt": older_than},
+        }
+        return await self._aggregate_subjob_job_map(query)
+
+    async def _aggregate_subjob_job_map(
+        self, query: dict
+    ) -> dict[str, dict[int, datetime.datetime]]:
+        pipeline = [
+            {"$match": query},
+            {"$group": {
+                "_id": f"${models.FLD_COMMON_ID}",
+                "subjobs": {"$push": {
+                    "id": f"${models.FLD_SUBJOB_ID}",
+                    "t": f"${_FLD_UPDATE_TIME}",
+                }},
+            }},
+        ]
+        result = {}
+        async for doc in self._col_subjobs.aggregate(pipeline):
+            result[doc["_id"]] = {sj["id"]: sj["t"] for sj in doc["subjobs"]}
+        return result
+
     async def recover_subjobs(
         self,
         job_id: str,
@@ -980,7 +1080,7 @@ class MongoDAO:
           - Appends the current admin_error to admin_error_history
           - Resets transition_times to a single DOWNLOAD_SUBMITTED entry
           - Sets state to DOWNLOAD_SUBMITTED
-          - Clears exit_code, error, admin_error, and traceback
+          - Clears exit_code, error, admin_error, traceback, and heartbeat
 
         Null is recorded in the history arrays when a field was not set, preserving
         alignment between history entries and recovery attempts.
@@ -1344,6 +1444,10 @@ class NoSuchJobError(Exception):
 
 class NoSuchSubJobError(Exception):
     """ The sub job does not exist in the system. """
+
+
+class SubJobUpdateConflictError(Exception):
+    """ The subjob was updated by another process since it was last read. """
 
 
 class MissingSubJobError(Exception):
