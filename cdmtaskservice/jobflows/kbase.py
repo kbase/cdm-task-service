@@ -33,8 +33,9 @@ from cdmtaskservice.exceptions import (
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
 from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates
+from cdmtaskservice import logfields
 from cdmtaskservice import models
-from cdmtaskservice.mongo import MongoDAO
+from cdmtaskservice.mongo import JobUpdateConflictError, MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.refserv.client import RefdataServiceClient
 from cdmtaskservice.s3.client import S3ObjectMeta
@@ -386,11 +387,45 @@ class KBaseRunner(JobFlow):
     async def _run_terminal_update(
         self, job: models.AdminJobDetails, parent_update
     ):
+        # Use last update time to ensure that if a recovery starts between pulling the job
+        # and erroring out the job the error is ignored. Otherwise after _run_terminal_update
+        # starts, job recovery could occur while htcondor is being polled waiting for jobs to
+        # finish and then this coroutine would error out the just recovered job
+        error_last_update_time = None
         try:
             if parent_update.state == models.JobState.ERROR:
-                await self._error_job(job)
+                error_last_update_time = job.transition_times[-1].time
+                await self._error_job(job, error_last_update_time)
             else:
                 await self._complete_job(job, update_time=parent_update.time)
+        except JobUpdateConflictError as e:
+            # Recovery modified the job between our read and the ERROR write; recovery wins.
+            self._logr.info(
+                "Job update conflict on terminal error write, ignoring: %s", e,
+                extra={logfields.JOB_ID: job.id},
+            )
+        except ExternalRunnerTimeoutError as e:
+            if error_last_update_time:
+                try:
+                    await self._updates.update_job_state(
+                        job.id,
+                        update_state.error(
+                            str(e),
+                            user_error="An unexpected error occurred.",
+                        ),
+                        last_update_time=error_last_update_time,
+                    )
+                except JobUpdateConflictError as juce:
+                    self._logr.info(
+                        "Job update conflict on timeout error write, ignoring: %s", juce,
+                        extra={logfields.JOB_ID: job.id},
+                    )
+            else:
+                # COMPLETE path: leave the job in its current state so recovery can retry.
+                self._logr.info(
+                    "External runner timeout on complete path, job may be recovered: %s", e,
+                    extra={logfields.JOB_ID: job.id},
+                )
         except Exception as e:
             await self._handle_parent_update_error(e, job.id)
 
@@ -409,7 +444,9 @@ class KBaseRunner(JobFlow):
             update_time=update_time,
         )
 
-    async def _error_job(self, job: models.AdminJobDetails):
+    async def _error_job(
+        self, job: models.AdminJobDetails, last_update_time: datetime.datetime
+    ):
         condor_stats = await self._fetch_condor_classad_stats(job)
         exit_codes = await self._mongo.get_exit_codes_for_subjobs(job.id)
         # if any exit codes are present and > 0, a container failed. Exit codes can be None
@@ -420,14 +457,18 @@ class KBaseRunner(JobFlow):
                    + "error code. Please examine the logs for details.")
         else:
             err = "An unexpected error occurred."
-        await self._updates.update_job_state(job.id, update_state.error(
-            "Check subjobs / containers for admin errors",  # maybe improve later
-            user_error=err,
-            log_files_path=str(Path(self._s3logdir) / job.id) if err_exit else None,
-            htcondor_cpu_hours=condor_stats.cpu_hours,
-            htcondor_max_memory=condor_stats.max_memory,
-            htcondor_runtime_seconds=condor_stats.runtime_seconds,
-        ))
+        await self._updates.update_job_state(
+            job.id,
+            update_state.error(
+                "Check subjobs / containers for admin errors",  # maybe improve later
+                user_error=err,
+                log_files_path=str(Path(self._s3logdir) / job.id) if err_exit else None,
+                htcondor_cpu_hours=condor_stats.cpu_hours,
+                htcondor_max_memory=condor_stats.max_memory,
+                htcondor_runtime_seconds=condor_stats.runtime_seconds,
+            ),
+            last_update_time=last_update_time,
+        )
         
     async def _complete_job(
         self, job: models.AdminJobDetails, update_time: datetime.datetime | None = None
@@ -523,7 +564,9 @@ class KBaseRunner(JobFlow):
             if not running or condor_jobs_all_held(running):
                 return condor_job_stats(running + complete)
             attempts += 1
-        raise IOError("Condor jobs didn't complete for 60s after all executors sent termination")
+        raise ExternalRunnerTimeoutError(
+            "External runner jobs didn't complete for 60s after all executors sent termination"
+        )
 
     async def _get_subjob_stats(
         self, job: models.AdminJobDetails
@@ -968,3 +1011,8 @@ class KBaseFlowProvider:
         except Exception as e:
             self._logr.exception(f"Failed to initialize KBase job flow dependencies: {e}")
             return None
+
+
+class ExternalRunnerTimeoutError(Exception):
+    """The external runner did not complete jobs within the expected polling window."""
+

@@ -11,6 +11,7 @@ from cdmtaskservice import sites
 from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
 from cdmtaskservice.mongo import (
     MissingSubJobError,
+    JobUpdateConflictError,
     MongoDAO,
     NoSuchJobError,
     NoSuchReferenceDataError,
@@ -649,6 +650,64 @@ async def test_update_job_recovery_cooldown_fail(mondb):
     assert job["_last_recover"] == dt3
 
 
+async def test_update_job_last_update_time_conflict(mondb):
+    """
+    When last_update_time is provided, the write is gated on the job's _update_time matching
+    that value (optimistic lock). If another write has occurred since the caller read _update_time,
+    JobUpdateConflictError is raised and the job is unchanged. If the value matches, the write
+    proceeds normally.
+
+    JobUpdateConflictError is raised even when the concurrent write's _update_time is after the
+    provided time — conflict takes priority over the time ordering error.
+    """
+    mc = await MongoDAO.create(mondb)
+    dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
+    dt2 = dt1 + datetime.timedelta(minutes=1)
+
+    await mc.save_job(_BASEJOB)
+    # Advance the job to JOB_SUBMITTING; _update_time becomes dt1
+    # initial _update_time is _SAFE_TIME — set by save_job from the last transition time
+    await mc.update_job_state("foo", submitting_job(), dt1, "tid1")
+
+    conflict_match = re.escape(
+        "Job 'foo' update time 2025-03-31 12:01:00.345000+00:00"
+        " does not match expected 2025-03-31 12:00:00.345000+00:00"
+    )
+
+    # Stale lock (_update_time in DB is dt1, not _SAFE_TIME); provided time dt2 > dt1.
+    with pytest.raises(JobUpdateConflictError, match=conflict_match):
+        await mc.update_job_state("foo", error("conflict test"), dt2, "tid2",
+                                  last_update_time=_SAFE_TIME)
+
+    # Stale lock where the concurrent write's _update_time (dt1) is also after our time
+    # (dt0 < dt1). Should raise conflict error, not value error.
+    dt0 = _SAFE_TIME - datetime.timedelta(minutes=1)
+    with pytest.raises(JobUpdateConflictError, match=conflict_match):
+        await mc.update_job_state("foo", error("conflict test"), dt0, "tid3",
+                                  last_update_time=_SAFE_TIME)
+
+    # Job is still JOB_SUBMITTING (both lock-gated writes were rejected)
+    expected = _BASEJOB.model_copy(deep=True)
+    expected.state = models.JobState.JOB_SUBMITTING
+    expected.transition_times.append(
+        models.AdminJobStateTransition(
+            state=models.JobState.JOB_SUBMITTING, time=dt1, trans_id="tid1", notif_sent=False
+        )
+    )
+    assert await mc.get_job("foo", as_admin=True) == expected
+
+    # Writing with the current _update_time (dt1) succeeds
+    await mc.update_job_state("foo", error("accepted"), dt2, "tid4", last_update_time=dt1)
+    expected.state = models.JobState.ERROR
+    expected.admin_error = "accepted"
+    expected.transition_times.append(
+        models.AdminJobStateTransition(
+            state=models.JobState.ERROR, time=dt2, trans_id="tid4", notif_sent=False
+        )
+    )
+    assert await mc.get_job("foo", as_admin=True) == expected
+
+
 async def test_recover_job(mondb):
     mc = await MongoDAO.create(mondb)
 
@@ -1003,7 +1062,10 @@ async def test_update_subjob_last_update_time_conflict(mondb):
     # initial _update_time is _SAFE_TIME — set by initialize_subjobs from the last transition time
     await mc.update_subjob_state("bar", 0, submitted_download(), dt1)
 
-    conflict_match = "^Job 'bar' subjob 0 _update_time .* does not match expected "
+    conflict_match = re.escape(
+        "Job 'bar' subjob 0 update time 2025-03-31 12:01:00.345000+00:00"
+        " does not match expected 2025-03-31 12:00:00.345000+00:00"
+    )
 
     # Stale lock (_update_time in DB is dt1, not _SAFE_TIME); provided time dt2 > dt1.
     with pytest.raises(SubJobUpdateConflictError, match=conflict_match):

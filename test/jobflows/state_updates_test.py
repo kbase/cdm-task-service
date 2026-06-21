@@ -93,7 +93,7 @@ async def test_update_job_state():
     await jfsu.update_job_state("jid", upd)
 
     mongo.update_job_state.assert_called_once_with(
-        "jid", upd, _T, _TRANS_ID, recovery_cooldown=None
+        "jid", upd, _T, _TRANS_ID, recovery_cooldown=None, last_update_time=None
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", upd.new_state, _T, _TRANS_ID, callback=ANY
@@ -109,7 +109,7 @@ async def test_update_job_state_explicit_time():
     await jfsu.update_job_state("jid", upd, update_time=_EXPLICIT_T)
 
     mongo.update_job_state.assert_called_once_with(
-        "jid", upd, _EXPLICIT_T, _TRANS_ID, recovery_cooldown=None
+        "jid", upd, _EXPLICIT_T, _TRANS_ID, recovery_cooldown=None, last_update_time=None
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", upd.new_state, _EXPLICIT_T, _TRANS_ID, callback=ANY
@@ -126,7 +126,25 @@ async def test_update_job_state_with_recovery_cooldown():
     await jfsu.update_job_state("jid", upd, recovery_cooldown=cooldown)
 
     mongo.update_job_state.assert_called_once_with(
-        "jid", upd, _T, _TRANS_ID, recovery_cooldown=cooldown
+        "jid", upd, _T, _TRANS_ID, recovery_cooldown=cooldown, last_update_time=None
+    )
+    kafka.update_job_state.assert_called_once_with(
+        "jid", upd.new_state, _T, _TRANS_ID, callback=ANY
+    )
+    await kafka.update_job_state.call_args.kwargs["callback"]
+    mongo.job_update_sent.assert_called_once_with("jid", _TRANS_ID)
+
+
+async def test_update_job_state_with_last_update_time():
+    """last_update_time is threaded through to mongo.update_job_state."""
+    mongo, kafka, jfsu = _make_jfsu()
+    upd = update_state.submitting_job()
+    lut = datetime.datetime(2025, 6, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
+
+    await jfsu.update_job_state("jid", upd, last_update_time=lut)
+
+    mongo.update_job_state.assert_called_once_with(
+        "jid", upd, _T, _TRANS_ID, recovery_cooldown=None, last_update_time=lut
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", upd.new_state, _T, _TRANS_ID, callback=ANY
@@ -177,6 +195,7 @@ async def test_save_error_job():
         update_state.error("admin err", user_error="user err"),
         _T, _TRANS_ID,
         recovery_cooldown=None,
+        last_update_time=None,
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", models.JobState.ERROR, _T, _TRANS_ID, callback=ANY
@@ -197,6 +216,7 @@ async def test_save_error_job_with_traceback_and_logpath():
         ),
         _T, _TRANS_ID,
         recovery_cooldown=None,
+        last_update_time=None,
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", models.JobState.ERROR, _T, _TRANS_ID, callback=ANY
@@ -261,6 +281,7 @@ async def test_handle_exception_job(caplog):
         _T,
         _TRANS_ID,
         recovery_cooldown=None,
+        last_update_time=None,
     )
     kafka.update_job_state.assert_called_once_with(
         "jid", models.JobState.ERROR, _T, _TRANS_ID, callback=ANY
