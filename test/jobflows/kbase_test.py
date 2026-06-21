@@ -1,4 +1,5 @@
 import datetime
+import logging
 import pytest
 from unittest.mock import call, create_autospec, patch, PropertyMock
 
@@ -6,11 +7,11 @@ from cdmtaskservice.condor.client import CondorClient, ProcState
 from cdmtaskservice import sites
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError, UnsupportedOperationError
-from cdmtaskservice.jobflows.kbase import KBaseRunner
+from cdmtaskservice.jobflows.kbase import ExternalRunnerTimeoutError, KBaseRunner
 from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates, ParentJobUpdate
 from cdmtaskservice import models
 from cdmtaskservice import update_state
-from cdmtaskservice.mongo import MongoDAO
+from cdmtaskservice.mongo import JobUpdateConflictError, MongoDAO
 from cdmtaskservice.refserv.client import RefdataServiceClient
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
 from cdmtaskservice.s3.paths import S3Paths
@@ -57,6 +58,12 @@ def _job(num_containers=2):
         id="jid",
         job_input=models.JobInput.model_construct(num_containers=num_containers, cpus=1),
         htcondor_details=models.HTCondorDetails(cluster_id=[123]),
+        transition_times=[models.AdminJobStateTransition(
+            state=models.JobState.JOB_SUBMITTED,
+            time=_T,
+            trans_id=_TRANS_ID,
+            notif_sent=True,
+        )],
     )
 
 
@@ -487,6 +494,7 @@ async def test_update_container_state_terminal_error():
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
+        last_update_time=_T,
     )
 
 
@@ -601,6 +609,7 @@ async def test_update_container_state_recovering_ignored_terminal():
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
+        last_update_time=_T,
     )
     updates.handle_exception.assert_not_called()
 
@@ -673,6 +682,7 @@ async def test_update_container_state_error_job_no_nonzero_exit_codes():
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
+        last_update_time=_T,
     )
 
 
@@ -712,11 +722,17 @@ async def test_update_container_state_error_job_held_running_containers():
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
         ),
+        last_update_time=_T,
     )
 
 
+_CONDOR_TIMEOUT_MSG = (
+    "External runner jobs didn't complete for 60s after all executors sent termination"
+)
+
+
 async def test_update_container_state_condor_stats_timeout():
-    """_fetch_condor_classad_stats raises IOError after 12 attempts; handle_exception is called."""
+    """ExternalRunnerTimeoutError is caught; update_job_state is called with last_update_time."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     # JobStatus=2 (running, not held) keeps the loop going until the 12-attempt limit
@@ -735,14 +751,116 @@ async def test_update_container_state_condor_stats_timeout():
     )
     assert condor.get_cluster_classads.call_count == 12
     condor.get_cluster_classads.assert_called_with(123)
-    # IOError raised before get_subjobs is reached
+    # Error raised before get_subjobs is reached
     mongo.get_subjobs.assert_not_called()
     mongo.get_exit_codes_for_subjobs.assert_not_called()
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
-    exc = updates.handle_exception.call_args.args[0]
-    assert isinstance(exc, IOError)
-    assert str(exc) == "Condor jobs didn't complete for 60s after all executors sent termination"
-    updates.handle_exception.assert_called_once_with(exc, "jid", "updating state for")
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(_CONDOR_TIMEOUT_MSG, user_error="An unexpected error occurred."),
+        last_update_time=_T,
+    )
+    updates.handle_exception.assert_not_called()
+
+
+async def test_update_container_state_condor_stats_timeout_recovery_wins(caplog):
+    """When recovery modifies the job during the timeout, JobUpdateConflictError is swallowed."""
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+    condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
+    updates.update_job_state.side_effect = JobUpdateConflictError("conflict")
+
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.ERROR,
+                _update(admin_error="container failed", traceback="Traceback: container failed"),
+            )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0,
+        update_state.error("container failed", traceback="Traceback: container failed"), _T,
+    )
+    condor.get_cluster_classads.assert_called_with(123)
+    assert condor.get_cluster_classads.call_count == 12
+    mongo.get_exit_codes_for_subjobs.assert_not_called()
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(_CONDOR_TIMEOUT_MSG, user_error="An unexpected error occurred."),
+        last_update_time=_T,
+    )
+    updates.handle_exception.assert_not_called()
+    assert "Job update conflict on timeout error write, ignoring: conflict" in caplog.text
+
+
+async def test_update_container_state_condor_stats_timeout_complete_path(caplog):
+    """
+    On the COMPLETE path, ExternalRunnerTimeoutError is swallowed so the job may be recovered.
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
+    condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
+
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.COMPLETE, _update(outputs=[]),
+            )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.complete([]), _T,
+    )
+    condor.get_cluster_classads.assert_called_with(123)
+    assert condor.get_cluster_classads.call_count == 12
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.COMPLETE)
+    updates.update_job_state.assert_not_called()
+    updates.handle_exception.assert_not_called()
+    assert (
+        f"External runner timeout on complete path, job may be recovered: {_CONDOR_TIMEOUT_MSG}"
+        in caplog.text
+    )
+
+
+async def test_update_container_state_error_job_update_conflict(caplog):
+    """When recovery beats the ERROR terminal write, JobUpdateConflictError is swallowed."""
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    mongo.get_exit_codes_for_subjobs.return_value = [1]
+    updates.update_job_state.side_effect = JobUpdateConflictError("conflict")
+
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.ERROR,
+                _update(admin_error="container failed", traceback="Traceback: container failed"),
+            )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0,
+        update_state.error("container failed", traceback="Traceback: container failed"), _T,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
+    condor.get_cluster_classads.assert_called_once_with(123)
+    mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Check subjobs / containers for admin errors",
+            user_error=(
+                "At least one container exited with a non-zero "
+                "error code. Please examine the logs for details."
+            ),
+            log_files_path="logs/jid",
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
+        ),
+        last_update_time=_T,
+    )
+    updates.handle_exception.assert_not_called()
+    assert "Job update conflict on terminal error write, ignoring: conflict" in caplog.text
 
 
 async def test_update_container_state_complete_job_no_outputs():
@@ -1244,7 +1362,7 @@ async def test_recover_job_complete_job_checksum_mismatch():
 
 
 async def test_recover_job_complete_job_condor_stats_timeout():
-    """Unlike update_container_state, the IOError propagates directly to the caller."""
+    """Unlike update_container_state, ExternalRunnerTimeoutError propagates to the caller."""
     runner, _, condor, updates, _ = _make_runner()
     job = _recovery_job(state=models.JobState.UPLOAD_SUBMITTED)
     condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
@@ -1252,7 +1370,7 @@ async def test_recover_job_complete_job_condor_stats_timeout():
     condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
-        with pytest.raises(IOError, match="Condor jobs didn't complete"):
+        with pytest.raises(ExternalRunnerTimeoutError, match="External runner jobs didn't complete"):
             await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123)

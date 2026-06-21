@@ -481,7 +481,8 @@ class MongoDAO:
             # Optimistic lock: gate the write on the subjob's _update_time not having changed
             # since the caller read it. If recovery (or any other write) has modified the
             # subjob since the caller's read, the condition fails and the write is skipped.
-            # _update_job_state_check_result detects this and raises SubJobUpdateConflictError.
+            # _update_job_state_check_result detects this and raises JobUpdateConflictError
+            # (job-level) or SubJobUpdateConflictError (subjob-level).
             conditions.append({"$eq": [f"${_FLD_UPDATE_TIME}", last_update_time]})
         return {"$and": conditions} if len(conditions) > 1 else conditions[0]
 
@@ -522,13 +523,18 @@ class MongoDAO:
             # update but still returned pre_doc. Detect that by comparing _update_time in
             # pre_doc against the expected value: if they differ, the lock was not held.
             # Checked before the time check so that a concurrent write advancing _update_time
-            # past `time` raises SubJobUpdateConflictError rather than the misleading
-            # "last update time is after the provided time" ValueError.
+            # past `time` raises a conflict error rather than the misleading "last update time
+            # is after the provided time" ValueError.
             actual_update_time = pre_doc[_FLD_UPDATE_TIME]
             if actual_update_time != last_update_time:
+                if subjob_id is None:
+                    raise JobUpdateConflictError(
+                        f"Job '{job_id}' update time {actual_update_time} "
+                        f"does not match expected {last_update_time}"
+                    )
                 raise SubJobUpdateConflictError(
-                    f"Job '{job_id}' subjob {subjob_id} _update_time {actual_update_time!r} "
-                    f"does not match expected {last_update_time!r}"
+                    f"Job '{job_id}' subjob {subjob_id} update time {actual_update_time} "
+                    f"does not match expected {last_update_time}"
                 )
         if pre_doc[_FLD_UPDATE_TIME] > time:
             raise ValueError(f"{entity} last update time is after the provided time")
@@ -661,6 +667,7 @@ class MongoDAO:
         trans_id: str,
         *,
         recovery_cooldown: datetime.timedelta | None = None,
+        last_update_time: datetime.datetime | None = None,
     ):
         """
         Update the job state, marking it as not yet sent to the notification system.
@@ -677,6 +684,9 @@ class MongoDAO:
             JobRecoveryError otherwise. Pass timedelta(0) for a regular (non-force) recovery
             that sets the timestamp without a minimum-time constraint, or a positive timedelta
             for a forced recovery that enforces a minimum wait between recoveries.
+        last_update_time - if provided, gates the write on the job's _update_time matching this
+            value. If the job was modified by another process since it was last read, the write
+            is skipped and JobUpdateConflictError is raised.
         """
         # If we need to send notifications to more than one place this will need a refactor. YAGNI
         await self._update_job_state(
@@ -686,6 +696,7 @@ class MongoDAO:
             time,
             trans_id=_require_string(trans_id, "trans_id"),
             recovery_cooldown=recovery_cooldown,
+            last_update_time=last_update_time,
         )
 
     @staticmethod
@@ -1444,6 +1455,10 @@ class NoSuchJobError(Exception):
 
 class NoSuchSubJobError(Exception):
     """ The sub job does not exist in the system. """
+
+
+class JobUpdateConflictError(Exception):
+    """ The job was updated by another process since it was last read. """
 
 
 class SubJobUpdateConflictError(Exception):
