@@ -72,7 +72,7 @@ class ComputeSite(BaseModel):
 PERLMUTTER_JAWS = ComputeSite(
     cluster=Cluster.PERLMUTTER_JAWS,
     nodes=3072,
-    cpus_per_node=256,
+    cpus_per_node=2 * 2 * 64, # 2 CPUs × 64 cores × 2 hyperthreads
     memory_per_node_gb=492,  # in GB, not GiB, per the JAWS team
     max_runtime_min=2 * 24 * 60 - 15,
     notes=[
@@ -101,6 +101,7 @@ KBASE = ComputeSite(
     nodes=None,
     cpus_per_node=84 * 2,
     memory_per_node_gb=990,  # Leave 10GB for overhead
+    # Note 7 days is also hard coded in the condor client
     max_runtime_min=(7 * 24 * 60) - 15, # Leave 15 slack for overhead
     notes=[
         "The DOE Systems Biology Knowledge Base compute systems.",

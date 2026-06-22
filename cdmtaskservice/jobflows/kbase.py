@@ -19,7 +19,7 @@ from cdmtaskservice.arg_checkers import (
     require_string as _require_string,
 )
 from cdmtaskservice.condor.client import (
-    CondorClient, CondorJobStats, ProcState, condor_job_stats, condor_jobs_all_held
+    CondorClient, CondorJobStats, ProcDetails, ProcState, condor_job_stats, condor_jobs_all_held
 )
 from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
@@ -35,7 +35,7 @@ from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
 from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates
 from cdmtaskservice import logfields
 from cdmtaskservice import models
-from cdmtaskservice.mongo import JobUpdateConflictError, MongoDAO
+from cdmtaskservice.mongo import MongoDAO, JobUpdateConflictError, SubJobUpdateConflictError
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.refserv.client import RefdataServiceClient
 from cdmtaskservice.s3.client import S3ObjectMeta
@@ -357,10 +357,23 @@ class KBaseRunner(JobFlow):
             raise UnsupportedOperationError(
                 f"Cannot update a container to state {new_state.value}"
         )
+        await self._update_container_state(job, container_num, new_state, update)
+
+    async def _update_container_state(
+        self,
+        job: models.AdminJobDetails,
+        container_num: int,
+        new_state: models.JobState,
+        update: models.ContainerUpdate,
+        last_update_time: datetime.datetime | None = None,
+    ):
         mongo_update = self._subjob_state_update_fns[new_state](update)
         # Just throw the error, don't error out the job. If the caller thinks this is an error
         # they can try and set the error state.
-        await self._mongo.update_subjob_state(job.id, container_num, mongo_update, update.time)
+        await self._mongo.update_subjob_state(
+            job.id, container_num, mongo_update, update.time,
+            last_update_time=last_update_time,
+        )
         try:
             parent_update = await self._updates.get_parent_job_update(job, new_state)
             if not parent_update:
@@ -394,6 +407,8 @@ class KBaseRunner(JobFlow):
         error_last_update_time = None
         try:
             if parent_update.state == models.JobState.ERROR:
+                # NOTE: it's assumed here that the job was pulled from the DB *before*
+                # updating the subjob in _update_container_state
                 error_last_update_time = job.transition_times[-1].time
                 await self._error_job(job, error_last_update_time)
             else:
@@ -588,6 +603,180 @@ class KBaseRunner(JobFlow):
                 cpu_factor = (total_cpu_hours * 3600) / (total_runtime_s * job.job_input.cpus)
         return total_cpu_hours, max_memory, cpu_factor
     
+    async def error_unhealthy_subjobs(
+        self,
+        job_id: str,
+        subjob_last_times: dict[int, datetime.datetime],
+    ):
+        """
+        Handle unhealthy subjobs, e.g. missing or stale heartbeats. Two resolution paths:
+
+        - Parent not active (terminal or canceling/ed): write ERROR directly to each subjob without
+          an external runner check or parent update, so they don't linger in the stale-heartbeat
+          query. RECOVERING is excluded — the recovery flow is actively modifying the subjobs
+          and will resolve them itself.
+        - Parent active: query the external runner and write ERROR to any subjob whose external
+          runner status is not healthy.
+
+        Both paths gate each write on the subjob's last update time as provided in the input,
+        closing the TOCTOU window between the method caller's subjob read and
+        the subsequent ERROR write. If recovery modifies a subjob in that window its
+        update time changes, causing the conditional write to be rejected — recovery wins.
+
+        Per-subjob failures are logged and skipped
+        so that one bad update does not block the others.
+
+        job_id - the parent job ID.
+        subjob_last_times - mapping of subjob_id → last update time.
+            Used as the optimistic lock value per subjob.
+        """
+        _require_string(job_id, "job_id")
+        _not_falsy(subjob_last_times, "subjob_last_times")
+        try:
+            job = await self._mongo.get_job(job_id, as_admin=True)
+        except Exception as e:
+            # it's theoretically possible for subjobs to be saved in preflight() and the job
+            # fail to save, which would mean we poll the subjobs forever. Should be extremely
+            # rare though so worry about it later
+            self._logr.error(
+                "Dead-subjob check: failed to fetch job %s: %s", job_id, e,
+                extra={logfields.JOB_ID: job_id}
+            )
+            return
+        if job.state == models.JobState.RECOVERING:
+            return
+        if not job.state.is_active():
+            await self._cleanup_inactive_job_subjobs(job, subjob_last_times)
+        else:
+            await self._check_condor_and_error_subjobs(job, subjob_last_times)
+
+    async def _cleanup_inactive_job_subjobs(
+        self,
+        job: models.AdminJobDetails,
+        subjob_last_times: dict[int, datetime.datetime],
+    ):
+        # Parent is not active and not recovering: clean up subjobs still in active states
+        # so they don't linger in the stale-heartbeat query. No parent update is needed.
+        #
+        # CANCELING/CANCELED: the job is dead; all work should stop.
+        #
+        # ERROR: the parent normally transitions to ERROR only once all subjobs are terminal
+        # (see state_updates._check_equiv_states_complete), but it can also be updated to ERROR
+        # directly via the exception handler (handle_exception → save_error) if a Mongo error
+        # occurs during a mid-flow parent update. In that case subjobs may still be active.
+        # This should be a rare case so we don't add special casing for it and just set the
+        # subjobs to error, which will cause the executor's next state update to fail.
+        #
+        # The optimistic lock is required even here: the job state read earlier in
+        # error_unhealthy_subjobs is immediately stale. Between that read and
+        # this write, recovery could have acquired the RECOVERING lock and reset a subjob back
+        # to an active state. The _update_time check detects that modification and raises
+        # SubJobUpdateConflictError, which we swallow — recovery's write wins.
+        admin_error = (
+            f"Parent job is in state {job.state.value} "
+            + "while subjob was still in an active state"
+        )
+        for sub_id, last_update_time in subjob_last_times.items():
+            try:
+                await self._mongo.update_subjob_state(
+                    job.id, sub_id, update_state.error(admin_error), self._timestamp_fn(),
+                    last_update_time=last_update_time,
+                )
+            except SubJobUpdateConflictError as e:
+                self._logr.info(
+                    "Dead-subjob check: conflict cleaning up subjob %s of inactive job %s; "
+                    "another write won: %s",
+                    sub_id, job.id, e,
+                    extra={logfields.JOB_ID: job.id},
+                )
+            except Exception as e:
+                self._logr.error(
+                    "Dead-subjob check: failed to clean up subjob %s of inactive job %s: %s",
+                    sub_id, job.id, e,
+                    extra={logfields.JOB_ID: job.id}
+                )
+
+    async def _check_condor_and_error_subjobs(
+        self,
+        job: models.AdminJobDetails,
+        subjob_last_times: dict[int, datetime.datetime],
+    ):
+        if not job.htcondor_details or not job.htcondor_details.cluster_id:
+            # No cluster ID means the job hasn't been submitted to HTCondor yet. There is a
+            # brief legitimate window between job creation and HTCondor submission where this
+            # is expected, but if HTCondor submission fails AND the subsequent error state
+            # update also fails (double failure), the job can be permanently stuck in CREATED
+            # with active subjobs that never receive heartbeats, which will result in the dead
+            # subjob detector polling them forever. Recovery rejects CREATED jobs
+            # with no cluster ID and tells the user to create a new job; recovery should be
+            # updated to explicitly handle this case by erroring the parent and subjobs.
+            # Needs thorough analysis for race conditions before implementing
+            self._logr.warning(
+                "Dead-subjob check: job %s has no HTCondor cluster ID; "
+                "skipping condor check. If this persists, the job may be stuck in CREATED "
+                "due to a double failure during submission.",
+                job.id,
+                extra={logfields.JOB_ID: job.id},
+            )
+            return
+        cluster_id = job.htcondor_details.cluster_id[-1]
+        subjob_ids = list(subjob_last_times.keys())
+        try:
+            proc_details = await self._condor.get_cluster_proc_details(
+                cluster_id, proc_ids=subjob_ids
+            )
+        except Exception as e:
+            self._logr.error(
+                "Dead-subjob check: failed to query condor for job %s cluster %s: %s",
+                job.id, cluster_id, e,
+                extra={logfields.JOB_ID: job.id}
+            )
+            return
+        for sub_id, last_update_time in subjob_last_times.items():
+            details = proc_details.get(sub_id)
+            if details is None:
+                details = ProcDetails(
+                    state=ProcState.OTHER,
+                    hold_reason=f"HTCondor proc absent from cluster {cluster_id} response",
+                )
+            await self._error_proc_if_unhealthy(job, sub_id, details, last_update_time)
+
+    async def _error_proc_if_unhealthy(
+        self,
+        job: models.AdminJobDetails,
+        sub_id: int,
+        details: ProcDetails,
+        last_update_time: datetime.datetime,
+    ):
+        if details.state.is_healthy():
+            return
+        admin_error = (
+            f"No active executor heartbeat; HTCondor proc is in state {details.state.value}"
+        )
+        if details.hold_reason_code is not None:
+            admin_error += f"; HTCondor hold reason code: {details.hold_reason_code}"
+        if details.hold_reason:
+            admin_error += f"; HTCondor hold reason: {details.hold_reason}"
+        update = models.ContainerUpdate(time=self._timestamp_fn(), admin_error=admin_error)
+        try:
+            await self._update_container_state(
+                job, sub_id, models.JobState.ERROR, update,
+                last_update_time=last_update_time,
+            )
+        except SubJobUpdateConflictError as e:
+            self._logr.info(
+                "Dead-subjob check: conflict updating subjob %s of active job %s; "
+                "another write won: %s",
+                sub_id, job.id, e,
+                extra={logfields.JOB_ID: job.id},
+            )
+        except Exception as e:
+            self._logr.error(
+                "Dead-subjob check: failed to update subjob %s of active job %s to ERROR: %s",
+                sub_id, job.id, e,
+                extra={logfields.JOB_ID: job.id}
+            )
+
     async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
         """
         Do nothing. Job cleanup is handled by HTCondor.
@@ -675,8 +864,15 @@ class KBaseRunner(JobFlow):
         held_procs: list[int],
         lock_time: datetime.datetime,
     ):
-        reset_time = self._timestamp_fn()
-        await self._mongo.recover_subjobs(job.id, held_procs, lock_time, reset_time)
+        download_submitted_time = self._timestamp_fn()
+        # recover_subjobs resets each held subjob to DOWNLOAD_SUBMITTED and clears its
+        # heartbeat. The TOCTOU window with the dead-subjob detector is closed by the
+        # optimistic lock on _update_time: any in-flight detector write will see the changed
+        # update time from this recovery write and raise SubJobUpdateConflictError, which the
+        # detector silently swallows. The cleared heartbeat means the subjob will reappear in
+        # the missing-heartbeat query, but by then the update time will have changed so the
+        # detector write will conflict and be skipped.
+        await self._mongo.recover_subjobs(job.id, held_procs, lock_time, download_submitted_time)
         try:
             await self._condor.release_job(job.htcondor_details.cluster_id[-1])
         except Exception as e:
@@ -690,7 +886,7 @@ class KBaseRunner(JobFlow):
         # so we don't worry about it. If it starts occurring, could have the remote job wait
         # for the main job to transition to DOWNLOAD_SUBMITTED before submitting its
         # state transition request.
-        await self._mongo.recover_job(job.id, reset_time, self._trans_id_fn())
+        await self._mongo.recover_job(job.id, download_submitted_time, self._trans_id_fn())
 
     async def _standard_recover(self, job: models.AdminJobDetails):
         self._check_standard_recoverable(job)
