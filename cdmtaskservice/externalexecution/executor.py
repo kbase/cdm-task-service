@@ -60,6 +60,7 @@ class Executor:
         _upload_delay_sec: float = 0,
         _error_upload_delay_sec: float = 0,
         _timestamp_fn: Callable[[], datetime.datetime] = utcdatetime,
+        _heartbeat_fn: Callable[[uuid.UUID], Any] | None = None,
     ):
         """
         Create the executor from the configuration.
@@ -75,6 +76,7 @@ class Executor:
         self._upload_delay_sec = _upload_delay_sec
         self._error_upload_delay_sec = _error_upload_delay_sec
         self._timestamp_fn = _timestamp_fn
+        self._heartbeat_fn = _heartbeat_fn if _heartbeat_fn is not None else self._heartbeat_loop
         self._workdir = working_dir.expanduser().resolve()
         self._url = self._cfg.cts_url.rstrip("/")
         self._sess = _session or aiohttp.ClientSession(
@@ -167,7 +169,7 @@ class Executor:
         await self._log_service_ver()
         self._execute_task = asyncio.current_task()
         self._setup_signal_handlers()
-        heartbeat_task = asyncio.create_task(self._heartbeat_loop(self._cfg.job_id))
+        heartbeat_task = asyncio.create_task(self._heartbeat_fn(self._cfg.job_id))
         timeout_task = asyncio.create_task(self._timeout_task())
         try:
             # If we can't get the job, we presumably can't update the job either,
@@ -206,7 +208,13 @@ class Executor:
         finally:
             timeout_task.cancel()
             heartbeat_task.cancel()
-            await asyncio.gather(timeout_task, heartbeat_task, return_exceptions=True)
+            results = await asyncio.gather(timeout_task, heartbeat_task, return_exceptions=True)
+            for task_result in results:
+                if (
+                    isinstance(task_result, Exception)
+                    and not isinstance(task_result, asyncio.CancelledError)
+                ):
+                    self._logr.error("Background task failed unexpectedly", exc_info=task_result)
 
     async def _handle_cancel(
         self, job: models.AdminJobDetails, phase_at_cancel: str

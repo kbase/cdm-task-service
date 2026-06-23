@@ -243,6 +243,7 @@ def _make_executor(
     job_timeout_min=100000,
     job_update_timeout_min=60,
     mount_prefix_override=None,
+    heartbeat_fn=None,
 ):
     cfg = _make_cfg(
         heartbeat_interval_min=heartbeat_interval_min,
@@ -260,6 +261,7 @@ def _make_executor(
         _session=sess,
         _s3_client=s3,
         _timestamp_fn=_advancing_ts(),
+        _heartbeat_fn=heartbeat_fn,
         **extra,
     )
     return _ExeResult(exe=exe, sess=sess, s3=s3, creator=creator)
@@ -979,6 +981,42 @@ async def test_execute_cancels_heartbeat_and_timeout_tasks_on_exit(tmp_path):
 
     heartbeat_mock_task.cancel.assert_called_once_with()
     timeout_mock_task.cancel.assert_called_once_with()
+
+    assert r.sess.get.call_args_list == [call(_CTS_URL), call(_JOB_URL)]
+    assert r.sess.put.call_args_list == [
+        call(_UPDATE_BASE + "job_submitting", json={"time": _ts(0)}),
+        call(_UPDATE_BASE + "job_submitted", json={"time": _ts(1)}),
+        call(_UPDATE_BASE + "upload_submitting",
+             json={"time": _ts(2), "exit_code": 0, **_RESULT_STATS}),
+        call(_UPDATE_BASE + "upload_submitted", json={"time": _ts(3)}),
+        call(_UPDATE_BASE + "complete", json={"time": _ts(4)}),
+    ]
+
+
+async def test_execute_logs_error_when_background_task_fails_unexpectedly(tmp_path, caplog):
+    """A non-CancelledError exception from a background task is logged as an error."""
+    _create_input_file(tmp_path)
+    (tmp_path / "__output__").mkdir()
+
+    async def _failing_heartbeat(_job_id):
+        raise RuntimeError("heartbeat task died unexpectedly")
+
+    # AsyncMock never truly yields to the event loop, so the heartbeat task would never get
+    # scheduled before the finally block cancels it. A real sleep in the download gives the
+    # heartbeat task a turn so it can run and fail before the cancel fires.
+    async def _yielding_download(*_a, **_kw):
+        await asyncio.sleep(0)
+
+    runner, _ = _make_runner(exit_code=0)
+    r = _make_executor(working_dir=tmp_path, heartbeat_fn=_failing_heartbeat)
+    r.creator.start_container.return_value = runner
+    r.s3.download_objects_to_file.side_effect = _yielding_download
+
+    with caplog.at_level(logging.ERROR, logger="cdmtaskservice.externalexecution.executor"):
+        await r.exe.execute()
+
+    assert "Background task failed unexpectedly" in caplog.text
+    assert "heartbeat task died unexpectedly" in caplog.text
 
     assert r.sess.get.call_args_list == [call(_CTS_URL), call(_JOB_URL)]
     assert r.sess.put.call_args_list == [
