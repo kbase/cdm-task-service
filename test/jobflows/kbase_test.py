@@ -1977,7 +1977,7 @@ async def test_error_unhealthy_subjobs_condor_fails(caplog):
         await runner.error_unhealthy_subjobs("jid", {0: _T, 1: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, proc_ids=[0, 1])
+    condor.get_cluster_proc_details.assert_called_once_with(123, [0, 1])
     updates.get_parent_job_update.assert_not_called()
     mongo.update_subjob_state.assert_not_called()
     assert (
@@ -1994,29 +1994,29 @@ async def test_error_unhealthy_subjobs_healthy_proc_no_update(proc_state):
     await runner.error_unhealthy_subjobs("jid", {0: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, proc_ids=[0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
     updates.get_parent_job_update.assert_not_called()
     mongo.update_subjob_state.assert_not_called()
 
 
 async def test_error_unhealthy_subjobs_absent_proc_errors_subjob():
-    """Proc missing from condor response is treated as OTHER state and errored."""
+    """Proc absent from condor is returned as MISSING by the client and errored."""
     runner, mongo, condor, updates, _ = _make_runner()
     job = _htcondor_job()
     mongo.get_job.return_value = job
-    condor.get_cluster_proc_details.return_value = {}
+    condor.get_cluster_proc_details.return_value = {0: ProcDetails(state=ProcState.MISSING)}
     updates.get_parent_job_update.return_value = None
 
     await runner.error_unhealthy_subjobs("jid", {0: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, proc_ids=[0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
         update_state.error(
-            "No active executor heartbeat; HTCondor proc is in state other"
-            "; HTCondor hold reason: HTCondor proc absent from cluster 123 response",
+            "No active executor heartbeat; HTCondor has no record of this proc "
+            "(absent from both active queue and history — likely purged)",
             traceback=None,
         ),
         _T,
@@ -2035,7 +2035,7 @@ async def test_error_unhealthy_subjobs_unhealthy_proc_errors_subjob(proc_state):
     await runner.error_unhealthy_subjobs("jid", {3: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, proc_ids=[3])
+    condor.get_cluster_proc_details.assert_called_once_with(123, [3])
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 3,
@@ -2075,7 +2075,7 @@ async def test_error_unhealthy_subjobs_held_proc_includes_hold_details(
     await runner.error_unhealthy_subjobs("jid", {0: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, proc_ids=[0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     expected_admin_error = (
         f"No active executor heartbeat; HTCondor proc is in state held{expected_suffix}"
@@ -2103,7 +2103,7 @@ async def test_error_unhealthy_subjobs_update_conflict_recovery_won(caplog):
         await runner.error_unhealthy_subjobs("jid", {0: stale_t})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, proc_ids=[0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
         update_state.error(
@@ -2138,7 +2138,7 @@ async def test_error_unhealthy_subjobs_per_subjob_exception_isolation(caplog):
         await runner.error_unhealthy_subjobs("jid", {0: _T, 1: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, proc_ids=[0, 1])
+    condor.get_cluster_proc_details.assert_called_once_with(123, [0, 1])
     # Subjob 0 throws before get_parent_job_update; subjob 1 succeeds so it's called once.
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     _admin_error = "No active executor heartbeat; HTCondor proc is in state held"
@@ -2173,7 +2173,7 @@ async def test_error_unhealthy_subjobs_active_job_triggers_terminal_parent():
         await runner.error_unhealthy_subjobs("jid", {0: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, proc_ids=[0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
         update_state.error(

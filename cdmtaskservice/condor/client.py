@@ -52,6 +52,7 @@ class ProcState(enum.Enum):
     COMPLETE = "complete"
     CANCELED = "canceled"
     OTHER = "other"
+    MISSING = "missing"
 
     def is_healthy(self) -> bool:
         """ Return True if this state does not indicate a problem requiring intervention. """
@@ -399,6 +400,8 @@ class CondorClient:
         running_job_ads, complete_job_ads = await self._fetch_cluster_ads(
             cluster_id, _RETURNED_JOB_ADS
         )
+        if not running_job_ads and not complete_job_ads:
+            raise ValueError(f"No records found for cluster ID {cluster_id}")
         id2ad = {ad[_AD_PROC_ID]: ad for ad in running_job_ads}
         for ad in complete_job_ads:
             # remove jobs that have transitioned to complete between the queries
@@ -425,8 +428,6 @@ class CondorClient:
             constraint=constraint,
             projection=projection,
         )
-        if not active_ads and not complete_ads and proc_ids is None:
-            raise ValueError(f"No records found for cluster ID {cluster_id}")
         return active_ads, complete_ads
 
     async def _fetch_proc_map(
@@ -464,35 +465,64 @@ class CondorClient:
             an empty result is returned (rather than an error) if none are found.
             An empty list returns an empty dict without querying HTCondor.
         """
-        return await self._fetch_proc_map(
+        result = await self._fetch_proc_map(
             cluster_id, _STATUS_ONLY, proc_ids,
             lambda ad: _status_to_proc_state(ad[_AD_JOB_STATUS]),
         )
+        if proc_ids is None and not result:
+            raise ValueError(f"No records found for cluster ID {cluster_id}")
+        return result
 
     async def get_cluster_proc_details(
         self,
         cluster_id: int,
-        proc_ids: Collection[int] | None = None,
+        expected_procs: int | Collection[int],
     ) -> dict[int, ProcDetails]:
         """
         Get the state and hold details of each process in an HTC cluster.
 
-        Returns a dict mapping proc ID (== container number) to ProcDetails.
-        Raises ValueError if no records are found for cluster_id and proc_ids is None.
+        Returns a dict mapping proc ID (== container number) to ProcDetails, with a full
+        entry for every expected proc. Procs absent from both the active queue and history
+        are returned with ProcDetails(state=ProcState.MISSING).
 
         cluster_id - the HTCondor cluster ID.
-        proc_ids - if provided, the HTCondor constraint is restricted to these proc IDs and
-            an empty result is returned (rather than an error) if none are found.
-            An empty list returns an empty dict without querying HTCondor.
+        expected_procs - the expected set of proc IDs. If an int n, the expected set is
+            range(n) and the HTCondor query is unrestricted to proc IDs. If a collection,
+            it is used directly as both the expected set and the query filter. An empty
+            collection returns an empty dict without querying HTCondor.
         """
-        return await self._fetch_proc_map(
-            cluster_id, _STATUS_AND_HOLD, proc_ids,
+        if expected_procs is None:
+            raise ValueError("expected_procs is required")
+        if isinstance(expected_procs, int):
+            if expected_procs < 0:
+                raise ValueError("expected_procs must be >= 0")
+            filter_ids: Collection[int] | None = None
+            expected_ids: Collection[int] = range(expected_procs)
+        else:
+            invalid = sorted(pid for pid in expected_procs if pid < 0)
+            if invalid:
+                raise ValueError(f"expected_procs contains proc IDs less than 0: {invalid}")
+            filter_ids = expected_procs
+            expected_ids = expected_procs
+        result = await self._fetch_proc_map(
+            cluster_id, _STATUS_AND_HOLD, filter_ids,
             lambda ad: ProcDetails(
                 state=_status_to_proc_state(ad[_AD_JOB_STATUS]),
                 hold_reason=ad.get(_AD_HOLD_REASON),
                 hold_reason_code=ad.get(_AD_HOLD_REASON_CODE),
             ),
         )
+        if isinstance(expected_procs, int):
+            unexpected = sorted(pid for pid in result if pid not in expected_ids)
+            if unexpected:
+                raise ValueError(
+                    f"HTCondor returned unexpected proc IDs {unexpected} for cluster "
+                    f"{cluster_id}; expected_procs={expected_procs}"
+                )
+        for proc_id in expected_ids:
+            if proc_id not in result:
+                result[proc_id] = ProcDetails(state=ProcState.MISSING)
+        return result
 
     async def release_job(self, cluster_id: int):
         """
