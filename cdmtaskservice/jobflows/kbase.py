@@ -3,6 +3,8 @@ The KBase job flow implementation and provider. Runs jobs on the HTCondor system
 """
 
 import asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 from collections.abc import Callable
 from dataclasses import dataclass
 import datetime
@@ -1035,10 +1037,104 @@ class KBaseRunner(JobFlow):
         pass # Intentionally do nothing
 
 
+class DeadSubjobDetector:
+    """
+    Periodically queries MongoDB for subjobs with missing or stale heartbeats and dispatches
+    to KBaseRunner.error_unhealthy_subjobs for resolution.
+    """
+    
+    _STALE_HEARTBEAT_CHECK_INTERVAL_SEC = 5 * 60
+    _STALE_HEARTBEAT_CHECK_JITTER_SEC = 60
+    _NO_HEARTBEAT_CHECK_INTERVAL_SEC = 30 * 60
+    _NO_HEARTBEAT_CHECK_JITTER_SEC = 300
+
+    def __init__(
+        self,
+        mongo: MongoDAO,
+        runner: KBaseRunner,
+        heartbeat_max_age_min: int,
+        _timestamp_fn: Callable[[], datetime.datetime] = utcdatetime,
+    ):
+        """
+        Create and start the detector.
+
+        mongo - the Mongo DAO.
+        runner - the KBase job flow runner used to resolve unhealthy subjobs.
+        heartbeat_max_age_min - subjobs whose last heartbeat is older than this many minutes
+            are considered potentially dead.
+        """
+        self._mongo = _not_falsy(mongo, "mongo")
+        self._runner = _not_falsy(runner, "runner")
+        self._max_age_min = _check_num(heartbeat_max_age_min, "heartbeat_max_age_min", minimum=1)
+        self._timestamp_fn = _timestamp_fn
+        self._logr = logging.getLogger(__name__)
+        self._scheduler = AsyncIOScheduler()
+        self._scheduler.add_job(
+            self._check_stale_heartbeats,
+            trigger=IntervalTrigger(
+                seconds=self._STALE_HEARTBEAT_CHECK_INTERVAL_SEC,
+                jitter=self._STALE_HEARTBEAT_CHECK_JITTER_SEC,
+            ),
+            max_instances=1,
+            coalesce=True,
+        )
+        self._scheduler.add_job(
+            self._check_missing_heartbeats,
+            trigger=IntervalTrigger(
+                seconds=self._NO_HEARTBEAT_CHECK_INTERVAL_SEC,
+                jitter=self._NO_HEARTBEAT_CHECK_JITTER_SEC,
+            ),
+            max_instances=1,
+            coalesce=True,
+        )
+        self._scheduler.start()
+
+    async def _check_stale_heartbeats(self):
+        older_than = self._timestamp_fn() - datetime.timedelta(minutes=self._max_age_min)
+        await self._check_and_error_subjobs(
+            self._mongo.get_subjobs_with_stale_heartbeat(older_than),
+            "stale heartbeat",
+        )
+
+    async def _check_missing_heartbeats(self):
+        await self._check_and_error_subjobs(
+            self._mongo.get_subjobs_with_missing_heartbeat(),
+            "missing heartbeat",
+        )
+
+    async def _check_and_error_subjobs(self, query_coro, heartbeat_kind: str):
+        try:
+            job_map = await query_coro
+        except Exception:
+            self._logr.exception(
+                "Dead-subjob check: failed to query subjobs with %s", heartbeat_kind,
+            )
+            return
+        for job_id, subjob_last_times in job_map.items():
+            self._logr.info(
+                "Dead-subjob check: job %s has %s subjob(s) with %s to check: %s",
+                job_id, len(subjob_last_times), heartbeat_kind, list(subjob_last_times.keys()),
+                extra={logfields.JOB_ID: job_id},
+            )
+            try:
+                await self._runner.error_unhealthy_subjobs(job_id, subjob_last_times)
+            except Exception:
+                self._logr.exception(
+                    "Dead-subjob check: error handling %s for job %s",
+                    heartbeat_kind, job_id,
+                    extra={logfields.JOB_ID: job_id}
+                )
+
+    def close(self):
+        """Shut down the scheduler."""
+        self._scheduler.shutdown(wait=True)
+
+
 @dataclass(frozen=True)
 class _Dependencies():
     refdata_client: RefdataServiceClient
     kbase_job_flow: KBaseRunner
+    detector: DeadSubjobDetector
 
 
 class KBaseFlowProvider:
@@ -1047,7 +1143,8 @@ class KBaseFlowProvider:
     """
     
     _HEARTBEAT_INTERVAL_MIN = 5
-
+    _HEARTBEAT_MAX_AGE_MIN = 15
+    
     @classmethod
     async def create(
         cls,
@@ -1100,6 +1197,7 @@ class KBaseFlowProvider:
         """
         self._closed = True
         if isinstance(self._build_state, _Dependencies):
+            self._build_state.detector.close()
             await self._build_state.refdata_client.close()
 
     def _check_closed(self):
@@ -1203,7 +1301,8 @@ class KBaseFlowProvider:
                 refcli,
             )
             self._logr.info("Done")
-            return _Dependencies(refcli, kbase)
+            detector = DeadSubjobDetector(self._mongodao, kbase, self._HEARTBEAT_MAX_AGE_MIN)
+            return _Dependencies(refcli, kbase, detector)
         except Exception as e:
             self._logr.exception(f"Failed to initialize KBase job flow dependencies: {e}")
             return None

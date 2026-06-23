@@ -80,7 +80,7 @@ def _make_stats_thread(
 
 class RunningContainer:
     """
-    A handle to a running Docker container. Not concurrency-safe.
+    A handle to a running Docker container. Not thread-safe.
 
     Obtain instances via ContainerCreator.start_container().
     """
