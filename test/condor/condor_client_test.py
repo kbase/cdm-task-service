@@ -386,21 +386,34 @@ async def test_get_cluster_proc_states_proc_ids_not_found():
 async def test_get_cluster_proc_details_bad_args():
     client, _ = _make_client()
     with pytest.raises(ValueError, match="^cluster_id is required$"):
-        await client.get_cluster_proc_details(None)
+        await client.get_cluster_proc_details(None, 1)
     with pytest.raises(ValueError, match="^cluster_id must be >= 1$"):
-        await client.get_cluster_proc_details(0)
+        await client.get_cluster_proc_details(0, 1)
     with pytest.raises(ValueError, match="^cluster_id must be >= 1$"):
-        await client.get_cluster_proc_details(-1)
+        await client.get_cluster_proc_details(-1, 1)
+    with pytest.raises(ValueError, match="^expected_procs is required$"):
+        await client.get_cluster_proc_details(1, None)
+    with pytest.raises(ValueError, match="^expected_procs must be >= 0$"):
+        await client.get_cluster_proc_details(1, -1)
+    with pytest.raises(
+        ValueError,
+        match=r"^expected_procs contains proc IDs less than 0: \[-3, -1\]$",
+    ):
+        await client.get_cluster_proc_details(1, [0, -1, 2, -3])
 
 
 async def test_get_cluster_proc_details_no_records():
+    """All expected procs absent from condor return as MISSING; no error raised."""
     client, schedd = _make_client()
     schedd.query.return_value = []
     schedd.history.return_value = []
 
-    with pytest.raises(ValueError, match="^No records found for cluster ID 123$"):
-        await client.get_cluster_proc_details(123)
+    details = await client.get_cluster_proc_details(123, 2)
 
+    assert details == {
+        0: ProcDetails(state=ProcState.MISSING),
+        1: ProcDetails(state=ProcState.MISSING),
+    }
     constraint = "ClusterId == 123"
     schedd.query.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
     schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
@@ -420,7 +433,7 @@ async def test_get_cluster_proc_details_mixed():
         {"ProcId": 4, "JobStatus": 3},   # Removed
     ]
 
-    details = await client.get_cluster_proc_details(123)
+    details = await client.get_cluster_proc_details(123, 5)
 
     assert details == {
         0: ProcDetails(state=ProcState.RUNNING),
@@ -434,11 +447,43 @@ async def test_get_cluster_proc_details_mixed():
     schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
 
 
+async def test_get_cluster_proc_details_partial_missing_with_count():
+    """When an int count is given, procs absent from condor fill in as MISSING."""
+    client, schedd = _make_client()
+    schedd.query.return_value = [{"ProcId": 0, "JobStatus": 2}]   # Running
+    schedd.history.return_value = [{"ProcId": 2, "JobStatus": 4}]  # Completed
+
+    details = await client.get_cluster_proc_details(123, 4)
+
+    assert details == {
+        0: ProcDetails(state=ProcState.RUNNING),
+        1: ProcDetails(state=ProcState.MISSING),
+        2: ProcDetails(state=ProcState.COMPLETE),
+        3: ProcDetails(state=ProcState.MISSING),
+    }
+    constraint = "ClusterId == 123"
+    schedd.query.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
+    schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
+
+
+async def test_get_cluster_proc_details_unexpected_proc_id_raises():
+    """When an int count is given, a returned proc ID >= n raises ValueError."""
+    client, schedd = _make_client()
+    schedd.query.return_value = [{"ProcId": 0, "JobStatus": 2}, {"ProcId": 3, "JobStatus": 4}]
+    schedd.history.return_value = []
+
+    with pytest.raises(
+        ValueError,
+        match=r"^HTCondor returned unexpected proc IDs \[3\] for cluster 123; expected_procs=3$",
+    ):
+        await client.get_cluster_proc_details(123, 3)
+
+
 async def test_get_cluster_proc_details_empty_proc_ids():
-    """Empty proc_ids list returns empty dict without querying condor."""
+    """Empty expected_procs collection returns empty dict without querying condor."""
     client, schedd = _make_client()
 
-    details = await client.get_cluster_proc_details(123, proc_ids=[])
+    details = await client.get_cluster_proc_details(123, [])
 
     assert details == {}
     schedd.query.assert_not_called()
@@ -453,7 +498,7 @@ async def test_get_cluster_proc_details_proc_ids_filter():
     ]
     schedd.history.return_value = [{"ProcId": 3, "JobStatus": 4}]
 
-    details = await client.get_cluster_proc_details(123, proc_ids=[1, 3])
+    details = await client.get_cluster_proc_details(123, [1, 3])
 
     assert details == {
         1: ProcDetails(state=ProcState.HELD, hold_reason="oom", hold_reason_code=7),
@@ -471,18 +516,21 @@ async def test_get_cluster_proc_details_unknown_status():
     for status in (0, 8, 99):
         schedd.query.return_value = [{"ProcId": 0, "JobStatus": status}]
         with pytest.raises(ValueError, match=f"^Unknown HTCondor job status: {status}$"):
-            await client.get_cluster_proc_details(123)
+            await client.get_cluster_proc_details(123, 1)
 
 
 async def test_get_cluster_proc_details_proc_ids_not_found():
-    """Requested proc IDs absent from both queues returns empty dict, not an error."""
+    """Expected proc IDs absent from both queues are returned as MISSING, not an error."""
     client, schedd = _make_client()
     schedd.query.return_value = []
     schedd.history.return_value = []
 
-    details = await client.get_cluster_proc_details(123, proc_ids=[0, 1])
+    details = await client.get_cluster_proc_details(123, [0, 1])
 
-    assert details == {}
+    assert details == {
+        0: ProcDetails(state=ProcState.MISSING),
+        1: ProcDetails(state=ProcState.MISSING),
+    }
     constraint = "ClusterId == 123 && (ProcId == 0 || ProcId == 1)"
     schedd.query.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
     schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)

@@ -725,7 +725,7 @@ class KBaseRunner(JobFlow):
         subjob_ids = list(subjob_last_times.keys())
         try:
             proc_details = await self._condor.get_cluster_proc_details(
-                cluster_id, proc_ids=subjob_ids
+                cluster_id, subjob_ids
             )
         except Exception as e:
             self._logr.error(
@@ -735,13 +735,9 @@ class KBaseRunner(JobFlow):
             )
             return
         for sub_id, last_update_time in subjob_last_times.items():
-            details = proc_details.get(sub_id)
-            if details is None:
-                details = ProcDetails(
-                    state=ProcState.OTHER,
-                    hold_reason=f"HTCondor proc absent from cluster {cluster_id} response",
-                )
-            await self._error_proc_if_unhealthy(job, sub_id, details, last_update_time)
+            await self._error_proc_if_unhealthy(
+                job, sub_id, proc_details[sub_id], last_update_time
+            )
 
     async def _error_proc_if_unhealthy(
         self,
@@ -755,6 +751,11 @@ class KBaseRunner(JobFlow):
         admin_error = (
             f"No active executor heartbeat; HTCondor proc is in state {details.state.value}"
         )
+        if details.state is ProcState.MISSING:
+            admin_error = (
+                "No active executor heartbeat; HTCondor has no record of this proc "
+                "(absent from both active queue and history — likely purged)"
+            )
         if details.hold_reason_code is not None:
             admin_error += f"; HTCondor hold reason code: {details.hold_reason_code}"
         if details.hold_reason:
