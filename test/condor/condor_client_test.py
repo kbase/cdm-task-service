@@ -74,15 +74,14 @@ async def test_get_container_classad_bad_args():
 
 
 async def test_get_container_classad_no_records():
+    """Absent proc returns _state=MISSING only; no error raised."""
     client, schedd = _make_client()
     schedd.query.return_value = []
     schedd.history.return_value = []
 
-    with pytest.raises(
-        ValueError, match="^No record found for cluster ID 123 and container number 0$"
-    ):
-        await client.get_container_classad(123, 0)
+    result = await client.get_container_classad(123, 0)
 
+    assert result == {"_state": ProcState.MISSING}
     constraint = "ClusterId == 123 && CTSContainerNumber == 0"
     schedd.query.assert_called_once_with(constraint=constraint, projection=_RETURNED_JOB_ADS)
     schedd.history.assert_called_once_with(constraint=constraint, projection=_RETURNED_JOB_ADS)
@@ -104,6 +103,7 @@ async def test_get_container_classad_in_active():
     result = await client.get_container_classad(123, 1)
 
     assert result == {
+        "_state": ProcState.RUNNING,
         "ClusterId": 123,
         "ProcId": 1,
         "JobStatus": 2,
@@ -135,6 +135,7 @@ async def test_get_container_classad_in_history():
     result = await client.get_container_classad(123, 0)
 
     assert result == {
+        "_state": ProcState.COMPLETE,
         "ClusterId": 123,
         "ProcId": 0,
         "JobStatus": 4,
