@@ -41,6 +41,7 @@ _AD_COMMITTED_TIME = "CommittedTime"
 _AD_JOB_STATUS = "JobStatus"
 _AD_HOLD_REASON = "HoldReason"
 _AD_HOLD_REASON_CODE = "HoldReasonCode"
+_AD_STATE = "_state"
 _JOB_STATUS_HELD = 5
 
 
@@ -382,11 +383,9 @@ class CondorClient:
                 projection=_RETURNED_JOB_ADS,
             )
         if not job_ads:
-            raise ValueError(
-                f"No record found for cluster ID {cluster_id} and container number "
-                + f"{container_number}"
-            )
-        return self._classad_to_dict(job_ads[0])
+            return {_AD_STATE: ProcState.MISSING}
+        classad = self._classad_to_dict(job_ads[0])
+        return {_AD_STATE: _status_to_proc_state(classad[_AD_JOB_STATUS])} | classad
         
     async def get_cluster_classads(self, cluster_id: int
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
