@@ -850,6 +850,15 @@ async def test_subjob_basic_roundtrip(mondb):
     assert sjs_got == sjs 
 
 
+async def test_get_subjobs(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_BASESUBJOB1, _BASESUBJOB2, _BASESUBJOB3])
+
+    assert await mc.get_subjobs("bar") == [_BASESUBJOB1, _BASESUBJOB2, _BASESUBJOB3]
+    assert await mc.get_subjobs("bar", subjob_ids=[1]) == [_BASESUBJOB2]
+    assert await mc.get_subjobs("bar", subjob_ids=[0, 2]) == [_BASESUBJOB1, _BASESUBJOB3]
+
+
 async def test_initialize_subjobs_fail_bad_args(mondb):
     mc = await MongoDAO.create(mondb)
     
@@ -906,15 +915,21 @@ async def get_subjob_fail(mc, job_id, subjob_id, expected):
 async def test_get_subjobs_fail(mondb):
     mc = await MongoDAO.create(mondb)
     await mc.initialize_subjobs([_BASESUBJOB2])
-    
+
     await get_subjobs_fail(mc, None, ValueError("job_id is required"))
     await get_subjobs_fail(mc, "   \t   ", ValueError("job_id is required"))
     await get_subjobs_fail(mc, "foo", NoSuchSubJobError("No sub jobs found for job ID 'foo'"))
+    await get_subjobs_fail(
+        mc, "bar",
+        NoSuchSubJobError("No sub jobs found for job ID 'bar' with sub job IDs [5]"),
+        subjob_ids=[5],
+    )
+    await get_subjobs_fail(mc, "bar", ValueError("subjob_ids cannot be empty"), subjob_ids=[])
 
 
-async def get_subjobs_fail(mc, job_id, expected):
-    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
-        await mc.get_subjobs(job_id)
+async def get_subjobs_fail(mc, job_id, expected, subjob_ids=None):
+    with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$"):
+        await mc.get_subjobs(job_id, subjob_ids=subjob_ids)
 
 
 async def test_get_exit_codes_for_subjobs(mondb):
