@@ -9,7 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
 from pymongo import IndexModel, ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from pymongo.results import DeleteResult
-from typing import Any, Awaitable, Callable, Coroutine, Iterable
+from typing import Any, Awaitable, Callable, Collection, Coroutine, Iterable
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
@@ -944,17 +944,26 @@ class MongoDAO:
         doc = self._clean_doc(doc)
         return models.SubJob(**doc)
 
-    async def get_subjobs(self, job_id: str) -> list[models.SubJob]:
+    async def get_subjobs(
+        self, job_id: str, subjob_ids: Collection[int] | None = None
+    ) -> list[models.SubJob]:
         """
-        Get all subjobs for a job given the job ID.
+        Get subjobs for a job given the job ID.
+
+        subjob_ids - if provided, only return subjobs whose id is in this collection.
         """
-        docs = await self._col_subjobs.find(
-            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
-        ).sort(models.FLD_SUBJOB_ID, 1
+        job_id = _require_string(job_id, "job_id")
+        if subjob_ids is not None and not subjob_ids:
+            raise ValueError("subjob_ids cannot be empty")
+        query = {models.FLD_COMMON_ID: job_id}
+        if subjob_ids is not None:
+            query[models.FLD_SUBJOB_ID] = {"$in": list(subjob_ids)}
+        docs = await self._col_subjobs.find(query).sort(models.FLD_SUBJOB_ID, 1
         ).to_list(length=None)  # Currently the API enforces a limit of 1000
         sjs = [models.SubJob(**self._clean_doc(d)) for d in docs]
         if not sjs:
-            raise NoSuchSubJobError(f"No sub jobs found for job ID '{job_id}'")
+            ids = f" with sub job IDs {sorted(subjob_ids)}" if subjob_ids is not None else ""
+            raise NoSuchSubJobError(f"No sub jobs found for job ID '{job_id}'{ids}")
         return sjs
 
     async def get_exit_codes_for_subjobs(self, job_id: str) -> list[int | None]:
