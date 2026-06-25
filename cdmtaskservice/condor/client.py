@@ -79,6 +79,9 @@ def _status_to_proc_state(status: int) -> ProcState:
 
 _STATUS_ONLY = [_AD_PROC_ID, _AD_JOB_STATUS]
 _STATUS_AND_HOLD = [_AD_PROC_ID, _AD_JOB_STATUS, _AD_HOLD_REASON, _AD_HOLD_REASON_CODE]
+_STATUS_AND_STATS = [
+    _AD_PROC_ID, _AD_JOB_STATUS, _AD_MEM, _AD_CPU_USER, _AD_CPU_SYS, _AD_COMMITTED_TIME,
+]
 
 _LOCATIONS = ["Iwd", "Err", "Out", "UserLog"]
 _IDS = [_AD_CLUSTER_ID, _AD_PROC_ID, _AD_JOB_ID, _AD_CONTAINER_NUMBER]
@@ -173,6 +176,31 @@ class ProcDetails:
     state: ProcState
     hold_reason: str | None = None
     hold_reason_code: int | None = None
+
+
+@dataclass
+class ProcStats:
+    """State and resource usage stats for an HTCondor process."""
+    state: ProcState
+    cpu_hours: float | None = None
+    max_memory: int | None = None
+    runtime_seconds: float | None = None
+
+
+def _proc_stats_from_ad(ad: Any) -> ProcStats:
+    # Seems like condor uses MiB, although docs aren't great
+    # https://htcondor.readthedocs.io/en/24.x/man-pages/condor_submit.html?utm_source=chatgpt.com#request_memory
+    mem = ad.get(_AD_MEM)
+    if isinstance(mem, ExprTree):
+        mem = mem.eval(scope=ad)
+    cpu_sec = (ad.get(_AD_CPU_USER) or 0) + (ad.get(_AD_CPU_SYS) or 0)
+    rt = ad.get(_AD_COMMITTED_TIME)
+    return ProcStats(
+        state=_status_to_proc_state(ad[_AD_JOB_STATUS]),
+        cpu_hours=cpu_sec / 3600.0 if cpu_sec else None,
+        max_memory=mem * 1024 * 1024 if mem is not None else None,
+        runtime_seconds=float(rt) if rt is not None else None,
+    )
 
 
 @dataclass
@@ -523,6 +551,30 @@ class CondorClient:
                 hold_reason_code=ad.get(_AD_HOLD_REASON_CODE),
             ),
             missing=ProcDetails(state=ProcState.MISSING),
+        )
+
+    async def get_cluster_proc_stats(
+        self,
+        cluster_id: int,
+        expected_procs: int | Collection[int],
+    ) -> dict[int, ProcStats]:
+        """
+        Get the state and resource usage stats of each process in an HTC cluster.
+
+        Returns a dict mapping proc ID (== container number) to ProcStats, with a full
+        entry for every expected proc. Procs absent from both the active queue and history
+        are returned with ProcStats(state=ProcState.MISSING) and all stat fields None.
+
+        cluster_id - the HTCondor cluster ID.
+        expected_procs - the expected set of proc IDs. If an int n, the expected set is
+            range(n) and the HTCondor query is unrestricted to proc IDs. If a collection,
+            it is used directly as both the expected set and the query filter. An empty
+            collection returns an empty dict without querying HTCondor.
+        """
+        return await self._fetch_proc_map(
+            cluster_id, _STATUS_AND_STATS, expected_procs,
+            _proc_stats_from_ad,
+            missing=ProcStats(state=ProcState.MISSING),
         )
 
     async def release_job(self, cluster_id: int):
