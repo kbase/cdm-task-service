@@ -21,7 +21,7 @@ from cdmtaskservice.arg_checkers import (
     require_string as _require_string,
 )
 from cdmtaskservice.condor.client import (
-    CondorClient, CondorJobStats, ProcDetails, ProcState, condor_job_stats, condor_jobs_all_held
+    CondorClient, ProcDetails, ProcState, ProcStats,
 )
 from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
@@ -61,6 +61,24 @@ _PROC_STATE_TO_EXTERNAL = {
 _RETRY_DELAY_SEC = 5 * 60  # configurable?
 _RECOVERY_COOLDOWN = datetime.timedelta(minutes=10)
 _STANDARD_PATH_STATES = frozenset(update_state.JOB_COMPLETED_PATH[1:-1])
+
+
+@dataclass
+class _CondorJobStats:
+    cpu_hours: float | None
+    max_memory: int | None
+    runtime_seconds: float | None
+
+
+def _aggregate_condor_stats(proc_stats: dict[int, ProcStats]) -> _CondorJobStats:
+    cpu = sum(s.cpu_hours for s in proc_stats.values() if s.cpu_hours is not None)
+    mems = [s.max_memory for s in proc_stats.values() if s.max_memory is not None]
+    rt = sum(s.runtime_seconds for s in proc_stats.values() if s.runtime_seconds is not None)
+    return _CondorJobStats(
+        cpu_hours=cpu or None,
+        max_memory=max(mems) if mems else None,
+        runtime_seconds=rt or None,
+    )
 
 
 class KBaseRunner(JobFlow):
@@ -465,7 +483,7 @@ class KBaseRunner(JobFlow):
     async def _error_job(
         self, job: models.AdminJobDetails, last_update_time: datetime.datetime
     ):
-        condor_stats = await self._fetch_condor_classad_stats(job)
+        condor_stats = await self._poll_condor_stats(job)
         exit_codes = await self._mongo.get_exit_codes_for_subjobs(job.id)
         # if any exit codes are present and > 0, a container failed. Exit codes can be None
         # if the container never ran
@@ -497,7 +515,7 @@ class KBaseRunner(JobFlow):
         # to propagate so the caller can retry without killing the job.
         # update_time, if provided, is the subjob-derived completion timestamp. Error paths
         # intentionally ignore it — they represent newly discovered failures.
-        condor_stats = await self._fetch_condor_classad_stats(job)
+        condor_stats = await self._poll_condor_stats(job)
         htcondor_kwargs = dict(
             htcondor_cpu_hours=condor_stats.cpu_hours,
             htcondor_max_memory=condor_stats.max_memory,
@@ -556,7 +574,7 @@ class KBaseRunner(JobFlow):
         if job.htcondor_details and job.htcondor_details.cluster_id:
             # assume there's only one job in the list for now
             await self._condor.cancel_job(job.htcondor_details.cluster_id[-1])
-            condor_stats = await self._fetch_condor_classad_stats(job)
+            condor_stats = await self._poll_condor_stats(job)
         cpu_hours, max_mem, cpu_factor = await self._get_subjob_stats(job)
         await self._updates.update_job_state(job.id, update_state.canceled(
             cpu_hours=cpu_hours,
@@ -567,20 +585,18 @@ class KBaseRunner(JobFlow):
             htcondor_runtime_seconds=condor_stats.runtime_seconds if condor_stats else None,
         ))
 
-    async def _fetch_condor_classad_stats(
+    async def _poll_condor_stats(
         self, job: models.AdminJobDetails
-    ) -> CondorJobStats:
+    ) -> _CondorJobStats:
         attempts = 0
         # if cluster_id exists, there's a cluster ID in it
         cluster_id = job.htcondor_details.cluster_id[-1]
+        num_containers = job.job_input.num_containers
         while attempts < 12:  # 60 seconds for condor to finish the job, seems ample?
             await asyncio.sleep(5)  # give Condor a few seconds to finish up
-            running, complete = await self._condor.get_cluster_classads(cluster_id)
-            # Kind of inefficient but I doubt this will happen often
-            # If the condor job errors, it's held with the current setup
-            # Means the client and this code is coupled, might need to rethink
-            if not running or condor_jobs_all_held(running):
-                return condor_job_stats(running + complete)
+            proc_stats = await self._condor.get_cluster_proc_stats(cluster_id, num_containers)
+            if not any(s.state in {ProcState.QUEUED, ProcState.RUNNING} for s in proc_stats.values()):
+                return _aggregate_condor_stats(proc_stats)
             attempts += 1
         raise ExternalRunnerTimeoutError(
             "External runner jobs didn't complete for 60s after all executors sent termination"

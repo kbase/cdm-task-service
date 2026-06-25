@@ -5,7 +5,7 @@ import logging
 import pytest
 from unittest.mock import call, create_autospec, patch, PropertyMock
 
-from cdmtaskservice.condor.client import CondorClient, ProcDetails, ProcState
+from cdmtaskservice.condor.client import CondorClient, ProcDetails, ProcState, ProcStats
 from cdmtaskservice import sites
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.exceptions import (
@@ -30,14 +30,16 @@ from cdmtaskservice.timestamp import utcdatetime
 _T = utcdatetime()
 _TRANS_ID = "test-trans-id"
 
-# HTCondor ClassAd — RemoteUserCpu=3500s+RemoteSysCpu=100s → cpu_hours=1.0,
-# CommittedTime=1200s → runtime_seconds=1200 (distinct from cpu_hours in seconds and
-# all subjob totals below), MemoryUsage=512 MiB.
-_CONDOR_AD = {
-    "RemoteUserCpu": 3500.0,
-    "RemoteSysCpu": 100.0,
-    "CommittedTime": 1200,
-    "MemoryUsage": 512,
+# Stats split across procs to exercise aggregation (sum cpu/runtime, max memory, skip Nones).
+# Proc 2 has no stats — verifies None fields are filtered.
+# Aggregate: cpu_hours=1.0, max_memory=512 MiB, runtime_seconds=1200.0.
+# _HTC_* constants reflect these aggregates for use in assertions.
+_CONDOR_STATS = {
+    0: ProcStats(state=ProcState.COMPLETE, cpu_hours=0.6, max_memory=300 * 1024 * 1024,
+                 runtime_seconds=500.0),
+    1: ProcStats(state=ProcState.COMPLETE, cpu_hours=0.4, max_memory=512 * 1024 * 1024,
+                 runtime_seconds=700.0),
+    2: ProcStats(state=ProcState.COMPLETE),
 }
 _HTC_CPU_HOURS = 1.0
 _HTC_MAX_MEM = 512 * 1024 * 1024
@@ -295,7 +297,8 @@ async def test_update_container_state_upload_submitting():
         models.JobState.UPLOAD_SUBMITTING, _T
     )
     # Container 0 reports its stats; container 1 is already stored. get_subjobs returns both.
-    # cpu_hours 0.6+0.4=1.0; max_memory max(400MB,300MB)=400MB; runtime 1200+600=1800s → factor=2.0
+    # cpu_hours 0.6+0.4=1.0; max_memory max(400MB,300MB)=400MB;
+    # runtime 1200+600=1800s → cpu_factor=2.0
     mongo.get_subjobs.return_value = [
         _make_subjob(cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=1200, exit_code=0),
         _make_subjob(cpu_hours=0.4, max_memory=300*1024*1024, runtime_seconds=600,  exit_code=0),
@@ -324,7 +327,9 @@ async def test_update_container_state_upload_submitting():
 
 
 async def test_update_container_state_upload_submitting_partial_stats():
-    """UPLOAD_SUBMITTING: subjobs with None stats are excluded — only non-None values aggregate."""
+    """
+    UPLOAD_SUBMITTING: subjobs with None stats are excluded — only non-None values aggregate.
+    """
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.UPLOAD_SUBMITTING, _T
@@ -368,7 +373,9 @@ async def test_update_container_state_upload_submitting_no_stats():
 
 
 async def test_update_container_state_upload_submitting_no_runtime():
-    """UPLOAD_SUBMITTING: cpu_hours and max_memory present but no runtime → cpu_factor is None."""
+    """
+    UPLOAD_SUBMITTING: cpu_hours and max_memory present but no runtime → cpu_factor is None.
+    """
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.UPLOAD_SUBMITTING, _T
@@ -480,9 +487,9 @@ async def test_update_container_state_terminal_error():
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     mongo.get_exit_codes_for_subjobs.return_value = [1, 0]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
-    # asyncio.sleep is patched to make the _fetch_condor_classad_stats polling loop instant
+    # asyncio.sleep is patched to make the _poll_condor_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.update_container_state(
             _JOB, 1, models.JobState.ERROR,
@@ -495,7 +502,7 @@ async def test_update_container_state_terminal_error():
         last_update_time=None,
     )
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
     mongo.get_subjobs.assert_not_called()
     updates.update_job_state.assert_called_once_with(
@@ -515,6 +522,42 @@ async def test_update_container_state_terminal_error():
     )
 
 
+async def test_update_container_state_terminal_error_no_condor_stats():
+    """When all procs report no stats, htcondor_* fields in the update are all None."""
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+    mongo.get_exit_codes_for_subjobs.return_value = [1, 0]
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=ProcState.COMPLETE),
+        1: ProcStats(state=ProcState.COMPLETE),
+    }
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.update_container_state(
+            _JOB, 1, models.JobState.ERROR,
+            _update(admin_error="container failed", traceback="Traceback: container failed"),
+        )
+
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
+    mongo.get_subjobs.assert_not_called()
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Check subjobs / containers for admin errors",
+            user_error=(
+                "At least one container exited with a non-zero "
+                "error code. Please examine the logs for details."
+            ),
+            log_files_path="logs/jid",
+            htcondor_cpu_hours=None,
+            htcondor_max_memory=None,
+            htcondor_runtime_seconds=None,
+        ),
+        last_update_time=_T,
+    )
+
+
 async def test_update_container_state_terminal_complete():
     """All subjobs complete - parent job should enter complete state."""
     runner, mongo, condor, updates, s3 = _make_runner()
@@ -524,9 +567,9 @@ async def test_update_container_state_terminal_complete():
     mongo.get_subjobs.return_value = [sj]
     s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")
     s3.get_object_meta.return_value = [s3obj]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
-    # asyncio.sleep is patched to make the _fetch_condor_classad_stats polling loop instant
+    # asyncio.sleep is patched to make the _poll_condor_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.update_container_state(
             _JOB, 0, models.JobState.COMPLETE, _update(outputs=outputs)
@@ -537,7 +580,7 @@ async def test_update_container_state_terminal_complete():
         last_update_time=None,
     )
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.COMPLETE)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_subjobs.assert_called_once_with("jid")
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
     updates.update_job_state.assert_called_once_with(
@@ -598,7 +641,7 @@ async def test_update_container_state_recovering_ignored_terminal():
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     mongo.get_exit_codes_for_subjobs.return_value = [1, 1]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
     updates.update_job_state.side_effect = InvalidJobStateError(
         "job is recovering", actual_state=models.JobState.RECOVERING
     )
@@ -615,7 +658,7 @@ async def test_update_container_state_recovering_ignored_terminal():
         last_update_time=None,
     )
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
         "jid",
@@ -676,9 +719,9 @@ async def test_update_container_state_error_job_no_nonzero_exit_codes():
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     mongo.get_exit_codes_for_subjobs.return_value = [0, None]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
-    # asyncio.sleep is patched to make the _fetch_condor_classad_stats polling loop instant
+    # asyncio.sleep is patched to make the _poll_condor_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.update_container_state(
             _JOB, 0, models.JobState.ERROR,
@@ -693,7 +736,7 @@ async def test_update_container_state_error_job_no_nonzero_exit_codes():
         last_update_time=None,
     )
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
     mongo.get_subjobs.assert_not_called()
     updates.update_job_state.assert_called_once_with(
@@ -711,22 +754,27 @@ async def test_update_container_state_error_job_no_nonzero_exit_codes():
 
 async def test_update_container_state_error_job_held_running_containers():
     """
-    _fetch_condor_classad_stats exits on first iteration when all running containers are held.
+    _poll_condor_stats exits on first iteration when all running containers are held.
     """
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     mongo.get_exit_codes_for_subjobs.return_value = [1]
     # running=[held job] triggers an immediate exit via condor_jobs_all_held
-    condor.get_cluster_classads.return_value = ([{"JobStatus": 5}], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=ProcState.HELD, cpu_hours=0.2, max_memory=300 * 1024 * 1024,
+                     runtime_seconds=400.0),
+        1: ProcStats(state=ProcState.COMPLETE, cpu_hours=0.8, max_memory=512 * 1024 * 1024,
+                     runtime_seconds=800.0),
+    }
 
-    # asyncio.sleep is patched to make the _fetch_condor_classad_stats polling loop instant
+    # asyncio.sleep is patched to make the _poll_condor_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.update_container_state(
             _JOB, 0, models.JobState.ERROR,
             _update(admin_error="container failed", traceback="Traceback: container failed"),
         )
 
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
     mongo.get_subjobs.assert_not_called()
     mongo.update_subjob_state.assert_called_once_with(
@@ -762,7 +810,10 @@ async def test_update_container_state_condor_stats_timeout():
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     # JobStatus=2 (running, not held) keeps the loop going until the 12-attempt limit
-    condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=ProcState.RUNNING),
+        1: ProcStats(state=ProcState.RUNNING),
+    }
 
     # asyncio.sleep is patched to make the polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
@@ -776,8 +827,8 @@ async def test_update_container_state_condor_stats_timeout():
         update_state.error("container failed", traceback="Traceback: container failed"), _T,
         last_update_time=None,
     )
-    assert condor.get_cluster_classads.call_count == 12
-    condor.get_cluster_classads.assert_called_with(123)
+    assert condor.get_cluster_proc_stats.call_count == 12
+    condor.get_cluster_proc_stats.assert_called_with(123, 2)
     # Error raised before get_subjobs is reached
     mongo.get_subjobs.assert_not_called()
     mongo.get_exit_codes_for_subjobs.assert_not_called()
@@ -794,7 +845,10 @@ async def test_update_container_state_condor_stats_timeout_recovery_wins(caplog)
     """When recovery modifies the job during the timeout, JobUpdateConflictError is swallowed."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
-    condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=ProcState.RUNNING),
+        1: ProcStats(state=ProcState.RUNNING),
+    }
     updates.update_job_state.side_effect = JobUpdateConflictError("conflict")
 
     with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
@@ -809,8 +863,8 @@ async def test_update_container_state_condor_stats_timeout_recovery_wins(caplog)
         update_state.error("container failed", traceback="Traceback: container failed"), _T,
         last_update_time=None,
     )
-    condor.get_cluster_classads.assert_called_with(123)
-    assert condor.get_cluster_classads.call_count == 12
+    condor.get_cluster_proc_stats.assert_called_with(123, 2)
+    assert condor.get_cluster_proc_stats.call_count == 12
     mongo.get_exit_codes_for_subjobs.assert_not_called()
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
     updates.update_job_state.assert_called_once_with(
@@ -828,7 +882,10 @@ async def test_update_container_state_condor_stats_timeout_complete_path(caplog)
     """
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
-    condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=ProcState.RUNNING),
+        1: ProcStats(state=ProcState.RUNNING),
+    }
 
     with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
         with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
@@ -840,8 +897,8 @@ async def test_update_container_state_condor_stats_timeout_complete_path(caplog)
         "jid", 0, update_state.complete([]), _T,
         last_update_time=None,
     )
-    condor.get_cluster_classads.assert_called_with(123)
-    assert condor.get_cluster_classads.call_count == 12
+    condor.get_cluster_proc_stats.assert_called_with(123, 2)
+    assert condor.get_cluster_proc_stats.call_count == 12
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.COMPLETE)
     updates.update_job_state.assert_not_called()
     updates.handle_exception.assert_not_called()
@@ -855,7 +912,7 @@ async def test_update_container_state_error_job_update_conflict(caplog):
     """When recovery beats the ERROR terminal write, JobUpdateConflictError is swallowed."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
     mongo.get_exit_codes_for_subjobs.return_value = [1]
     updates.update_job_state.side_effect = JobUpdateConflictError("conflict")
 
@@ -872,7 +929,7 @@ async def test_update_container_state_error_job_update_conflict(caplog):
         last_update_time=None,
     )
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
         "jid",
@@ -899,7 +956,7 @@ async def test_update_container_state_complete_job_no_outputs():
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
     sj = models.SubJob.model_construct(outputs=[])
     mongo.get_subjobs.return_value = [sj]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     # asyncio.sleep is patched to make the _get_condor_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
@@ -910,7 +967,7 @@ async def test_update_container_state_complete_job_no_outputs():
         last_update_time=None,
     )
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.COMPLETE)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
         "jid",
@@ -933,7 +990,7 @@ async def test_update_container_state_complete_job_checksum_mismatch():
     mongo.get_subjobs.return_value = [sj]
     s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "bbbbbbbbbbbb")  # deliberate mismatch
     s3.get_object_meta.return_value = [s3obj]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     # asyncio.sleep is patched to make the _get_condor_stats polling loop instant
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
@@ -942,7 +999,7 @@ async def test_update_container_state_complete_job_checksum_mismatch():
         )
 
     updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.COMPLETE)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_subjobs.assert_called_once_with("jid")
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
     updates.handle_exception.assert_not_called()
@@ -1064,14 +1121,14 @@ async def test_recover_job_standard_canceling_with_cluster_id():
         _make_subjob(cpu_hours=0.6, max_memory=400*1024*1024, runtime_seconds=600, exit_code=0),
         _make_subjob(cpu_hours=0.4, max_memory=300*1024*1024, runtime_seconds=300, exit_code=0),
     ]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
     condor.cancel_job.assert_called_once_with(123)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
         "jid",
@@ -1106,7 +1163,7 @@ async def test_recover_job_standard_canceling_no_cluster_id(cluster_ids):
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
     condor.cancel_job.assert_not_called()
-    condor.get_cluster_classads.assert_not_called()
+    condor.get_cluster_proc_stats.assert_not_called()
     mongo.get_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
         "jid",
@@ -1164,13 +1221,13 @@ async def test_recover_job_error_state_advance_to_complete():
                       exit_code=0, outputs=outputs)
     mongo.get_subjobs.return_value = [sj]
     s3.get_object_meta.return_value = [S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
     # Called twice: once for UPLOAD_SUBMITTING stats, once in _complete_job for outputs
     mongo.get_subjobs.assert_called_with("jid")
@@ -1221,7 +1278,7 @@ async def test_recover_job_error_state_advance_fails():
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_not_called()
+    condor.get_cluster_proc_stats.assert_not_called()
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
     mongo.get_subjobs.assert_not_called()
     s3.get_object_meta.assert_not_called()
@@ -1250,7 +1307,7 @@ async def test_recover_job_error_state_lock_fails():
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_not_called()
+    condor.get_cluster_proc_stats.assert_not_called()
     mongo.recover_job.assert_not_called()
     mongo.get_subjobs.assert_not_called()
     s3.get_object_meta.assert_not_called()
@@ -1299,13 +1356,13 @@ async def test_recover_job_standard_advance_to_complete(start_state, state_updat
     mongo.get_subjobs.return_value = [sj]
     s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")
     s3.get_object_meta.return_value = [s3obj]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     # get_subjobs called once per UPLOAD_SUBMITTING (stats) plus once in _complete_job (outputs)
     mongo.get_subjobs.assert_called_with("jid")
     assert mongo.get_subjobs.call_count == 2 if len(state_updates) > 1 else 1
@@ -1341,13 +1398,13 @@ async def test_recover_job_complete_job_no_outputs():
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
     sj = models.SubJob.model_construct(outputs=[])
     mongo.get_subjobs.return_value = [sj]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_subjobs.assert_called_once_with("jid")
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
     updates.update_job_state.assert_called_once_with(
@@ -1372,13 +1429,13 @@ async def test_recover_job_complete_job_checksum_mismatch():
     mongo.get_subjobs.return_value = [sj]
     s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "bbbbbbbbbbbb")
     s3.get_object_meta.return_value = [s3obj]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_subjobs.assert_called_once_with("jid")
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
@@ -1401,7 +1458,10 @@ async def test_recover_job_complete_job_condor_stats_timeout():
     job = _recovery_job(state=models.JobState.UPLOAD_SUBMITTED)
     condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
-    condor.get_cluster_classads.return_value = ([{"JobStatus": 2}], [])
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=ProcState.RUNNING),
+        1: ProcStats(state=ProcState.RUNNING),
+    }
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         with pytest.raises(
@@ -1411,8 +1471,8 @@ async def test_recover_job_complete_job_condor_stats_timeout():
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
-    assert condor.get_cluster_classads.call_count == 12
-    condor.get_cluster_classads.assert_called_with(123)
+    assert condor.get_cluster_proc_stats.call_count == 12
+    condor.get_cluster_proc_stats.assert_called_with(123, 2)
     updates.update_job_state.assert_not_called()
 
 
@@ -1653,13 +1713,13 @@ async def test_recover_job_force_all_complete():
                       exit_code=0, outputs=outputs)
     mongo.get_subjobs.return_value = [sj]
     s3.get_object_meta.return_value = [S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job, force=True)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
     # Called twice: once for UPLOAD_SUBMITTING stats, once in _complete_job for outputs
     mongo.get_subjobs.assert_called_with("jid")
@@ -1710,7 +1770,7 @@ async def test_recover_job_force_all_complete_advance_fails():
         await runner.recover_job(job, force=True)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_not_called()
+    condor.get_cluster_proc_stats.assert_not_called()
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
     mongo.get_subjobs.assert_not_called()
     s3.get_object_meta.assert_not_called()
@@ -1741,7 +1801,7 @@ async def test_recover_job_force_all_complete_lock_fails():
         await runner.recover_job(job, force=True)
 
     condor.get_cluster_proc_states.assert_called_once_with(123, 2)
-    condor.get_cluster_classads.assert_not_called()
+    condor.get_cluster_proc_stats.assert_not_called()
     mongo.recover_job.assert_not_called()
     mongo.get_subjobs.assert_not_called()
     s3.get_object_meta.assert_not_called()
@@ -2222,7 +2282,7 @@ async def test_error_unhealthy_subjobs_active_job_triggers_terminal_parent():
     condor.get_cluster_proc_details.return_value = {0: ProcDetails(state=ProcState.HELD)}
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     mongo.get_exit_codes_for_subjobs.return_value = [1]
-    condor.get_cluster_classads.return_value = ([], [_CONDOR_AD])
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.error_unhealthy_subjobs("jid", {0: _T})
@@ -2239,7 +2299,7 @@ async def test_error_unhealthy_subjobs_active_job_triggers_terminal_parent():
         last_update_time=_T,
     )
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
-    condor.get_cluster_classads.assert_called_once_with(123)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
     mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
     updates.update_job_state.assert_called_once_with(
         "jid",
