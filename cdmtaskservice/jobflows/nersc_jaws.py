@@ -58,7 +58,7 @@ _JAWS_STATUS_TO_EXTERNAL = {
     jaws_client.JAWSStatus.QUEUED:   models.ExternalRunnerState.QUEUED,
     jaws_client.JAWSStatus.RUNNING:  models.ExternalRunnerState.RUNNING,
     jaws_client.JAWSStatus.COMPLETE: models.ExternalRunnerState.COMPLETE,
-    jaws_client.JAWSStatus.UNKNOWN:  models.ExternalRunnerState.UNKNOWN,
+    jaws_client.JAWSStatus.UNKNOWN:  models.ExternalRunnerState.UNRECOGNIZED,
 }
 
 _JAWS_RESULT_TO_EXTERNAL = {

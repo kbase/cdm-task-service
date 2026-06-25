@@ -54,7 +54,8 @@ _PROC_STATE_TO_EXTERNAL = {
     ProcState.HELD:      models.ExternalRunnerState.ERROR,
     ProcState.COMPLETE:  models.ExternalRunnerState.COMPLETE,
     ProcState.CANCELED:  models.ExternalRunnerState.CANCELED,
-    ProcState.OTHER:     models.ExternalRunnerState.UNKNOWN,
+    ProcState.OTHER:     models.ExternalRunnerState.UNRECOGNIZED,
+    ProcState.MISSING:   models.ExternalRunnerState.MISSING,
 }
 
 _RETRY_DELAY_SEC = 5 * 60  # configurable?
@@ -261,8 +262,8 @@ class KBaseRunner(JobFlow):
                 states=[models.ExternalRunnerState.NONE] * n,
             )
         cluster_id = job.htcondor_details.cluster_id[-1]
-        proc_states = await self._condor.get_cluster_proc_states(cluster_id)
         n = job.job_input.num_containers
+        proc_states = await self._condor.get_cluster_proc_states(cluster_id, n)
         return models.ExternalRunnerStatus(
             manages_containers=False,
             states=[_PROC_STATE_TO_EXTERNAL[proc_states[i]] for i in range(n)],
@@ -796,8 +797,21 @@ class KBaseRunner(JobFlow):
                 "moment. If submission failed, create a new job rather than recovering."
             )
         proc_states = await self._condor.get_cluster_proc_states(
-            job.htcondor_details.cluster_id[-1]
+            job.htcondor_details.cluster_id[-1], job.job_input.num_containers
         )
+        missing = [i for i, s in proc_states.items() if s == ProcState.MISSING]
+        if missing:
+            subjobs = await self._mongo.get_subjobs(job.id, subjob_ids=missing)
+            subjob_map = {sj.sub_id: sj for sj in subjobs}
+            not_complete = [
+                i for i in missing if subjob_map[i].state != models.JobState.COMPLETE
+            ]
+            if not_complete:
+                raise InvalidJobStateError(
+                    f"External processor has no record of proc(s) {not_complete} for cluster "
+                    f"{job.htcondor_details.cluster_id[-1]} and the corresponding subjobs are "
+                    "not complete — job cannot be recovered."
+                )
         if {ProcState.OTHER, ProcState.CANCELED} & set(proc_states.values()):
             raise InvalidJobStateError(
                 "External processor contains processes in an unexpected state. Unable to recover "
