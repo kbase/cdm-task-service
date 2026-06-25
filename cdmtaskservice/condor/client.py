@@ -433,44 +433,69 @@ class CondorClient:
         self,
         cluster_id: int,
         projection: list[str],
-        proc_ids: Collection[int] | None,
+        expected_procs: int | Collection[int],
         transform: Callable[[Any], _V],
+        missing: _V | None = None,
     ) -> dict[int, _V]:
         _check_num(cluster_id, "cluster_id")
-        if proc_ids is not None and not proc_ids:
+        if expected_procs is None:
+            raise ValueError("expected_procs is required")
+        if isinstance(expected_procs, int):
+            if expected_procs < 0:
+                raise ValueError("expected_procs must be >= 0")
+            filter_ids: Collection[int] | None = None
+            expected_ids: Collection[int] = range(expected_procs)
+        else:
+            invalid = sorted(pid for pid in expected_procs if pid < 0)
+            if invalid:
+                raise ValueError(f"expected_procs contains proc IDs less than 0: {invalid}")
+            filter_ids = expected_procs
+            expected_ids = expected_procs
+        if filter_ids is not None and not filter_ids:
             return {}
-        active_ads, complete_ads = await self._fetch_cluster_ads(cluster_id, projection, proc_ids)
+        active_ads, complete_ads = await self._fetch_cluster_ads(cluster_id, projection, filter_ids)
         result: dict[int, _V] = {}
         for ad in active_ads:
             result[ad[_AD_PROC_ID]] = transform(ad)
         for ad in complete_ads:
             # override active entry if a proc raced from query to history between calls
             result[ad[_AD_PROC_ID]] = transform(ad)
+        if filter_ids is None:  # unrestricted query — check for unexpected proc IDs
+            expected_set = set(expected_ids)
+            unexpected = sorted(pid for pid in result if pid not in expected_set)
+            if unexpected:
+                raise ValueError(
+                    f"HTCondor returned unexpected proc IDs {unexpected} "
+                    f"for cluster {cluster_id}"
+                )
+        for proc_id in expected_ids:
+            if proc_id not in result:
+                result[proc_id] = missing
         return result
 
     async def get_cluster_proc_states(
         self,
         cluster_id: int,
-        proc_ids: Collection[int] | None = None,
+        expected_procs: int | Collection[int],
     ) -> dict[int, ProcState]:
         """
         Get the state of each process in an HTC cluster using minimal data transfer.
 
-        Returns a dict mapping proc ID (== container number) to ProcState.
-        Raises ValueError if no records are found for cluster_id and proc_ids is None.
+        Returns a dict mapping proc ID (== container number) to ProcState, with a full
+        entry for every expected proc. Procs absent from both the active queue and history
+        are returned with ProcState.MISSING.
 
         cluster_id - the HTCondor cluster ID.
-        proc_ids - if provided, the HTCondor constraint is restricted to these proc IDs and
-            an empty result is returned (rather than an error) if none are found.
-            An empty list returns an empty dict without querying HTCondor.
+        expected_procs - the expected set of proc IDs. If an int n, the expected set is
+            range(n) and the HTCondor query is unrestricted to proc IDs. If a collection,
+            it is used directly as both the expected set and the query filter. An empty
+            collection returns an empty dict without querying HTCondor.
         """
-        result = await self._fetch_proc_map(
-            cluster_id, _STATUS_ONLY, proc_ids,
+        return await self._fetch_proc_map(
+            cluster_id, _STATUS_ONLY, expected_procs,
             lambda ad: _status_to_proc_state(ad[_AD_JOB_STATUS]),
+            missing=ProcState.MISSING,
         )
-        if proc_ids is None and not result:
-            raise ValueError(f"No records found for cluster ID {cluster_id}")
-        return result
 
     async def get_cluster_proc_details(
         self,
@@ -490,38 +515,15 @@ class CondorClient:
             it is used directly as both the expected set and the query filter. An empty
             collection returns an empty dict without querying HTCondor.
         """
-        if expected_procs is None:
-            raise ValueError("expected_procs is required")
-        if isinstance(expected_procs, int):
-            if expected_procs < 0:
-                raise ValueError("expected_procs must be >= 0")
-            filter_ids: Collection[int] | None = None
-            expected_ids: Collection[int] = range(expected_procs)
-        else:
-            invalid = sorted(pid for pid in expected_procs if pid < 0)
-            if invalid:
-                raise ValueError(f"expected_procs contains proc IDs less than 0: {invalid}")
-            filter_ids = expected_procs
-            expected_ids = expected_procs
-        result = await self._fetch_proc_map(
-            cluster_id, _STATUS_AND_HOLD, filter_ids,
+        return await self._fetch_proc_map(
+            cluster_id, _STATUS_AND_HOLD, expected_procs,
             lambda ad: ProcDetails(
                 state=_status_to_proc_state(ad[_AD_JOB_STATUS]),
                 hold_reason=ad.get(_AD_HOLD_REASON),
                 hold_reason_code=ad.get(_AD_HOLD_REASON_CODE),
             ),
+            missing=ProcDetails(state=ProcState.MISSING),
         )
-        if isinstance(expected_procs, int):
-            unexpected = sorted(pid for pid in result if pid not in expected_ids)
-            if unexpected:
-                raise ValueError(
-                    f"HTCondor returned unexpected proc IDs {unexpected} for cluster "
-                    f"{cluster_id}; expected_procs={expected_procs}"
-                )
-        for proc_id in expected_ids:
-            if proc_id not in result:
-                result[proc_id] = ProcDetails(state=ProcState.MISSING)
-        return result
 
     async def release_job(self, cluster_id: int):
         """

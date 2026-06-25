@@ -898,8 +898,10 @@ class ExternalRunnerState(str, Enum):
     """ The job completed with an error. """
     CANCELED = "canceled"
     """ The job was canceled. """
-    UNKNOWN = "unknown"
+    UNRECOGNIZED = "unrecognized"
     """ The external runner reported a state this service does not recognize. """
+    MISSING = "missing"
+    """ No record exists for this proc in the external runner (e.g. purged from HTCondor history). """
 
 
 class ExternalRunnerStatus(BaseModel):

@@ -76,13 +76,13 @@ def _job(num_containers=2):
 _UNSET = object()
 
 
-def _recovery_job(state=models.JobState.ERROR, cluster_ids=_UNSET):
+def _recovery_job(state=models.JobState.ERROR, cluster_ids=_UNSET, num_containers=2):
     if cluster_ids is _UNSET:
         cluster_ids = [123]
     return models.AdminJobDetails.model_construct(
         id="jid",
         state=state,
-        job_input=models.JobInput.model_construct(num_containers=2, cpus=1),
+        job_input=models.JobInput.model_construct(num_containers=num_containers, cpus=1),
         htcondor_details=None if cluster_ids is None
             else models.HTCondorDetails(cluster_id=cluster_ids),
     )
@@ -163,7 +163,7 @@ async def test_get_job_external_runner_status_submitted():
     runner, _, condor, _, _ = _make_runner()
     job = models.AdminJobDetails.model_construct(
         id="jid",
-        job_input=models.JobInput.model_construct(num_containers=6, cluster=sites.Cluster.KBASE),
+        job_input=models.JobInput.model_construct(num_containers=7, cluster=sites.Cluster.KBASE),
         htcondor_details=models.HTCondorDetails(cluster_id=[123]),
     )
     condor.get_cluster_proc_states.return_value = {
@@ -173,6 +173,7 @@ async def test_get_job_external_runner_status_submitted():
         3: ProcState.COMPLETE,
         4: ProcState.CANCELED,
         5: ProcState.OTHER,
+        6: ProcState.MISSING,
     }
     result = await runner.get_job_external_runner_status(job)
     assert result == models.ExternalRunnerStatus(
@@ -183,10 +184,11 @@ async def test_get_job_external_runner_status_submitted():
             models.ExternalRunnerState.ERROR,
             models.ExternalRunnerState.COMPLETE,
             models.ExternalRunnerState.CANCELED,
-            models.ExternalRunnerState.UNKNOWN,
+            models.ExternalRunnerState.UNRECOGNIZED,
+            models.ExternalRunnerState.MISSING,
         ],
     )
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 7)
 
 
 ######
@@ -997,7 +999,7 @@ async def test_recover_job_unexpected_proc_state(force, bad_state):
     ):
         await runner.recover_job(job, force=force)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_not_called()
 
 
@@ -1010,7 +1012,7 @@ async def test_recover_job_condor_raises(force):
     with pytest.raises(IOError, match="condor unavailable"):
         await runner.recover_job(job, force=force)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_not_called()
 
 
@@ -1167,7 +1169,7 @@ async def test_recover_job_error_state_advance_to_complete():
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
     # Called twice: once for UPLOAD_SUBMITTING stats, once in _complete_job for outputs
@@ -1218,7 +1220,7 @@ async def test_recover_job_error_state_advance_fails():
     with pytest.raises(IOError, match="mongo blew up"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_not_called()
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
     mongo.get_subjobs.assert_not_called()
@@ -1247,7 +1249,7 @@ async def test_recover_job_error_state_lock_fails():
     with pytest.raises(InvalidJobStateError, match="concurrent recovery won"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_not_called()
     mongo.recover_job.assert_not_called()
     mongo.get_subjobs.assert_not_called()
@@ -1302,7 +1304,7 @@ async def test_recover_job_standard_advance_to_complete(start_state, state_updat
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_called_once_with(123)
     # get_subjobs called once per UPLOAD_SUBMITTING (stats) plus once in _complete_job (outputs)
     mongo.get_subjobs.assert_called_with("jid")
@@ -1344,7 +1346,7 @@ async def test_recover_job_complete_job_no_outputs():
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.get_subjobs.assert_called_once_with("jid")
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
@@ -1375,7 +1377,7 @@ async def test_recover_job_complete_job_checksum_mismatch():
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.get_subjobs.assert_called_once_with("jid")
     s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
@@ -1407,7 +1409,7 @@ async def test_recover_job_complete_job_condor_stats_timeout():
         ):
             await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
     assert condor.get_cluster_classads.call_count == 12
     condor.get_cluster_classads.assert_called_with(123)
@@ -1422,7 +1424,7 @@ async def test_recover_job_standard_advance_invalid_state():
     with pytest.raises(RuntimeError, match="Unexpected job state"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_not_called()
 
 
@@ -1438,7 +1440,7 @@ async def test_recover_job_standard_advance_update_raises():
     with pytest.raises(InvalidJobStateError, match="job was canceled"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.JOB_SUBMITTING)
     updates.update_job_state.assert_called_once_with(
         "jid", update_state.submitting_job(), update_time=_T
@@ -1458,7 +1460,7 @@ async def test_recover_job_standard_advance_parent_update_none():
     with pytest.raises(RuntimeError, match="Not all subjobs have reached state"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.JOB_SUBMITTING)
     updates.update_job_state.assert_not_called()
 
@@ -1475,7 +1477,60 @@ async def test_recover_job_standard_running_only():
     ):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
+    updates.update_job_state.assert_not_called()
+
+
+async def test_recover_job_missing_procs_all_complete():
+    """
+    MISSING procs whose mongo subjobs are COMPLETE are excluded from recovery — normal
+    held-container recovery proceeds for the non-missing procs.
+    """
+    lock_time = _T
+    reset_time = _T + datetime.timedelta(seconds=1)
+    ts = iter([lock_time, reset_time])
+    runner, mongo, condor, updates, _ = _make_runner(_timestamp_fn=lambda: next(ts))
+    job = _recovery_job(state=models.JobState.JOB_SUBMITTING, num_containers=3)
+    condor.get_cluster_proc_states.return_value = {
+        0: ProcState.HELD, 1: ProcState.MISSING, 2: ProcState.COMPLETE
+    }
+    mongo.get_subjobs.return_value = [
+        models.SubJob.model_construct(sub_id=1, state=models.JobState.COMPLETE)
+    ]
+
+    await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123, 3)
+    mongo.get_subjobs.assert_called_once_with("jid", subjob_ids=[1])
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.recovering(),
+        update_time=lock_time, recovery_cooldown=datetime.timedelta(0),
+    )
+    mongo.recover_subjobs.assert_called_once_with("jid", [0], lock_time, reset_time)
+    condor.release_job.assert_called_once_with(123)
+    mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
+
+
+async def test_recover_job_missing_procs_not_complete():
+    """
+    MISSING procs with non-COMPLETE mongo subjobs raise InvalidJobStateError; job stays
+    in its current state (no state update).
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    job = _recovery_job(state=models.JobState.JOB_SUBMITTING)
+    condor.get_cluster_proc_states.return_value = {0: ProcState.COMPLETE, 1: ProcState.MISSING}
+    mongo.get_subjobs.return_value = [
+        models.SubJob.model_construct(sub_id=1, state=models.JobState.JOB_SUBMITTED)
+    ]
+
+    with pytest.raises(
+        InvalidJobStateError,
+        match=r"External processor has no record of proc\(s\) \[1\] for cluster 123",
+    ):
+        await runner.recover_job(job)
+
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
+    mongo.get_subjobs.assert_called_once_with("jid", subjob_ids=[1])
     updates.update_job_state.assert_not_called()
 
 
@@ -1496,7 +1551,7 @@ async def test_recover_job_standard_held_containers():
 
     await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_called_once_with(
         "jid", update_state.recovering(),
         update_time=lock_time, recovery_cooldown=datetime.timedelta(0),
@@ -1525,7 +1580,7 @@ async def test_recover_job_standard_held_release_fails():
     ):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_called_once_with(
         "jid", update_state.recovering(),
         update_time=lock_time, recovery_cooldown=datetime.timedelta(0),
@@ -1548,7 +1603,7 @@ async def test_recover_job_standard_held_lock_fails():
     with pytest.raises(InvalidJobStateError, match="concurrent recovery won"):
         await runner.recover_job(job)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_called_once_with(
         "jid", update_state.recovering(),
         update_time=_T, recovery_cooldown=datetime.timedelta(0),
@@ -1570,7 +1625,7 @@ async def test_recover_job_force_running_containers(running_state):
     ):
         await runner.recover_job(job, force=True)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_not_called()
 
 
@@ -1603,7 +1658,7 @@ async def test_recover_job_force_all_complete():
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
         await runner.recover_job(job, force=True)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_called_once_with(123)
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
     # Called twice: once for UPLOAD_SUBMITTING stats, once in _complete_job for outputs
@@ -1654,7 +1709,7 @@ async def test_recover_job_force_all_complete_advance_fails():
     with pytest.raises(IOError, match="mongo blew up"):
         await runner.recover_job(job, force=True)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_not_called()
     mongo.recover_job.assert_called_once_with("jid", reset_time, _TRANS_ID)
     mongo.get_subjobs.assert_not_called()
@@ -1685,7 +1740,7 @@ async def test_recover_job_force_all_complete_lock_fails():
     with pytest.raises(InvalidJobStateError, match="expected 'recovering'"):
         await runner.recover_job(job, force=True)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     condor.get_cluster_classads.assert_not_called()
     mongo.recover_job.assert_not_called()
     mongo.get_subjobs.assert_not_called()
@@ -1714,7 +1769,7 @@ async def test_recover_job_force_held_containers():
 
     await runner.recover_job(job, force=True)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_called_once_with(
         "jid", update_state.force_recovering(),
         update_time=lock_time, recovery_cooldown=datetime.timedelta(minutes=10),
@@ -1743,7 +1798,7 @@ async def test_recover_job_force_held_release_fails():
     ):
         await runner.recover_job(job, force=True)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_called_once_with(
         "jid", update_state.force_recovering(),
         update_time=lock_time, recovery_cooldown=datetime.timedelta(minutes=10),
@@ -1766,7 +1821,7 @@ async def test_recover_job_force_held_lock_fails():
     with pytest.raises(JobRecoveryError, match="cooldown not expired"):
         await runner.recover_job(job, force=True)
 
-    condor.get_cluster_proc_states.assert_called_once_with(123)
+    condor.get_cluster_proc_states.assert_called_once_with(123, 2)
     updates.update_job_state.assert_called_once_with(
         "jid", update_state.force_recovering(),
         update_time=_T, recovery_cooldown=datetime.timedelta(minutes=10),
