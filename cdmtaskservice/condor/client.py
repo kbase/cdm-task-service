@@ -161,15 +161,6 @@ STATIC_SUB = {
 }
 
 
-def condor_jobs_all_held(job_classads_as_dict: list[dict[str, Any]]) -> bool:
-    """
-    Given HTCondor job ClassAds converted to dictionaries for a job, return True if all of them
-    are in the held state. 
-    """
-    _not_falsy(job_classads_as_dict, "job_classads_as_dict")
-    return not {ad[_AD_JOB_STATUS] for ad in job_classads_as_dict} - {_JOB_STATUS_HELD}
-
-
 @dataclass
 class ProcDetails:
     """State and hold information for an HTCondor process."""
@@ -200,38 +191,6 @@ def _proc_stats_from_ad(ad: Any) -> ProcStats:
         cpu_hours=cpu_sec / 3600.0 if cpu_sec else None,
         max_memory=mem * 1024 * 1024 if mem is not None else None,
         runtime_seconds=float(rt) if rt is not None else None,
-    )
-
-
-@dataclass
-class CondorJobStats:
-    """Stats derived from HTCondor ClassAds for a job."""
-    cpu_hours: float | None
-    max_memory: int | None
-    runtime_seconds: float | None
-
-
-def condor_job_stats(job_classads_as_dict: list[dict[str, Any]]) -> CondorJobStats:
-    """
-    Given HTCondor job ClassAds converted to dictionaries for a job, compute stats for the job.
-
-    cpu_hours - total (RemoteSysCpu + RemoteUserCpu) / 3600
-    max_memory - maximum MemoryUsage in bytes across all containers (MemoryUsage is in MiB)
-    runtime_seconds - total CommittedTime in seconds across all containers
-    """
-    _not_falsy(job_classads_as_dict, "job_classads_as_dict")
-    # Seems like condor uses MiB, although docs aren't great
-    # https://htcondor.readthedocs.io/en/24.x/man-pages/condor_submit.html?utm_source=chatgpt.com#request_memory
-    mems = [c[_AD_MEM] for c in job_classads_as_dict if _AD_MEM in c]
-    cpu_sec = 0
-    runtime_sec = 0
-    for c in job_classads_as_dict:
-        cpu_sec += (c.get(_AD_CPU_USER) or 0) + (c.get(_AD_CPU_SYS) or 0)
-        runtime_sec += (c.get(_AD_COMMITTED_TIME) or 0)
-    return CondorJobStats(
-        cpu_hours=cpu_sec / 3600.0 if cpu_sec else None,
-        max_memory=max(mems) * 1024 * 1024 if mems else None,
-        runtime_seconds=float(runtime_sec) if runtime_sec else None,
     )
 
 
@@ -415,28 +374,6 @@ class CondorClient:
         classad = self._classad_to_dict(job_ads[0])
         return {_AD_STATE: _status_to_proc_state(classad[_AD_JOB_STATUS])} | classad
         
-    async def get_cluster_classads(self, cluster_id: int
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """
-        Get the htcondor status for a job. Returns all containers.
-        A subset of the job ClassAd fields are returned.
-        
-        Returns a 2-tuple of running jobs and completed jobs.
-        """
-        _check_num(cluster_id, "cluster_id")
-        running_job_ads, complete_job_ads = await self._fetch_cluster_ads(
-            cluster_id, _RETURNED_JOB_ADS
-        )
-        if not running_job_ads and not complete_job_ads:
-            raise ValueError(f"No records found for cluster ID {cluster_id}")
-        id2ad = {ad[_AD_PROC_ID]: ad for ad in running_job_ads}
-        for ad in complete_job_ads:
-            # remove jobs that have transitioned to complete between the queries
-            id2ad.pop(ad[_AD_PROC_ID], None)
-        running = [self._classad_to_dict(ad) for ad in id2ad.values()]
-        complete = [self._classad_to_dict(ad) for ad in complete_job_ads]
-        return running, complete
-
     async def _fetch_cluster_ads(
         self, cluster_id: int, projection: list[str],
         proc_ids: Collection[int] | None = None,
