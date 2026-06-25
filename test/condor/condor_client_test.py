@@ -7,7 +7,9 @@ import htcondor2
 
 from classad2 import ClassAd, ExprTree
 
-from cdmtaskservice.condor.client import CondorClient, ProcDetails, ProcState, _RETURNED_JOB_ADS
+from cdmtaskservice.condor.client import (
+    CondorClient, ProcDetails, ProcState, ProcStats, _RETURNED_JOB_ADS,
+)
 from cdmtaskservice.condor.config import CondorClientConfig
 from cdmtaskservice.config_s3 import S3Config
 
@@ -20,22 +22,33 @@ from cdmtaskservice.config_s3 import S3Config
 # ─── shared mock ads for parametrized value-assertion tests ──────────────────
 
 # Two procs that both finished cleanly.
-_ALL_COMPLETE_ADS = [{"ProcId": 0, "JobStatus": 4}, {"ProcId": 1, "JobStatus": 4}]
+# Proc 0 has cpu/runtime stats; proc 1 uses a real ClassAd with ExprTree MemoryUsage —
+# together they exercise stat extraction and ExprTree evaluation for the stats spec.
+_ALL_COMPLETE_ADS = [
+    {"ProcId": 0, "JobStatus": 4, "RemoteUserCpu": 60.0, "RemoteSysCpu": 10.0,
+     "CommittedTime": 1800},
+    ClassAd(
+        "[ProcId = 1; JobStatus = 4;"
+        " MemoryUsage = ceiling(ResidentSetSize_RAW / 1024.0); ResidentSetSize_RAW = 524288]"
+    ),
+]
 
 # Mixed scenario: every HTCondor status code covered, plus a race-dedup case.
 # Hold fields are always present so detail-aware methods can read them; state-only
 # methods ignore them. Proc 6 appears in both active and history to test dedup.
 _MIXED_ACTIVE_ADS = [
     {"ProcId": 0, "JobStatus": 2},
-    {"ProcId": 1, "JobStatus": 5, "HoldReason": "timeout", "HoldReasonCode": 3},
+    {"ProcId": 1, "JobStatus": 5, "HoldReason": "timeout", "HoldReasonCode": 3,
+     "MemoryUsage": 400, "CommittedTime": 900},
     {"ProcId": 2, "JobStatus": 5},
     {"ProcId": 3, "JobStatus": 1},
     {"ProcId": 4, "JobStatus": 7},
     {"ProcId": 5, "JobStatus": 6},
     {"ProcId": 6, "JobStatus": 2},
 ]
+# Proc 6 in history overrides the active entry; its stats come from the history record.
 _MIXED_HISTORY_ADS = [
-    {"ProcId": 6, "JobStatus": 4},
+    {"ProcId": 6, "JobStatus": 4, "RemoteUserCpu": 30.0, "RemoteSysCpu": 5.0},
     {"ProcId": 7, "JobStatus": 3},
 ]
 
@@ -120,7 +133,40 @@ _DETAILS_SPEC = _ProcMapSpec(
     },
 )
 
-_PROC_MAP_SPECS = [_STATES_SPEC, _DETAILS_SPEC]
+_STATS_SPEC = _ProcMapSpec(
+    label="stats",
+    call=lambda c, cid, ep: c.get_cluster_proc_stats(cid, ep),
+    missing=ProcStats(state=ProcState.MISSING),
+    projection=["ProcId", "JobStatus", "MemoryUsage", "RemoteUserCpu", "RemoteSysCpu",
+                "CommittedTime"],
+    all_complete_expected={
+        # proc 0: cpu/runtime present, no memory; proc 1: ExprTree MemoryUsage, no cpu/runtime
+        0: ProcStats(state=ProcState.COMPLETE, cpu_hours=70.0 / 3600, runtime_seconds=1800.0),
+        1: ProcStats(state=ProcState.COMPLETE, max_memory=512 * 1024 * 1024),
+    },
+    mixed_expected={
+        0: ProcStats(state=ProcState.RUNNING),
+        1: ProcStats(state=ProcState.HELD, max_memory=400 * 1024 * 1024, runtime_seconds=900.0),
+        2: ProcStats(state=ProcState.HELD),
+        3: ProcStats(state=ProcState.QUEUED),
+        4: ProcStats(state=ProcState.OTHER),
+        5: ProcStats(state=ProcState.RUNNING),
+        6: ProcStats(state=ProcState.COMPLETE, cpu_hours=35.0 / 3600),
+        7: ProcStats(state=ProcState.CANCELED),
+    },
+    partial_missing_expected={
+        0: ProcStats(state=ProcState.RUNNING),
+        1: ProcStats(state=ProcState.MISSING),
+        2: ProcStats(state=ProcState.COMPLETE),
+        3: ProcStats(state=ProcState.MISSING),
+    },
+    filter_expected={
+        1: ProcStats(state=ProcState.HELD),
+        3: ProcStats(state=ProcState.COMPLETE),
+    },
+)
+
+_PROC_MAP_SPECS = [_STATES_SPEC, _DETAILS_SPEC, _STATS_SPEC]
 
 
 def _make_dependencies():
