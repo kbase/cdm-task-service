@@ -1,5 +1,7 @@
 import pytest
 import tempfile
+from dataclasses import dataclass
+from typing import Any, Callable
 from unittest.mock import create_autospec
 import htcondor2
 
@@ -13,7 +15,112 @@ from cdmtaskservice.config_s3 import S3Config
 # TODO TEST add more tests
 
 
-_HOLD_PROJ = ["ProcId", "JobStatus", "HoldReason", "HoldReasonCode"]
+
+
+# ─── shared mock ads for parametrized value-assertion tests ──────────────────
+
+# Two procs that both finished cleanly.
+_ALL_COMPLETE_ADS = [{"ProcId": 0, "JobStatus": 4}, {"ProcId": 1, "JobStatus": 4}]
+
+# Mixed scenario: every HTCondor status code covered, plus a race-dedup case.
+# Hold fields are always present so detail-aware methods can read them; state-only
+# methods ignore them. Proc 6 appears in both active and history to test dedup.
+_MIXED_ACTIVE_ADS = [
+    {"ProcId": 0, "JobStatus": 2},
+    {"ProcId": 1, "JobStatus": 5, "HoldReason": "timeout", "HoldReasonCode": 3},
+    {"ProcId": 2, "JobStatus": 5},
+    {"ProcId": 3, "JobStatus": 1},
+    {"ProcId": 4, "JobStatus": 7},
+    {"ProcId": 5, "JobStatus": 6},
+    {"ProcId": 6, "JobStatus": 2},
+]
+_MIXED_HISTORY_ADS = [
+    {"ProcId": 6, "JobStatus": 4},
+    {"ProcId": 7, "JobStatus": 3},
+]
+
+# Partial-present scenario: procs 0 and 2 are in condor; procs 1 and 3 are absent.
+_PARTIAL_ACTIVE_ADS  = [{"ProcId": 0, "JobStatus": 2}]
+_PARTIAL_HISTORY_ADS = [{"ProcId": 2, "JobStatus": 4}]
+
+# Collection-filter scenario: two specific procs requested, one held with details.
+_FILTER_ACTIVE_ADS  = [{"ProcId": 1, "JobStatus": 5, "HoldReason": "oom", "HoldReasonCode": 7}]
+_FILTER_HISTORY_ADS = [{"ProcId": 3, "JobStatus": 4}]
+
+
+# ─── per-method spec ─────────────────────────────────────────────────────────
+
+@dataclass
+class _ProcMapSpec:
+    """Describes one _fetch_proc_map-based client method for parametrized tests."""
+    label: str
+    call: Callable          # (client, cluster_id, expected_procs) -> coroutine
+    missing: Any            # MISSING sentinel value
+    projection: list        # expected HTCondor projection for constraint assertions
+    # Hardcoded expected results for value-assertion tests:
+    all_complete_expected: dict
+    mixed_expected: dict
+    partial_missing_expected: dict
+    filter_expected: dict
+
+
+_STATES_SPEC = _ProcMapSpec(
+    label="states",
+    call=lambda c, cid, ep: c.get_cluster_proc_states(cid, ep),
+    missing=ProcState.MISSING,
+    projection=["ProcId", "JobStatus"],
+    all_complete_expected={0: ProcState.COMPLETE, 1: ProcState.COMPLETE},
+    mixed_expected={
+        0: ProcState.RUNNING,
+        1: ProcState.HELD,
+        2: ProcState.HELD,
+        3: ProcState.QUEUED,
+        4: ProcState.OTHER,
+        5: ProcState.RUNNING,
+        6: ProcState.COMPLETE,
+        7: ProcState.CANCELED,
+    },
+    partial_missing_expected={
+        0: ProcState.RUNNING,
+        1: ProcState.MISSING,
+        2: ProcState.COMPLETE,
+        3: ProcState.MISSING,
+    },
+    filter_expected={1: ProcState.HELD, 3: ProcState.COMPLETE},
+)
+
+_DETAILS_SPEC = _ProcMapSpec(
+    label="details",
+    call=lambda c, cid, ep: c.get_cluster_proc_details(cid, ep),
+    missing=ProcDetails(state=ProcState.MISSING),
+    projection=["ProcId", "JobStatus", "HoldReason", "HoldReasonCode"],
+    all_complete_expected={
+        0: ProcDetails(state=ProcState.COMPLETE),
+        1: ProcDetails(state=ProcState.COMPLETE),
+    },
+    mixed_expected={
+        0: ProcDetails(state=ProcState.RUNNING),
+        1: ProcDetails(state=ProcState.HELD, hold_reason="timeout", hold_reason_code=3),
+        2: ProcDetails(state=ProcState.HELD),
+        3: ProcDetails(state=ProcState.QUEUED),
+        4: ProcDetails(state=ProcState.OTHER),
+        5: ProcDetails(state=ProcState.RUNNING),
+        6: ProcDetails(state=ProcState.COMPLETE),
+        7: ProcDetails(state=ProcState.CANCELED),
+    },
+    partial_missing_expected={
+        0: ProcDetails(state=ProcState.RUNNING),
+        1: ProcDetails(state=ProcState.MISSING),
+        2: ProcDetails(state=ProcState.COMPLETE),
+        3: ProcDetails(state=ProcState.MISSING),
+    },
+    filter_expected={
+        1: ProcDetails(state=ProcState.HELD, hold_reason="oom", hold_reason_code=7),
+        3: ProcDetails(state=ProcState.COMPLETE),
+    },
+)
+
+_PROC_MAP_SPECS = [_STATES_SPEC, _DETAILS_SPEC]
 
 
 def _make_dependencies():
@@ -255,116 +362,103 @@ async def test_get_cluster_classads_race_dedup():
     assert complete == [{"ClusterId": 123, "ProcId": 1, "JobStatus": 4}]
 
 
+# ─── parametrized tests covering all _fetch_proc_map-based methods ───────────
 
-async def test_get_cluster_proc_states_bad_args():
+
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_bad_args(spec):
     client, _ = _make_client()
     with pytest.raises(ValueError, match="^cluster_id is required$"):
-        await client.get_cluster_proc_states(None, 1)
+        await spec.call(client, None, 1)
     with pytest.raises(ValueError, match="^cluster_id must be >= 1$"):
-        await client.get_cluster_proc_states(0, 1)
+        await spec.call(client, 0, 1)
     with pytest.raises(ValueError, match="^cluster_id must be >= 1$"):
-        await client.get_cluster_proc_states(-1, 1)
+        await spec.call(client, -1, 1)
     with pytest.raises(ValueError, match="^expected_procs is required$"):
-        await client.get_cluster_proc_states(1, None)
+        await spec.call(client, 1, None)
     with pytest.raises(ValueError, match="^expected_procs must be >= 0$"):
-        await client.get_cluster_proc_states(1, -1)
+        await spec.call(client, 1, -1)
     with pytest.raises(
         ValueError,
         match=r"^expected_procs contains proc IDs less than 0: \[-3, -1\]$",
     ):
-        await client.get_cluster_proc_states(1, [0, -1, 2, -3])
+        await spec.call(client, 1, [0, -1, 2, -3])
 
 
-async def test_get_cluster_proc_states_no_records():
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_no_records(spec):
     """All expected procs absent from condor return as MISSING; no error raised."""
     client, schedd = _make_client()
     schedd.query.return_value = []
     schedd.history.return_value = []
 
-    states = await client.get_cluster_proc_states(123, 2)
+    result = await spec.call(client, 123, 2)
 
-    assert states == {0: ProcState.MISSING, 1: ProcState.MISSING}
+    assert result == {0: spec.missing, 1: spec.missing}
     schedd.query.assert_called_once_with(
-        constraint="ClusterId == 123", projection=["ProcId", "JobStatus"]
+        constraint="ClusterId == 123", projection=spec.projection
     )
     schedd.history.assert_called_once_with(
-        constraint="ClusterId == 123", projection=["ProcId", "JobStatus"]
+        constraint="ClusterId == 123", projection=spec.projection
     )
 
 
-async def test_get_cluster_proc_states_all_complete():
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_all_complete(spec):
     """All procs in history means the job finished cleanly."""
     client, schedd = _make_client()
     schedd.query.return_value = []
-    schedd.history.return_value = [{"ProcId": 0, "JobStatus": 4}, {"ProcId": 1, "JobStatus": 4}]
+    schedd.history.return_value = _ALL_COMPLETE_ADS
 
-    states = await client.get_cluster_proc_states(123, 2)
+    result = await spec.call(client, 123, 2)
 
-    assert states == {0: ProcState.COMPLETE, 1: ProcState.COMPLETE}
+    assert result == spec.all_complete_expected
     schedd.query.assert_called_once_with(
-        constraint="ClusterId == 123", projection=["ProcId", "JobStatus"]
+        constraint="ClusterId == 123", projection=spec.projection
     )
     schedd.history.assert_called_once_with(
-        constraint="ClusterId == 123", projection=["ProcId", "JobStatus"]
+        constraint="ClusterId == 123", projection=spec.projection
     )
 
 
-async def test_get_cluster_proc_states_mixed():
-    """Active procs are classified; history procs override active if they race."""
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_mixed(spec):
+    """Active procs classified; history overrides active on race; all status codes exercised."""
     client, schedd = _make_client()
-    schedd.query.return_value = [
-        {"ProcId": 0, "JobStatus": 2},  # Running → RUNNING
-        {"ProcId": 1, "JobStatus": 5},  # Held → HELD
-        {"ProcId": 2, "JobStatus": 1},  # Idle → QUEUED
-        {"ProcId": 3, "JobStatus": 7},  # Suspended → OTHER
-        {"ProcId": 4, "JobStatus": 2},  # Running, will be overridden by history
-        {"ProcId": 6, "JobStatus": 6},  # Transferring Output → RUNNING
-    ]
-    schedd.history.return_value = [
-        {"ProcId": 4, "JobStatus": 4},  # Completed → COMPLETE (overrides active)
-        {"ProcId": 5, "JobStatus": 3},  # Removed → CANCELED
-    ]
+    schedd.query.return_value = _MIXED_ACTIVE_ADS
+    schedd.history.return_value = _MIXED_HISTORY_ADS
 
-    states = await client.get_cluster_proc_states(123, 7)
+    result = await spec.call(client, 123, 8)
 
-    assert states == {
-        0: ProcState.RUNNING,   # Running
-        1: ProcState.HELD,      # Held
-        2: ProcState.QUEUED,    # Idle
-        3: ProcState.OTHER,     # Suspended
-        4: ProcState.COMPLETE,  # overridden by history
-        5: ProcState.CANCELED,  # Removed (history only)
-        6: ProcState.RUNNING,   # Transferring Output
-    }
+    assert result == spec.mixed_expected
     schedd.query.assert_called_once_with(
-        constraint="ClusterId == 123", projection=["ProcId", "JobStatus"]
+        constraint="ClusterId == 123", projection=spec.projection
     )
     schedd.history.assert_called_once_with(
-        constraint="ClusterId == 123", projection=["ProcId", "JobStatus"]
+        constraint="ClusterId == 123", projection=spec.projection
     )
 
 
-async def test_get_cluster_proc_states_partial_missing_with_count():
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_partial_missing_with_count(spec):
     """When an int count is given, procs absent from condor fill in as MISSING."""
     client, schedd = _make_client()
-    schedd.query.return_value = [{"ProcId": 0, "JobStatus": 2}]   # Running
-    schedd.history.return_value = [{"ProcId": 2, "JobStatus": 4}]  # Completed
+    schedd.query.return_value = _PARTIAL_ACTIVE_ADS
+    schedd.history.return_value = _PARTIAL_HISTORY_ADS
 
-    states = await client.get_cluster_proc_states(123, 4)
+    result = await spec.call(client, 123, 4)
 
-    assert states == {
-        0: ProcState.RUNNING,
-        1: ProcState.MISSING,
-        2: ProcState.COMPLETE,
-        3: ProcState.MISSING,
-    }
-    constraint = "ClusterId == 123"
-    proj = ["ProcId", "JobStatus"]
-    schedd.query.assert_called_once_with(constraint=constraint, projection=proj)
-    schedd.history.assert_called_once_with(constraint=constraint, projection=proj)
+    assert result == spec.partial_missing_expected
+    schedd.query.assert_called_once_with(
+        constraint="ClusterId == 123", projection=spec.projection
+    )
+    schedd.history.assert_called_once_with(
+        constraint="ClusterId == 123", projection=spec.projection
+    )
 
 
-async def test_get_cluster_proc_states_unexpected_proc_id_raises():
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_unexpected_proc_id_raises(spec):
     """When an int count is given, a returned proc ID >= n raises ValueError."""
     client, schedd = _make_client()
     schedd.query.return_value = [{"ProcId": 0, "JobStatus": 2}, {"ProcId": 3, "JobStatus": 4}]
@@ -374,211 +468,60 @@ async def test_get_cluster_proc_states_unexpected_proc_id_raises():
         ValueError,
         match=r"^HTCondor returned unexpected proc IDs \[3\] for cluster 123$",
     ):
-        await client.get_cluster_proc_states(123, 3)
+        await spec.call(client, 123, 3)
 
 
-async def test_get_cluster_proc_states_unknown_status():
-    """An unrecognised JobStatus value (outside 1-7) raises ValueError."""
-    client, schedd = _make_client()
-    schedd.history.return_value = []
-    for status in (0, 8, 99):
-        schedd.query.return_value = [{"ProcId": 0, "JobStatus": status}]
-        with pytest.raises(ValueError, match=f"^Unknown HTCondor job status: {status}$"):
-            await client.get_cluster_proc_states(123, 1)
-
-
-async def test_get_cluster_proc_states_empty_proc_ids():
-    """Empty expected_procs collection returns empty dict without querying condor."""
-    client, schedd = _make_client()
-
-    states = await client.get_cluster_proc_states(123, [])
-
-    assert states == {}
-    schedd.query.assert_not_called()
-    schedd.history.assert_not_called()
-
-
-async def test_get_cluster_proc_states_proc_ids_filter():
-    """The proc_ids collection is pushed into the HTCondor constraint, not filtered in Python."""
-    client, schedd = _make_client()
-    schedd.query.return_value = [{"ProcId": 1, "JobStatus": 5}]   # Held
-    schedd.history.return_value = [{"ProcId": 3, "JobStatus": 4}]  # Complete
-
-    states = await client.get_cluster_proc_states(123, [1, 3])
-
-    assert states == {1: ProcState.HELD, 3: ProcState.COMPLETE}
-    constraint = "ClusterId == 123 && (ProcId == 1 || ProcId == 3)"
-    proj = ["ProcId", "JobStatus"]
-    schedd.query.assert_called_once_with(constraint=constraint, projection=proj)
-    schedd.history.assert_called_once_with(constraint=constraint, projection=proj)
-
-
-async def test_get_cluster_proc_states_proc_ids_not_found():
-    """Expected proc IDs absent from both queues are returned as MISSING, not an error."""
-    client, schedd = _make_client()
-    schedd.query.return_value = []
-    schedd.history.return_value = []
-
-    states = await client.get_cluster_proc_states(123, [0, 1])
-
-    assert states == {0: ProcState.MISSING, 1: ProcState.MISSING}
-    constraint = "ClusterId == 123 && (ProcId == 0 || ProcId == 1)"
-    proj = ["ProcId", "JobStatus"]
-    schedd.query.assert_called_once_with(constraint=constraint, projection=proj)
-    schedd.history.assert_called_once_with(constraint=constraint, projection=proj)
-
-
-async def test_get_cluster_proc_details_bad_args():
-    client, _ = _make_client()
-    with pytest.raises(ValueError, match="^cluster_id is required$"):
-        await client.get_cluster_proc_details(None, 1)
-    with pytest.raises(ValueError, match="^cluster_id must be >= 1$"):
-        await client.get_cluster_proc_details(0, 1)
-    with pytest.raises(ValueError, match="^cluster_id must be >= 1$"):
-        await client.get_cluster_proc_details(-1, 1)
-    with pytest.raises(ValueError, match="^expected_procs is required$"):
-        await client.get_cluster_proc_details(1, None)
-    with pytest.raises(ValueError, match="^expected_procs must be >= 0$"):
-        await client.get_cluster_proc_details(1, -1)
-    with pytest.raises(
-        ValueError,
-        match=r"^expected_procs contains proc IDs less than 0: \[-3, -1\]$",
-    ):
-        await client.get_cluster_proc_details(1, [0, -1, 2, -3])
-
-
-async def test_get_cluster_proc_details_no_records():
-    """All expected procs absent from condor return as MISSING; no error raised."""
-    client, schedd = _make_client()
-    schedd.query.return_value = []
-    schedd.history.return_value = []
-
-    details = await client.get_cluster_proc_details(123, 2)
-
-    assert details == {
-        0: ProcDetails(state=ProcState.MISSING),
-        1: ProcDetails(state=ProcState.MISSING),
-    }
-    constraint = "ClusterId == 123"
-    schedd.query.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-    schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-
-
-async def test_get_cluster_proc_details_mixed():
-    """Held proc carries hold fields; history overrides active; no-detail held is fine."""
-    client, schedd = _make_client()
-    schedd.query.return_value = [
-        {"ProcId": 0, "JobStatus": 2},                                          # Running
-        {"ProcId": 1, "JobStatus": 5, "HoldReason": "timeout", "HoldReasonCode": 3},  # Held
-        {"ProcId": 2, "JobStatus": 5},                                          # Held, no details
-        {"ProcId": 3, "JobStatus": 2},                                     # will be overridden
-    ]
-    schedd.history.return_value = [
-        {"ProcId": 3, "JobStatus": 4},   # Completed — overrides active
-        {"ProcId": 4, "JobStatus": 3},   # Removed
-    ]
-
-    details = await client.get_cluster_proc_details(123, 5)
-
-    assert details == {
-        0: ProcDetails(state=ProcState.RUNNING),
-        1: ProcDetails(state=ProcState.HELD, hold_reason="timeout", hold_reason_code=3),
-        2: ProcDetails(state=ProcState.HELD),
-        3: ProcDetails(state=ProcState.COMPLETE),
-        4: ProcDetails(state=ProcState.CANCELED),
-    }
-    constraint = "ClusterId == 123"
-    schedd.query.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-    schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-
-
-async def test_get_cluster_proc_details_partial_missing_with_count():
-    """When an int count is given, procs absent from condor fill in as MISSING."""
-    client, schedd = _make_client()
-    schedd.query.return_value = [{"ProcId": 0, "JobStatus": 2}]   # Running
-    schedd.history.return_value = [{"ProcId": 2, "JobStatus": 4}]  # Completed
-
-    details = await client.get_cluster_proc_details(123, 4)
-
-    assert details == {
-        0: ProcDetails(state=ProcState.RUNNING),
-        1: ProcDetails(state=ProcState.MISSING),
-        2: ProcDetails(state=ProcState.COMPLETE),
-        3: ProcDetails(state=ProcState.MISSING),
-    }
-    constraint = "ClusterId == 123"
-    schedd.query.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-    schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-
-
-async def test_get_cluster_proc_details_unexpected_proc_id_raises():
-    """When an int count is given, a returned proc ID >= n raises ValueError."""
-    client, schedd = _make_client()
-    schedd.query.return_value = [{"ProcId": 0, "JobStatus": 2}, {"ProcId": 3, "JobStatus": 4}]
-    schedd.history.return_value = []
-
-    with pytest.raises(
-        ValueError,
-        match=r"^HTCondor returned unexpected proc IDs \[3\] for cluster 123$",
-    ):
-        await client.get_cluster_proc_details(123, 3)
-
-
-async def test_get_cluster_proc_details_empty_proc_ids():
-    """Empty expected_procs collection returns empty dict without querying condor."""
-    client, schedd = _make_client()
-
-    details = await client.get_cluster_proc_details(123, [])
-
-    assert details == {}
-    schedd.query.assert_not_called()
-    schedd.history.assert_not_called()
-
-
-async def test_get_cluster_proc_details_proc_ids_filter():
-    """The proc_ids list is pushed into the HTCondor constraint, not filtered in Python."""
-    client, schedd = _make_client()
-    schedd.query.return_value = [
-        {"ProcId": 1, "JobStatus": 5, "HoldReason": "oom", "HoldReasonCode": 7}
-    ]
-    schedd.history.return_value = [{"ProcId": 3, "JobStatus": 4}]
-
-    details = await client.get_cluster_proc_details(123, [1, 3])
-
-    assert details == {
-        1: ProcDetails(state=ProcState.HELD, hold_reason="oom", hold_reason_code=7),
-        3: ProcDetails(state=ProcState.COMPLETE),
-    }
-    constraint = "ClusterId == 123 && (ProcId == 1 || ProcId == 3)"
-    schedd.query.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-    schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-
-
-async def test_get_cluster_proc_details_unknown_status():
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_unknown_status(spec):
     """An unrecognised JobStatus value raises ValueError."""
     client, schedd = _make_client()
     schedd.history.return_value = []
     for status in (0, 8, 99):
         schedd.query.return_value = [{"ProcId": 0, "JobStatus": status}]
         with pytest.raises(ValueError, match=f"^Unknown HTCondor job status: {status}$"):
-            await client.get_cluster_proc_details(123, 1)
+            await spec.call(client, 123, 1)
 
 
-async def test_get_cluster_proc_details_proc_ids_not_found():
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_empty_proc_ids(spec):
+    """Empty expected_procs collection returns empty dict without querying condor."""
+    client, schedd = _make_client()
+
+    result = await spec.call(client, 123, [])
+
+    assert result == {}
+    schedd.query.assert_not_called()
+    schedd.history.assert_not_called()
+
+
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_proc_ids_filter(spec):
+    """The proc_ids collection is pushed into the HTCondor constraint, not filtered in Python."""
+    client, schedd = _make_client()
+    schedd.query.return_value = _FILTER_ACTIVE_ADS
+    schedd.history.return_value = _FILTER_HISTORY_ADS
+
+    result = await spec.call(client, 123, [1, 3])
+
+    assert result == spec.filter_expected
+    constraint = "ClusterId == 123 && (ProcId == 1 || ProcId == 3)"
+    schedd.query.assert_called_once_with(constraint=constraint, projection=spec.projection)
+    schedd.history.assert_called_once_with(constraint=constraint, projection=spec.projection)
+
+
+@pytest.mark.parametrize("spec", _PROC_MAP_SPECS, ids=lambda s: s.label)
+async def test_proc_map_proc_ids_not_found(spec):
     """Expected proc IDs absent from both queues are returned as MISSING, not an error."""
     client, schedd = _make_client()
     schedd.query.return_value = []
     schedd.history.return_value = []
 
-    details = await client.get_cluster_proc_details(123, [0, 1])
+    result = await spec.call(client, 123, [0, 1])
 
-    assert details == {
-        0: ProcDetails(state=ProcState.MISSING),
-        1: ProcDetails(state=ProcState.MISSING),
-    }
+    assert result == {0: spec.missing, 1: spec.missing}
     constraint = "ClusterId == 123 && (ProcId == 0 || ProcId == 1)"
-    schedd.query.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
-    schedd.history.assert_called_once_with(constraint=constraint, projection=_HOLD_PROJ)
+    schedd.query.assert_called_once_with(constraint=constraint, projection=spec.projection)
+    schedd.history.assert_called_once_with(constraint=constraint, projection=spec.projection)
 
 
 async def test_release_job_bad_args():
