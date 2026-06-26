@@ -37,6 +37,9 @@ _FLD_LAST_RECOVER = "_last_recover"
 
 # Sorted so the partial index definition is deterministic for tests
 _SUBJOB_ACTIVE_STATES = sorted(s.value for s in models.JobState.active_states())
+# Subjobs only reach COMPLETE or ERROR; CANCELED is included via terminal_states() but is
+# unreachable for subjobs, so it's harmless. Sorted for index determinism.
+_SUBJOB_HTC_STATS_STATES = sorted([s.value for s in models.JobState.terminal_states()])
 
 
 class MongoDAO:
@@ -163,6 +166,20 @@ class MongoDAO:
                 ],
                 partialFilterExpression={
                     models.FLD_COMMON_STATE: {"$in": _SUBJOB_ACTIVE_STATES}
+                },
+            ),
+            # Find terminal subjobs whose HTCondor per-proc stats have not yet been fetched.
+            # Partial filter restricts to COMPLETE/ERROR so the index stays small and fast.
+            IndexModel(
+                [
+                    (models.FLD_COMMON_STATE, ASCENDING),
+                    (
+                        f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_SUBJOB_HTC_STATS_MISSING}",
+                        ASCENDING,
+                    ),
+                ],
+                partialFilterExpression={
+                    models.FLD_COMMON_STATE: {"$in": _SUBJOB_HTC_STATS_STATES}
                 },
             ),
         ])
@@ -407,7 +424,7 @@ class MongoDAO:
             query[_FLD_UPDATE_TIME] = timequery
         # drop the potentially large fields
         project = {
-            models.FLD_JOB_OUTPUTS: 0,
+            models.FLD_COMMON_OUTPUTS: 0,
             f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_INPUT_FILES}": 0
         }
         sort = [(_FLD_UPDATE_TIME, DESCENDING)]
@@ -622,10 +639,10 @@ class MongoDAO:
 
     _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
-    _FLD_HTC_CLUSTER_ID = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_CLUSTER_ID}"
-    _FLD_HTC_CPU_HOURS = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_CPU_HOURS}"
-    _FLD_HTC_MAX_MEM = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_MAX_MEM}"
-    _FLD_HTC_RUNTIME = f"{models.FLD_JOB_HTC_DETAILS}.{models.FLD_HTC_DETAILS_RUNTIME}"
+    _FLD_HTC_CLUSTER_ID = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_JOB_HTC_CLUSTER_ID}"
+    _FLD_HTC_CPU_HOURS = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_CPU_HOURS}"
+    _FLD_HTC_MAX_MEM = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_MAX_MEM}"
+    _FLD_HTC_RUNTIME = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_RUNTIME}"
     _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
     _FLD_NERSC_LOG_UL_TASK = (
         f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
@@ -638,11 +655,11 @@ class MongoDAO:
             UpdateField.HTCONDOR_CPU_HOURS: (self._FLD_HTC_CPU_HOURS, False),
             UpdateField.HTCONDOR_MAX_MEM: (self._FLD_HTC_MAX_MEM, False),
             UpdateField.HTCONDOR_RUNTIME: (self._FLD_HTC_RUNTIME, False),
-            UpdateField.CPU_HOURS: (models.FLD_JOB_CPU_HOURS, False),
+            UpdateField.CPU_HOURS: (models.FLD_COMMON_CPU_HOURS, False),
             UpdateField.CPU_FACTOR: (models.FLD_JOB_CPU_FACTOR, False),
-            UpdateField.MAX_MEMORY: (models.FLD_JOB_MAX_MEM, False),
+            UpdateField.MAX_MEMORY: (models.FLD_COMMON_MAX_MEM, False),
             UpdateField.NERSC_UPLOAD_TASK_ID: (self._FLD_NERSC_UL_TASK, True),
-            UpdateField.OUTPUT_FILE_PATHS: (models.FLD_JOB_OUTPUTS, False),
+            UpdateField.OUTPUT_FILE_PATHS: (models.FLD_COMMON_OUTPUTS, False),
             UpdateField.OUTPUT_FILE_COUNT: (models.FLD_JOB_OUTPUT_FILE_COUNT, False),
             UpdateField.NERSC_LOG_UPLOAD_TASK_ID: (self._FLD_NERSC_LOG_UL_TASK, True),
             UpdateField.EXIT_CODE: (models.FLD_SUBJOB_EXIT_CODE, False),
@@ -729,6 +746,9 @@ class MongoDAO:
           - Sets state to DOWNLOAD_SUBMITTED
           - Sets cleaned to False
           - Clears error, admin_error, and traceback
+          - Clears executor cpu_hours, cpu_factor, and max_memory
+          - Clears htcondor_details cpu_hours, max_memory, and runtime_seconds
+            (cluster_id is preserved)
 
         job_id - the job ID.
         download_submitted_time - the time for the new DOWNLOAD_SUBMITTED transition.
@@ -761,6 +781,12 @@ class MongoDAO:
                 models.FLD_COMMON_ERROR,
                 models.FLD_COMMON_ADMIN_ERROR,
                 models.FLD_COMMON_TRACEBACK,
+                models.FLD_COMMON_CPU_HOURS,
+                models.FLD_JOB_CPU_FACTOR,
+                models.FLD_COMMON_MAX_MEM,
+                f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_CPU_HOURS}",
+                f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_MAX_MEM}",
+                f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_RUNTIME}",
             ]},
         ]
         result = await self._col_jobs.update_one({models.FLD_COMMON_ID: job_id}, pipeline)
@@ -1066,6 +1092,80 @@ class MongoDAO:
         }
         return await self._aggregate_subjob_job_map(query)
 
+    async def get_subjobs_missing_htcondor_stats(
+        self,
+    ) -> dict[str, dict[int, datetime.datetime]]:
+        """
+        Return a mapping of job ID to {subjob_id: last_update_time} for subjobs in the
+        COMPLETE or ERROR state that have not yet had their HTCondor per-proc stats checked.
+
+        A subjob is unchecked when its htcondor_details.stats_missing field is null or absent.
+        """
+        query = {
+            models.FLD_COMMON_STATE: {"$in": _SUBJOB_HTC_STATS_STATES},
+            f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_SUBJOB_HTC_STATS_MISSING}": None,
+        }
+        return await self._aggregate_subjob_job_map(query)
+
+    async def save_subjob_htcondor_stats(
+        self,
+        job_id: str,
+        subjob_id: int,
+        cpu_hours: float | None,
+        max_memory: int | None,
+        runtime_seconds: float | None,
+        last_update_time: datetime.datetime,
+        stats_missing: bool = False,
+    ):
+        """
+        Persist HTCondor per-proc stats (or the permanent-missing flag) for a subjob without
+        changing its state. Gated on last_update_time so that a concurrent job recovery that
+        resets the subjob wins; raises SubJobUpdateConflictError in that case.
+
+        job_id - the job ID.
+        subjob_id - the subjob ID (same as the HTCondor proc ID).
+        cpu_hours - CPU hours as reported by HTCondor for this proc, or None.
+        max_memory - peak memory in bytes as reported by HTCondor for this proc, or None.
+        runtime_seconds - wall-clock runtime in seconds as reported by HTCondor, or None.
+        stats_missing - True if HTCondor has no record of this proc; False if stats were
+            fetched (individual fields may still be None if HTCondor reported nothing).
+            No validation is performed between stats_missing and the stat fields — callers
+            are trusted not to pass True with non-None stats or False with contradictory intent.
+        last_update_time - the subjob's last update time as read by the caller; used as an
+            optimistic lock. Raises SubJobUpdateConflictError if the subjob was modified
+            since this time. The subjob is expected to exist; a missing subjob and a genuine
+            conflict are not distinguished — both raise SubJobUpdateConflictError.
+        """
+        _require_string(job_id, "job_id")
+        _check_num(subjob_id, "subjob_id", minimum=0)
+        if cpu_hours is not None:
+            _check_num(cpu_hours, "cpu_hours", minimum=0)
+        if max_memory is not None:
+            _check_num(max_memory, "max_memory", minimum=0)
+        if runtime_seconds is not None:
+            _check_num(runtime_seconds, "runtime_seconds", minimum=0)
+        _not_falsy(last_update_time, "last_update_time")
+        result = await self._col_subjobs.update_one(
+            {
+                models.FLD_COMMON_ID: job_id,
+                models.FLD_SUBJOB_ID: subjob_id,
+                _FLD_UPDATE_TIME: last_update_time,
+            },
+            {"$set": {
+                models.FLD_COMMON_HTC_DETAILS: {
+                    models.FLD_COMMON_HTC_CPU_HOURS: cpu_hours,
+                    models.FLD_COMMON_HTC_MAX_MEM: max_memory,
+                    models.FLD_COMMON_HTC_RUNTIME: runtime_seconds,
+                    models.FLD_SUBJOB_HTC_STATS_MISSING: stats_missing,
+                }
+            }},
+        )
+        if not result.matched_count:
+            raise SubJobUpdateConflictError(
+                f"Job '{job_id}' subjob {subjob_id} was modified since update time "
+                f"{last_update_time} was read; skipping HTCondor stats write"
+            )
+
     async def _aggregate_subjob_job_map(
         self, query: dict
     ) -> dict[str, dict[int, datetime.datetime]]:
@@ -1100,7 +1200,8 @@ class MongoDAO:
           - Appends the current admin_error to admin_error_history
           - Resets transition_times to a single DOWNLOAD_SUBMITTED entry
           - Sets state to DOWNLOAD_SUBMITTED
-          - Clears exit_code, error, admin_error, traceback, and heartbeat
+          - Clears exit_code, error, admin_error, traceback, heartbeat,
+            executor cpu_hours, max_memory, and runtime_seconds, and htcondor_details
 
         Null is recorded in the history arrays when a field was not set, preserving
         alignment between history entries and recovery attempts.
@@ -1150,6 +1251,10 @@ class MongoDAO:
                 models.FLD_COMMON_ADMIN_ERROR,
                 models.FLD_COMMON_TRACEBACK,
                 models.FLD_SUBJOB_HEARTBEAT,
+                models.FLD_COMMON_CPU_HOURS,
+                models.FLD_COMMON_MAX_MEM,
+                models.FLD_SUBJOB_RUNTIME,
+                models.FLD_COMMON_HTC_DETAILS,
             ]},
         ]
         result = await self._col_subjobs.update_many(

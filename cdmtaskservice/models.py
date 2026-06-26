@@ -54,15 +54,8 @@ FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
 FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
-FLD_JOB_HTC_DETAILS = "htcondor_details"
-FLD_HTC_DETAILS_CLUSTER_ID = "cluster_id"
-FLD_HTC_DETAILS_CPU_HOURS = "cpu_hours"
-FLD_HTC_DETAILS_MAX_MEM = "max_memory"
-FLD_HTC_DETAILS_RUNTIME = "runtime_seconds"
-FLD_JOB_CPU_HOURS = "cpu_hours"
+FLD_JOB_HTC_CLUSTER_ID = "cluster_id"
 FLD_JOB_CPU_FACTOR = "cpu_factor"
-FLD_JOB_MAX_MEM = "max_memory"
-FLD_JOB_OUTPUTS = "outputs"
 FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
 FLD_JOB_LOGPATH = "logpath"
 FLD_SUBJOB_ID = "sub_id"
@@ -70,6 +63,7 @@ FLD_SUBJOB_EXIT_CODE = "exit_code"
 FLD_SUBJOB_EXIT_CODE_HISTORY = "exit_code_history"
 FLD_SUBJOB_RUNTIME = "runtime_seconds"
 FLD_SUBJOB_HEARTBEAT = "heartbeat"
+FLD_SUBJOB_HTC_STATS_MISSING = "stats_missing"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
@@ -80,6 +74,13 @@ FLD_COMMON_ID = "id"
 FLD_COMMON_STATE = "state"
 FLD_COMMON_TRANS_TIMES = "transition_times"
 FLD_COMMON_TRANS_HISTORY = "trans_history"
+FLD_COMMON_CPU_HOURS = "cpu_hours"
+FLD_COMMON_MAX_MEM = "max_memory"
+FLD_COMMON_OUTPUTS = "outputs"
+FLD_COMMON_HTC_DETAILS = "htcondor_details"
+FLD_COMMON_HTC_CPU_HOURS = "cpu_hours"
+FLD_COMMON_HTC_MAX_MEM = "max_memory"
+FLD_COMMON_HTC_RUNTIME = "runtime_seconds"
 FLD_COMMON_CLEANED = "cleaned"
 FLD_COMMON_ERROR = "error"
 FLD_COMMON_ADMIN_ERROR = "admin_error"
@@ -947,6 +948,32 @@ class _JobBase(BaseModel):
     )]
 
 
+class SubJobHTCondorDetails(BaseModel):
+    """
+    HTCondor statistics for a single container (proc) within a job.
+    """
+    cpu_hours: Annotated[float | None, Field(
+        examples=[1.5],
+        description="CPU hours used by this container as reported by HTCondor, if available."
+    )] = None
+    max_memory: Annotated[int | None, Field(
+        examples=[536870912],
+        description="Peak memory in bytes used by this container as reported by HTCondor, "
+            + "if available."
+    )] = None
+    runtime_seconds: Annotated[float | None, Field(
+        examples=[600.0],
+        description="Wall-clock runtime in seconds for this container as reported by HTCondor, "
+            + "if available."
+    )] = None
+    stats_missing: Annotated[bool | None, Field(
+        description="None if the background HTCondor stats fetcher has not yet checked this "
+            + "container. True if HTCondor has no record of this proc. False if stats were "
+            + "successfully fetched (individual stats fields may still be null if HTCondor "
+            + "reported nothing for them)."
+    )] = None
+
+
 class SubJob(_JobBase):
     """
     Information about the state of a subjob that is running as part of a job.
@@ -995,6 +1022,10 @@ class SubJob(_JobBase):
     heartbeat: Annotated[datetime.datetime | None, Field(
         description="The last time the external executor running this container sent a heartbeat."
             "null if the job has not yet started on the external runner"
+    )] = None
+    htcondor_details: Annotated[SubJobHTCondorDetails | None, Field(
+        description="HTCondor statistics for this container, populated by the background "
+            + "stats backfiller. Null if not yet processed."
     )] = None
 
 

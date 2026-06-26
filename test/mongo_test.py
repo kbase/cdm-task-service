@@ -148,6 +148,13 @@ async def test_indexes(mongo, mondb):
                 ])]))
             ]),
         },
+        "state_1_htcondor_details.stats_missing_1": {
+            "v": 2,
+            "key": [("state", 1), ("htcondor_details.stats_missing", 1)],
+            "partialFilterExpression": SON([
+                ("state", SON([("$in", ["canceled", "complete", "error"])]))
+            ]),
+        },
     }
     ecindex = mongo.client[MONGO_TEST_DB]["exitcodes"].index_information()
     assert ecindex == {
@@ -711,12 +718,18 @@ async def test_update_job_last_update_time_conflict(mondb):
 async def test_recover_job(mondb):
     mc = await MongoDAO.create(mondb)
 
-    # save a job with extra transitions and error fields to verify clearing and history capture
+    # save a job with extra transitions, error fields, and executor/HTC stats to verify clearing
     job = _BASEJOB.model_copy(deep=True)
     job.cleaned = True
     job.error = "some error"
     job.admin_error = "some admin error"
     job.traceback = "some traceback"
+    job.cpu_hours = 5.0
+    job.cpu_factor = 0.8
+    job.max_memory = 1024 * 1024 * 1024
+    job.htcondor_details = models.HTCondorDetails(
+        cluster_id=[123], cpu_hours=3.0, max_memory=512 * 1024 * 1024, runtime_seconds=1800.0
+    )
     dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
     dt2 = dt1 + datetime.timedelta(minutes=1)
     job.transition_times.extend([
@@ -752,6 +765,7 @@ async def test_recover_job(mondb):
         _tt(models.JobState.RECOVERING, dt2, "t4", False),
     ]
     expected.admin_error_history = ["some admin error"]
+    expected.htcondor_details = models.HTCondorDetails(cluster_id=[123])
     assert got == expected
 
     raw = await mondb.jobs.find_one({"id": "foo"})
@@ -759,6 +773,14 @@ async def test_recover_job(mondb):
     assert "error" not in raw
     assert "admin_error" not in raw
     assert "traceback" not in raw
+    assert "cpu_hours" not in raw
+    assert "cpu_factor" not in raw
+    assert "max_memory" not in raw
+    htc = raw["htcondor_details"]
+    assert htc["cluster_id"] == [123]
+    assert "cpu_hours" not in htc
+    assert "max_memory" not in htc
+    assert "runtime_seconds" not in htc
 
 
 async def test_recover_job_second_recovery(mondb):
@@ -1200,6 +1222,12 @@ async def test_recover_subjobs(mondb):
     sj0.admin_error = "some admin error"
     sj0.traceback = "some traceback"
     sj0.heartbeat = dt2
+    sj0.cpu_hours = 2.5
+    sj0.max_memory = 256 * 1024 * 1024
+    sj0.runtime_seconds = 900.0
+    sj0.htcondor_details = models.SubJobHTCondorDetails(
+        cpu_hours=2.0, max_memory=200 * 1024 * 1024, runtime_seconds=850.0, stats_missing=False
+    )
     sj2 = _BASESUBJOB3.model_copy(deep=True)
     sj2.admin_error = "sj2 error"
     await mc.initialize_subjobs([sj0, _BASESUBJOB2, sj2])
@@ -1235,6 +1263,10 @@ async def test_recover_subjobs(mondb):
     assert "admin_error" not in raw0
     assert "traceback" not in raw0
     assert "heartbeat" not in raw0
+    assert "cpu_hours" not in raw0
+    assert "max_memory" not in raw0
+    assert "runtime_seconds" not in raw0
+    assert "htcondor_details" not in raw0
 
     # subjob 2: no exit_code → null recorded in history; admin_error captured; heartbeat cleared
     got2 = await mc.get_subjob("bar", 2)
@@ -1868,13 +1900,15 @@ async def _process_dirty_refdata_fail(mc, older_than, op, expected):
         await mc.process_dirty_refdata(older_than, op)
 
 
-def _make_sj(job_id, sub_id, state=models.JobState.CREATED, *, time=_SAFE_TIME, heartbeat=None):
+def _make_sj(job_id, sub_id, state=models.JobState.CREATED, *, time=_SAFE_TIME, heartbeat=None,
+             htcondor_details=None):
     return models.SubJob(
         id=job_id,
         sub_id=sub_id,
         state=state,
         heartbeat=heartbeat,
         transition_times=[models.JobStateTransition(state=state, time=time)],
+        htcondor_details=htcondor_details,
     )
 
 
@@ -1950,3 +1984,116 @@ async def test_get_subjobs_with_stale_heartbeat_fail(mondb):
         await mc.get_subjobs_with_stale_heartbeat(None)
     with pytest.raises(ValueError, match="^older_than must be a timezone aware datetime$"):
         await mc.get_subjobs_with_stale_heartbeat(datetime.datetime(2025, 1, 1))
+
+
+# === HTCondor per-proc stats methods ===
+
+_HTC_T0 = datetime.datetime(2025, 7, 1, 1, tzinfo=datetime.timezone.utc)
+_HTC_T1 = datetime.datetime(2025, 7, 1, 2, tzinfo=datetime.timezone.utc)
+_HTC_T2 = datetime.datetime(2025, 7, 1, 3, tzinfo=datetime.timezone.utc)
+_HTC_T3 = datetime.datetime(2025, 7, 1, 4, tzinfo=datetime.timezone.utc)
+_HTC_T4 = datetime.datetime(2025, 7, 1, 5, tzinfo=datetime.timezone.utc)
+_HTC_T5 = datetime.datetime(2025, 7, 1, 6, tzinfo=datetime.timezone.utc)
+_HTC_T6 = datetime.datetime(2025, 7, 1, 7, tzinfo=datetime.timezone.utc)
+_HTC_T7 = datetime.datetime(2025, 7, 1, 8, tzinfo=datetime.timezone.utc)
+
+
+async def _setup_htcondor_stats_subjobs(mc, mondb):
+    await mc.initialize_subjobs([
+        # COMPLETE, htcondor_details=null (new subjob, backfiller not yet run) → in
+        _make_sj("j1", 0, models.JobState.COMPLETE, time=_HTC_T0),
+        _make_sj("j1", 1, models.JobState.COMPLETE, time=_HTC_T1),
+        # ERROR, htcondor_details=null → in
+        _make_sj("j2", 0, models.JobState.ERROR, time=_HTC_T2),
+        # COMPLETE, htcondor_stats_missing=False → out
+        _make_sj("j3", 0, models.JobState.COMPLETE, time=_HTC_T3,
+                 htcondor_details=models.SubJobHTCondorDetails(stats_missing=False)),
+        # COMPLETE, htcondor_stats_missing=True → out
+        _make_sj("j3", 1, models.JobState.COMPLETE, time=_HTC_T4,
+                 htcondor_details=models.SubJobHTCondorDetails(stats_missing=True)),
+        # Active state → out
+        _make_sj("j4", 0, models.JobState.JOB_SUBMITTED, time=_HTC_T5),
+        # COMPLETE, htcondor_details field entirely absent (pre-migration document) → in
+        _make_sj("j6", 0, models.JobState.COMPLETE, time=_HTC_T6),
+        # COMPLETE, htcondor_details present but stats_missing=null → in
+        _make_sj("j7", 0, models.JobState.COMPLETE, time=_HTC_T7,
+                 htcondor_details=models.SubJobHTCondorDetails()),
+    ])
+    # Simulate a pre-migration document by removing the field entirely
+    await mondb.subjobs.update_one({"id": "j6", "sub_id": 0}, {"$unset": {"htcondor_details": ""}})
+
+
+async def test_get_subjobs_missing_htcondor_stats(mondb):
+    mc = await MongoDAO.create(mondb)
+    await _setup_htcondor_stats_subjobs(mc, mondb)
+
+    assert await mc.get_subjobs_missing_htcondor_stats() == {
+        "j1": {0: _HTC_T0, 1: _HTC_T1},
+        "j2": {0: _HTC_T2},
+        "j6": {0: _HTC_T6},
+        "j7": {0: _HTC_T7},
+    }
+
+
+async def test_save_subjob_htcondor_stats(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([
+        _make_sj("j1", 0, models.JobState.COMPLETE, time=_HTC_T0),
+        _make_sj("j1", 1, models.JobState.ERROR, time=_HTC_T1),
+    ])
+
+    # stats_missing=False (default) with full stats
+    await mc.save_subjob_htcondor_stats("j1", 0, 1.5, 512 * 1024 * 1024, 600.0, _HTC_T0)
+    assert await mc.get_subjob("j1", 0) == _make_sj(
+        "j1", 0, models.JobState.COMPLETE, time=_HTC_T0,
+        htcondor_details=models.SubJobHTCondorDetails(
+            cpu_hours=1.5, max_memory=512 * 1024 * 1024, runtime_seconds=600.0, stats_missing=False
+        ),
+    )
+
+    # stats_missing=True: proc absent from HTCondor — stats stay None
+    await mc.save_subjob_htcondor_stats("j1", 1, None, None, None, _HTC_T1, stats_missing=True)
+    assert await mc.get_subjob("j1", 1) == _make_sj(
+        "j1", 1, models.JobState.ERROR, time=_HTC_T1,
+        htcondor_details=models.SubJobHTCondorDetails(stats_missing=True),
+    )
+
+    # stats_missing=False (default) with all-None stats (proc found but HTCondor reported nothing)
+    await mc.save_subjob_htcondor_stats("j1", 0, None, None, None, _HTC_T0)
+    assert await mc.get_subjob("j1", 0) == _make_sj(
+        "j1", 0, models.JobState.COMPLETE, time=_HTC_T0,
+        htcondor_details=models.SubJobHTCondorDetails(stats_missing=False),
+    )
+
+
+async def test_save_subjob_htcondor_stats_conflict(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_make_sj("j1", 0, models.JobState.COMPLETE, time=_HTC_T0)])
+
+    stale_time = _HTC_T0 - datetime.timedelta(seconds=1)
+    with pytest.raises(SubJobUpdateConflictError):
+        await mc.save_subjob_htcondor_stats("j1", 0, 1.5, None, None, stale_time)
+
+    # Verify nothing was written
+    assert await mc.get_subjob("j1", 0) == _make_sj(
+        "j1", 0, models.JobState.COMPLETE, time=_HTC_T0
+    )
+
+
+async def test_save_subjob_htcondor_stats_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    t = _HTC_T0
+    with pytest.raises(ValueError, match="^job_id is required$"):
+        await mc.save_subjob_htcondor_stats(None, 0, None, None, None, t)
+    with pytest.raises(ValueError, match="^job_id is required$"):
+        await mc.save_subjob_htcondor_stats("  ", 0, None, None, None, t)
+    with pytest.raises(ValueError, match="^subjob_id must be >= 0$"):
+        await mc.save_subjob_htcondor_stats("j1", -1, None, None, None, t)
+    with pytest.raises(ValueError, match="^cpu_hours must be >= 0$"):
+        await mc.save_subjob_htcondor_stats("j1", 0, -0.1, None, None, t)
+    with pytest.raises(ValueError, match="^max_memory must be >= 0$"):
+        await mc.save_subjob_htcondor_stats("j1", 0, None, -1, None, t)
+    with pytest.raises(ValueError, match="^runtime_seconds must be >= 0$"):
+        await mc.save_subjob_htcondor_stats("j1", 0, None, None, -1.0, t)
+    with pytest.raises(ValueError, match="^last_update_time is required$"):
+        await mc.save_subjob_htcondor_stats("j1", 0, None, None, None, None)
