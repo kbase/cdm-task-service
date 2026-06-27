@@ -558,6 +558,54 @@ async def test_update_container_state_terminal_error_no_condor_stats():
     )
 
 
+@pytest.mark.parametrize("cluster_ids", [
+    pytest.param(None, id="no_htcondor_details"),
+    pytest.param([], id="empty_cluster_id"),
+])
+async def test_update_container_state_terminal_error_no_cluster_id(cluster_ids):
+    """
+    _error_job: job has no cluster ID → _poll_condor_stats raises InvalidJobStateError →
+    _handle_parent_update_error calls handle_exception.
+
+    Covers the case where MongoDB was unavailable when the cluster ID was written back after
+    HTCondor submission.
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    job = models.AdminJobDetails.model_construct(
+        id="jid",
+        state=models.JobState.CREATED,
+        job_input=models.JobInput.model_construct(num_containers=2, cpus=1),
+        htcondor_details=None if cluster_ids is None
+            else models.HTCondorDetails(cluster_id=cluster_ids),
+        transition_times=[models.AdminJobStateTransition(
+            state=models.JobState.CREATED,
+            time=_T,
+            trans_id=_TRANS_ID,
+            notif_sent=True,
+        )],
+    )
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+
+    await runner.update_container_state(
+        job, 0, models.JobState.ERROR,
+        _update(admin_error="container failed", traceback="Traceback: container failed"),
+    )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0,
+        update_state.error("container failed", traceback="Traceback: container failed"), _T,
+        last_update_time=None,
+    )
+    condor.get_cluster_proc_stats.assert_not_called()
+    exc = updates.handle_exception.call_args.args[0]
+    assert isinstance(exc, InvalidJobStateError)
+    assert str(exc) == (
+        "Job jid has no HTCondor cluster ID; the HTCondor job may have run "
+        "but the cluster ID was not able to be persisted in data storage."
+    )
+    updates.handle_exception.assert_called_once_with(exc, "jid", "updating state for")
+
+
 async def test_update_container_state_terminal_complete():
     """All subjobs complete - parent job should enter complete state."""
     runner, mongo, condor, updates, s3 = _make_runner()
@@ -593,6 +641,51 @@ async def test_update_container_state_terminal_complete():
         ),
         update_time=_T,
     )
+
+
+@pytest.mark.parametrize("cluster_ids", [
+    pytest.param(None, id="no_htcondor_details"),
+    pytest.param([], id="empty_cluster_id"),
+])
+async def test_update_container_state_terminal_complete_no_cluster_id(cluster_ids):
+    """
+    _complete_job: job has no cluster ID → _poll_condor_stats raises InvalidJobStateError →
+    _handle_parent_update_error calls handle_exception.
+
+    Covers the case where MongoDB was unavailable when the cluster ID was written back after
+    HTCondor submission.
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    job = models.AdminJobDetails.model_construct(
+        id="jid",
+        state=models.JobState.CREATED,
+        job_input=models.JobInput.model_construct(num_containers=2, cpus=1),
+        htcondor_details=None if cluster_ids is None
+            else models.HTCondorDetails(cluster_id=cluster_ids),
+        transition_times=[models.AdminJobStateTransition(
+            state=models.JobState.CREATED,
+            time=_T,
+            trans_id=_TRANS_ID,
+            notif_sent=True,
+        )],
+    )
+    outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
+
+    await runner.update_container_state(job, 0, models.JobState.COMPLETE, _update(outputs=outputs))
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.complete(outputs), _T,
+        last_update_time=None,
+    )
+    condor.get_cluster_proc_stats.assert_not_called()
+    exc = updates.handle_exception.call_args.args[0]
+    assert isinstance(exc, InvalidJobStateError)
+    assert str(exc) == (
+        "Job jid has no HTCondor cluster ID; the HTCondor job may have run "
+        "but the cluster ID was not able to be persisted in data storage."
+    )
+    updates.handle_exception.assert_called_once_with(exc, "jid", "updating state for")
 
 
 async def test_update_container_state_parent_update_fails():
@@ -2092,7 +2185,7 @@ async def test_error_unhealthy_subjobs_condor_fails(caplog):
         await runner.error_unhealthy_subjobs("jid", {0: _T, 1: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, [0, 1])
+    condor.get_cluster_proc_details.assert_called_once_with(123, {0, 1})
     updates.get_parent_job_update.assert_not_called()
     mongo.update_subjob_state.assert_not_called()
     assert (
@@ -2109,7 +2202,7 @@ async def test_error_unhealthy_subjobs_healthy_proc_no_update(proc_state):
     await runner.error_unhealthy_subjobs("jid", {0: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, {0})
     updates.get_parent_job_update.assert_not_called()
     mongo.update_subjob_state.assert_not_called()
 
@@ -2125,7 +2218,7 @@ async def test_error_unhealthy_subjobs_absent_proc_errors_subjob():
     await runner.error_unhealthy_subjobs("jid", {0: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, {0})
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
@@ -2150,7 +2243,7 @@ async def test_error_unhealthy_subjobs_unhealthy_proc_errors_subjob(proc_state):
     await runner.error_unhealthy_subjobs("jid", {3: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, [3])
+    condor.get_cluster_proc_details.assert_called_once_with(123, {3})
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 3,
@@ -2190,7 +2283,7 @@ async def test_error_unhealthy_subjobs_held_proc_includes_hold_details(
     await runner.error_unhealthy_subjobs("jid", {0: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, {0})
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     expected_admin_error = (
         f"No active executor heartbeat; HTCondor proc is in state held{expected_suffix}"
@@ -2218,7 +2311,7 @@ async def test_error_unhealthy_subjobs_update_conflict_recovery_won(caplog):
         await runner.error_unhealthy_subjobs("jid", {0: stale_t})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, {0})
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
         update_state.error(
@@ -2253,7 +2346,7 @@ async def test_error_unhealthy_subjobs_per_subjob_exception_isolation(caplog):
         await runner.error_unhealthy_subjobs("jid", {0: _T, 1: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, [0, 1])
+    condor.get_cluster_proc_details.assert_called_once_with(123, {0, 1})
     # Subjob 0 throws before get_parent_job_update; subjob 1 succeeds so it's called once.
     updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     _admin_error = "No active executor heartbeat; HTCondor proc is in state held"
@@ -2288,7 +2381,7 @@ async def test_error_unhealthy_subjobs_active_job_triggers_terminal_parent():
         await runner.error_unhealthy_subjobs("jid", {0: _T})
 
     mongo.get_job.assert_called_once_with("jid", as_admin=True)
-    condor.get_cluster_proc_details.assert_called_once_with(123, [0])
+    condor.get_cluster_proc_details.assert_called_once_with(123, {0})
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
         update_state.error(

@@ -588,8 +588,12 @@ class KBaseRunner(JobFlow):
     async def _poll_condor_stats(
         self, job: models.AdminJobDetails
     ) -> _CondorJobStats:
+        if not job.htcondor_details or not job.htcondor_details.cluster_id:
+            raise InvalidJobStateError(
+                f"Job {job.id} has no HTCondor cluster ID; the HTCondor job may have run "
+                "but the cluster ID was not able to be persisted in data storage."
+            )
         attempts = 0
-        # if cluster_id exists, there's a cluster ID in it
         cluster_id = job.htcondor_details.cluster_id[-1]
         num_containers = job.job_input.num_containers
         while attempts < 12:  # 60 seconds for condor to finish the job, seems ample?
@@ -739,10 +743,9 @@ class KBaseRunner(JobFlow):
             )
             return
         cluster_id = job.htcondor_details.cluster_id[-1]
-        subjob_ids = list(subjob_last_times.keys())
         try:
             proc_details = await self._condor.get_cluster_proc_details(
-                cluster_id, subjob_ids
+                cluster_id, subjob_last_times.keys()
             )
         except Exception as e:
             self._logr.error(
