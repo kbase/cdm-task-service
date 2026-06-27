@@ -169,7 +169,8 @@ class MongoDAO:
                 },
             ),
             # Find terminal subjobs whose HTCondor per-proc stats have not yet been fetched.
-            # Partial filter restricts to COMPLETE/ERROR so the index stays small and fast.
+            # stats_missing=None restricts the index to unprocessed subjobs so it stays bounded —
+            # once the backfiller sets stats_missing to True/False the subjob exits the index.
             IndexModel(
                 [
                     (models.FLD_COMMON_STATE, ASCENDING),
@@ -179,7 +180,8 @@ class MongoDAO:
                     ),
                 ],
                 partialFilterExpression={
-                    models.FLD_COMMON_STATE: {"$in": _SUBJOB_HTC_STATS_STATES}
+                    models.FLD_COMMON_STATE: {"$in": _SUBJOB_HTC_STATS_STATES},
+                    f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_SUBJOB_HTC_STATS_MISSING}": None,
                 },
             ),
         ])
