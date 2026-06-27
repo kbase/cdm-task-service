@@ -12,7 +12,7 @@ from cdmtaskservice.exceptions import (
     InvalidJobStateError, JobRecoveryError, UnsupportedOperationError
 )
 from cdmtaskservice.jobflows.kbase import (
-    KBaseRunner, DeadSubjobDetector, ExternalRunnerTimeoutError
+    KBaseRunner, KBaseSubjobMonitor, ExternalRunnerTimeoutError
 )
 from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates, ParentJobUpdate
 from cdmtaskservice import models
@@ -2423,43 +2423,46 @@ async def test_error_unhealthy_subjobs_active_job_triggers_terminal_parent():
 
 
 ######
-# DeadSubjobDetector tests
+# KBaseSubjobMonitor tests
 ######
 
 
 async def _run_detector(mongo, runner):
-    D = DeadSubjobDetector
+    D = KBaseSubjobMonitor
     with (
         patch.object(D, "_STALE_HEARTBEAT_CHECK_INTERVAL_SEC", 0.01),
         patch.object(D, "_STALE_HEARTBEAT_CHECK_JITTER_SEC", 0),
         patch.object(D, "_NO_HEARTBEAT_CHECK_INTERVAL_SEC", 0.01),
         patch.object(D, "_NO_HEARTBEAT_CHECK_JITTER_SEC", 0),
+        patch.object(D, "_HTC_STATS_BACKFILL_INTERVAL_SEC", 0.01),
+        patch.object(D, "_HTC_STATS_BACKFILL_JITTER_SEC", 0),
     ):
-        detector = DeadSubjobDetector(
+        detector = KBaseSubjobMonitor(
             mongo, runner, heartbeat_max_age_min=15, _timestamp_fn=lambda: _T
         )
         await asyncio.sleep(0.1)
         detector.close()
 
 
-def test_detector_bad_args():
+def test_monitor_bad_args():
     mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
     runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
     with pytest.raises(ValueError, match="^mongo is required$"):
-        DeadSubjobDetector(None, runner, heartbeat_max_age_min=15)
+        KBaseSubjobMonitor(None, runner, heartbeat_max_age_min=15)
     with pytest.raises(ValueError, match="^runner is required$"):
-        DeadSubjobDetector(mongo, None, heartbeat_max_age_min=15)
+        KBaseSubjobMonitor(mongo, None, heartbeat_max_age_min=15)
     with pytest.raises(ValueError, match="^heartbeat_max_age_min is required$"):
-        DeadSubjobDetector(mongo, runner, heartbeat_max_age_min=None)
+        KBaseSubjobMonitor(mongo, runner, heartbeat_max_age_min=None)
     with pytest.raises(ValueError, match="^heartbeat_max_age_min must be >= 1$"):
-        DeadSubjobDetector(mongo, runner, heartbeat_max_age_min=0)
+        KBaseSubjobMonitor(mongo, runner, heartbeat_max_age_min=0)
 
 
-async def test_detector_scheduler_runs():
+async def test_monitor_scheduler_runs():
     mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
     runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
     mongo.get_subjobs_with_stale_heartbeat.return_value = {}
     mongo.get_subjobs_with_missing_heartbeat.return_value = {}
+    mongo.get_subjobs_missing_htcondor_stats.return_value = {}
 
     await _run_detector(mongo, runner)
 
@@ -2467,9 +2470,10 @@ async def test_detector_scheduler_runs():
         _T - datetime.timedelta(minutes=15)
     )
     mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
 
 
-async def test_detector_check_stale_heartbeats(caplog):
+async def test_monitor_check_stale_heartbeats(caplog):
     mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
     runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
     threshold = _T - datetime.timedelta(minutes=15)
@@ -2484,12 +2488,14 @@ async def test_detector_check_stale_heartbeats(caplog):
         [{"j1": j1_map, "j2": j2_map}], itertools.repeat({})
     )
     mongo.get_subjobs_with_missing_heartbeat.return_value = {}
+    mongo.get_subjobs_missing_htcondor_stats.return_value = {}
 
     with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
         await _run_detector(mongo, runner)
 
     mongo.get_subjobs_with_stale_heartbeat.assert_called_with(threshold)
     mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
     assert runner.error_unhealthy_subjobs.call_args_list == [
         call("j1", j1_map), call("j2", j2_map)
     ]
@@ -2497,7 +2503,7 @@ async def test_detector_check_stale_heartbeats(caplog):
     assert "job j2 has 1 subjob(s) with stale heartbeat to check: [2]" in caplog.text
 
 
-async def test_detector_check_missing_heartbeats(caplog):
+async def test_monitor_check_missing_heartbeats(caplog):
     mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
     runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
     t0 = _T - datetime.timedelta(minutes=10)
@@ -2511,6 +2517,7 @@ async def test_detector_check_missing_heartbeats(caplog):
         [{"j3": j3_map, "j4": j4_map}], itertools.repeat({})
     )
     mongo.get_subjobs_with_stale_heartbeat.return_value = {}
+    mongo.get_subjobs_missing_htcondor_stats.return_value = {}
 
     with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
         await _run_detector(mongo, runner)
@@ -2519,6 +2526,7 @@ async def test_detector_check_missing_heartbeats(caplog):
         _T - datetime.timedelta(minutes=15)
     )
     mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
     assert runner.error_unhealthy_subjobs.call_args_list == [
         call("j3", j3_map), call("j4", j4_map)
     ]
@@ -2526,26 +2534,29 @@ async def test_detector_check_missing_heartbeats(caplog):
     assert "job j4 has 2 subjob(s) with missing heartbeat to check: [1, 2]" in caplog.text
 
 
-async def test_detector_check_stale_heartbeats_mongo_error(caplog):
+async def test_monitor_check_stale_heartbeats_mongo_error(caplog):
     mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
     runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
     mongo.get_subjobs_with_stale_heartbeat.side_effect = IOError("mongo down")
     mongo.get_subjobs_with_missing_heartbeat.return_value = {}
+    mongo.get_subjobs_missing_htcondor_stats.return_value = {}
 
     with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.kbase"):
         await _run_detector(mongo, runner)
 
     mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
     runner.error_unhealthy_subjobs.assert_not_called()
     assert "Dead-subjob check: failed to query subjobs with stale heartbeat" in caplog.text
     assert "mongo down" in caplog.text
 
 
-async def test_detector_check_missing_heartbeats_mongo_error(caplog):
+async def test_monitor_check_missing_heartbeats_mongo_error(caplog):
     mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
     runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
     mongo.get_subjobs_with_missing_heartbeat.side_effect = IOError("mongo down")
     mongo.get_subjobs_with_stale_heartbeat.return_value = {}
+    mongo.get_subjobs_missing_htcondor_stats.return_value = {}
 
     with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.kbase"):
         await _run_detector(mongo, runner)
@@ -2553,12 +2564,13 @@ async def test_detector_check_missing_heartbeats_mongo_error(caplog):
     mongo.get_subjobs_with_stale_heartbeat.assert_called_with(
         _T - datetime.timedelta(minutes=15)
     )
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
     runner.error_unhealthy_subjobs.assert_not_called()
     assert "Dead-subjob check: failed to query subjobs with missing heartbeat" in caplog.text
     assert "mongo down" in caplog.text
 
 
-async def test_detector_check_stale_heartbeats_runner_error_continues(caplog):
+async def test_monitor_check_stale_heartbeats_runner_error_continues(caplog):
     """Exception from the runner for one job does not prevent processing the next."""
     mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
     runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
@@ -2570,6 +2582,7 @@ async def test_detector_check_stale_heartbeats_runner_error_continues(caplog):
         [{"j1": j1_map, "j2": j2_map}], itertools.repeat({})
     )
     mongo.get_subjobs_with_missing_heartbeat.return_value = {}
+    mongo.get_subjobs_missing_htcondor_stats.return_value = {}
     def raise_for_j1(job_id, _):
         if job_id == "j1":
             raise IOError("runner error")
@@ -2579,10 +2592,91 @@ async def test_detector_check_stale_heartbeats_runner_error_continues(caplog):
         await _run_detector(mongo, runner)
 
     mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
     assert runner.error_unhealthy_subjobs.call_args_list == [
         call("j1", j1_map), call("j2", j2_map)
     ]
     assert "Dead-subjob check: error handling stale heartbeat for job j1" in caplog.text
+    assert "runner error" in caplog.text
+    assert "job j2" not in caplog.text
+
+
+async def test_monitor_backfill_htcondor_stats_scheduler_runs():
+    mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
+    runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
+    mongo.get_subjobs_with_stale_heartbeat.return_value = {}
+    mongo.get_subjobs_with_missing_heartbeat.return_value = {}
+    j1_map = {0: _T, 1: _T}
+    j2_map = {2: _T - datetime.timedelta(seconds=1)}
+    # Subsequent calls return {} so scheduler's extra firings produce no additional
+    # runner calls, allowing a simple exact assertion on call_args_list.
+    mongo.get_subjobs_missing_htcondor_stats.side_effect = itertools.chain(
+        [{"j1": j1_map, "j2": j2_map}], itertools.repeat({})
+    )
+
+    await _run_detector(mongo, runner)
+
+    mongo.get_subjobs_with_stale_heartbeat.assert_called_with(
+        _T - datetime.timedelta(minutes=15)
+    )
+    mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
+    runner.error_unhealthy_subjobs.assert_not_called()
+    assert runner.backfill_htcondor_stats.call_args_list == [
+        call("j1", j1_map), call("j2", j2_map)
+    ]
+
+
+async def test_monitor_backfill_htcondor_stats_mongo_error(caplog):
+    mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
+    runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
+    mongo.get_subjobs_with_stale_heartbeat.return_value = {}
+    mongo.get_subjobs_with_missing_heartbeat.return_value = {}
+    mongo.get_subjobs_missing_htcondor_stats.side_effect = IOError("mongo down")
+
+    with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.kbase"):
+        await _run_detector(mongo, runner)
+
+    mongo.get_subjobs_with_stale_heartbeat.assert_called_with(
+        _T - datetime.timedelta(minutes=15)
+    )
+    mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
+    runner.error_unhealthy_subjobs.assert_not_called()
+    runner.backfill_htcondor_stats.assert_not_called()
+    assert "HTC stats backfill: failed to query subjobs" in caplog.text
+    assert "mongo down" in caplog.text
+
+
+async def test_monitor_backfill_htcondor_stats_per_job_error_continues(caplog):
+    """Exception from the runner for one job does not prevent processing the next."""
+    mongo = create_autospec(MongoDAO, spec_set=True, instance=True)
+    runner = create_autospec(KBaseRunner, spec_set=True, instance=True)
+    mongo.get_subjobs_with_stale_heartbeat.return_value = {}
+    mongo.get_subjobs_with_missing_heartbeat.return_value = {}
+    j1_map = {0: _T}
+    j2_map = {1: _T}
+    mongo.get_subjobs_missing_htcondor_stats.side_effect = itertools.chain(
+        [{"j1": j1_map, "j2": j2_map}], itertools.repeat({})
+    )
+    def raise_for_j1(job_id, _):
+        if job_id == "j1":
+            raise IOError("runner error")
+    runner.backfill_htcondor_stats.side_effect = raise_for_j1
+
+    with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.kbase"):
+        await _run_detector(mongo, runner)
+
+    mongo.get_subjobs_with_stale_heartbeat.assert_called_with(
+        _T - datetime.timedelta(minutes=15)
+    )
+    mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
+    mongo.get_subjobs_missing_htcondor_stats.assert_called_with()
+    runner.error_unhealthy_subjobs.assert_not_called()
+    assert runner.backfill_htcondor_stats.call_args_list == [
+        call("j1", j1_map), call("j2", j2_map)
+    ]
+    assert "HTC stats backfill: error processing job j1" in caplog.text
     assert "runner error" in caplog.text
     assert "job j2" not in caplog.text
 
