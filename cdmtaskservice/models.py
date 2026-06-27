@@ -55,6 +55,7 @@ FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_HTC_CLUSTER_ID = "cluster_id"
+FLD_JOB_HTC_STATS_INCOMPLETE = "stats_incomplete"
 FLD_JOB_CPU_FACTOR = "cpu_factor"
 FLD_JOB_OUTPUT_FILE_COUNT = "output_file_count"
 FLD_JOB_LOGPATH = "logpath"
@@ -1173,6 +1174,11 @@ class HTCondorDetails(BaseModel):
         examples=[1800.0],
         description="Total wall-clock runtime in seconds across all containers as reported by "
             + "HTCondor, if available."
+    )] = None
+    stats_incomplete: Annotated[bool | None, Field(
+        description="True if HTCondor stats could not be fully computed because one or more "
+            + "procs are permanently absent from HTCondor history. False if stats are "
+            + "complete. None if the job has not yet reached a terminal state."
     )] = None
 
 

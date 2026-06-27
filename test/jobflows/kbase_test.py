@@ -522,6 +522,7 @@ async def test_update_container_state_terminal_error():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
         last_update_time=_T,
     )
@@ -558,6 +559,97 @@ async def test_update_container_state_terminal_error_no_condor_stats():
             htcondor_cpu_hours=None,
             htcondor_max_memory=None,
             htcondor_runtime_seconds=None,
+            htcondor_stats_incomplete=False,
+        ),
+        last_update_time=_T,
+    )
+
+
+_MISSING_PROC_STATS = {
+    0: ProcStats(state=ProcState.COMPLETE, cpu_hours=0.6, max_memory=300 * 1024 * 1024,
+                 runtime_seconds=500.0),
+    1: ProcStats(state=ProcState.MISSING),
+}
+
+
+@pytest.mark.parametrize("htc_details", [
+    pytest.param(None, id="no_htcondor_details"),
+    pytest.param(models.SubJobHTCondorDetails(stats_missing=None), id="stats_missing_none"),
+    pytest.param(models.SubJobHTCondorDetails(stats_missing=True), id="permanently_absent"),
+])
+async def test_update_container_state_terminal_error_missing_proc_incomplete(htc_details):
+    """
+    MISSING proc → stats_incomplete=True, all htc stats None. Covers all cases where stats
+    cannot be substituted: backfiller not yet run (htc absent or stats_missing=None), and
+    proc permanently absent from HTCondor history (stats_missing=True).
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+    mongo.get_exit_codes_for_subjobs.return_value = [1]
+    condor.get_cluster_proc_stats.return_value = _MISSING_PROC_STATS
+    sj = models.SubJob.model_construct(sub_id=1, htcondor_details=htc_details)
+    mongo.get_subjobs.return_value = [sj]
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.update_container_state(
+            _JOB, 1, models.JobState.ERROR,
+            _update(admin_error="container failed"),
+        )
+
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
+    mongo.get_subjobs.assert_called_once_with("jid", subjob_ids=[1])
+    mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Check subjobs / containers for admin errors",
+            user_error=(
+                "At least one container exited with a non-zero "
+                "error code. Please examine the logs for details."
+            ),
+            log_files_path="logs/jid",
+            htcondor_stats_incomplete=True,
+        ),
+        last_update_time=_T,
+    )
+
+
+async def test_update_container_state_terminal_error_missing_proc_resolved_by_backfiller():
+    """MISSING proc resolved by backfiller (stats_missing=False) → saved stats merged in."""
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+    mongo.get_exit_codes_for_subjobs.return_value = [1]
+    condor.get_cluster_proc_stats.return_value = _MISSING_PROC_STATS
+    htc = models.SubJobHTCondorDetails(
+        stats_missing=False, cpu_hours=0.4, max_memory=512 * 1024 * 1024, runtime_seconds=700.0,
+    )
+    sj = models.SubJob.model_construct(sub_id=1, htcondor_details=htc)
+    mongo.get_subjobs.return_value = [sj]
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        await runner.update_container_state(
+            _JOB, 1, models.JobState.ERROR,
+            _update(admin_error="container failed"),
+        )
+
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
+    mongo.get_subjobs.assert_called_once_with("jid", subjob_ids=[1])
+    mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Check subjobs / containers for admin errors",
+            user_error=(
+                "At least one container exited with a non-zero "
+                "error code. Please examine the logs for details."
+            ),
+            log_files_path="logs/jid",
+            htcondor_cpu_hours=1.0,
+            htcondor_max_memory=512 * 1024 * 1024,
+            htcondor_runtime_seconds=1200.0,
+            htcondor_stats_incomplete=False,
         ),
         last_update_time=_T,
     )
@@ -646,6 +738,7 @@ async def test_update_container_state_terminal_complete():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
         update_time=_T,
     )
@@ -776,6 +869,7 @@ async def test_update_container_state_recovering_ignored_terminal():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
         last_update_time=_T,
     )
@@ -851,6 +945,7 @@ async def test_update_container_state_error_job_no_nonzero_exit_codes():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
         last_update_time=_T,
     )
@@ -899,6 +994,7 @@ async def test_update_container_state_error_job_held_running_containers():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
         last_update_time=_T,
     )
@@ -1047,6 +1143,7 @@ async def test_update_container_state_error_job_update_conflict(caplog):
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
         last_update_time=_T,
     )
@@ -1081,6 +1178,7 @@ async def test_update_container_state_complete_job_no_outputs():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
     )
 
@@ -1116,6 +1214,7 @@ async def test_update_container_state_complete_job_checksum_mismatch():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
     )
 
@@ -1241,6 +1340,7 @@ async def test_recover_job_standard_canceling_with_cluster_id():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
     )
 
@@ -1355,6 +1455,7 @@ async def test_recover_job_error_state_advance_to_complete():
                 htcondor_cpu_hours=_HTC_CPU_HOURS,
                 htcondor_max_memory=_HTC_MAX_MEM,
                 htcondor_runtime_seconds=_HTC_RUNTIME,
+                htcondor_stats_incomplete=False,
             ),
             update_time=advance_times[4],
         ),
@@ -1482,6 +1583,7 @@ async def test_recover_job_standard_advance_to_complete(start_state, state_updat
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
         update_time=complete_time,
     )]
@@ -1519,6 +1621,7 @@ async def test_recover_job_complete_job_no_outputs():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
     )
 
@@ -1552,6 +1655,7 @@ async def test_recover_job_complete_job_checksum_mismatch():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
     )
 
@@ -1847,6 +1951,7 @@ async def test_recover_job_force_all_complete():
                 htcondor_cpu_hours=_HTC_CPU_HOURS,
                 htcondor_max_memory=_HTC_MAX_MEM,
                 htcondor_runtime_seconds=_HTC_RUNTIME,
+                htcondor_stats_incomplete=False,
             ),
             update_time=advance_times[4],
         ),
@@ -2417,6 +2522,7 @@ async def test_error_unhealthy_subjobs_active_job_triggers_terminal_parent():
             htcondor_cpu_hours=_HTC_CPU_HOURS,
             htcondor_max_memory=_HTC_MAX_MEM,
             htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
         ),
         last_update_time=_T,
     )

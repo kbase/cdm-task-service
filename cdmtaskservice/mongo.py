@@ -645,6 +645,9 @@ class MongoDAO:
     _FLD_HTC_CPU_HOURS = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_CPU_HOURS}"
     _FLD_HTC_MAX_MEM = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_MAX_MEM}"
     _FLD_HTC_RUNTIME = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_RUNTIME}"
+    _FLD_HTC_STATS_INCOMPLETE = (
+        f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_JOB_HTC_STATS_INCOMPLETE}"
+    )
     _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
     _FLD_NERSC_LOG_UL_TASK = (
         f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
@@ -657,6 +660,7 @@ class MongoDAO:
             UpdateField.HTCONDOR_CPU_HOURS: (self._FLD_HTC_CPU_HOURS, False),
             UpdateField.HTCONDOR_MAX_MEM: (self._FLD_HTC_MAX_MEM, False),
             UpdateField.HTCONDOR_RUNTIME: (self._FLD_HTC_RUNTIME, False),
+            UpdateField.HTCONDOR_STATS_INCOMPLETE: (self._FLD_HTC_STATS_INCOMPLETE, False),
             UpdateField.CPU_HOURS: (models.FLD_COMMON_CPU_HOURS, False),
             UpdateField.CPU_FACTOR: (models.FLD_JOB_CPU_FACTOR, False),
             UpdateField.MAX_MEMORY: (models.FLD_COMMON_MAX_MEM, False),
@@ -786,9 +790,10 @@ class MongoDAO:
                 models.FLD_COMMON_CPU_HOURS,
                 models.FLD_JOB_CPU_FACTOR,
                 models.FLD_COMMON_MAX_MEM,
-                f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_CPU_HOURS}",
-                f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_MAX_MEM}",
-                f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_RUNTIME}",
+                self._FLD_HTC_CPU_HOURS,
+                self._FLD_HTC_MAX_MEM,
+                self._FLD_HTC_RUNTIME,
+                self._FLD_HTC_STATS_INCOMPLETE,
             ]},
         ]
         result = await self._col_jobs.update_one({models.FLD_COMMON_ID: job_id}, pipeline)

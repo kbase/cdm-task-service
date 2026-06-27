@@ -418,6 +418,7 @@ async def test_update_job_htcondor_stats(mondb):
             htcondor_cpu_hours=1.5,
             htcondor_max_memory=536870912,
             htcondor_runtime_seconds=1800.0,
+            htcondor_stats_incomplete=False,
         ),
         dt, "tid1",
     )
@@ -427,6 +428,23 @@ async def test_update_job_htcondor_stats(mondb):
         cpu_hours=1.5,
         max_memory=536870912,
         runtime_seconds=1800.0,
+        stats_incomplete=False,
+    )
+
+    job2 = _BASEJOB.model_copy(deep=True)
+    job2.id = "bar"
+    job2.htcondor_details = models.HTCondorDetails(cluster_id=[99])
+    await mc.save_job(job2)
+
+    await mc.update_job_state(
+        "bar",
+        error("admin err 2", htcondor_stats_incomplete=True),
+        dt, "tid2",
+    )
+    got2 = await mc.get_job("bar", as_admin=True)
+    assert got2.htcondor_details == models.HTCondorDetails(
+        cluster_id=[99],
+        stats_incomplete=True,
     )
 
 
@@ -730,7 +748,8 @@ async def test_recover_job(mondb):
     job.cpu_factor = 0.8
     job.max_memory = 1024 * 1024 * 1024
     job.htcondor_details = models.HTCondorDetails(
-        cluster_id=[123], cpu_hours=3.0, max_memory=512 * 1024 * 1024, runtime_seconds=1800.0
+        cluster_id=[123], cpu_hours=3.0, max_memory=512 * 1024 * 1024, runtime_seconds=1800.0,
+        stats_incomplete=True,
     )
     dt1 = _SAFE_TIME + datetime.timedelta(minutes=1)
     dt2 = dt1 + datetime.timedelta(minutes=1)
@@ -783,6 +802,7 @@ async def test_recover_job(mondb):
     assert "cpu_hours" not in htc
     assert "max_memory" not in htc
     assert "runtime_seconds" not in htc
+    assert "stats_incomplete" not in htc
 
 
 async def test_recover_job_second_recovery(mondb):
