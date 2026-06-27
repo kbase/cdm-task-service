@@ -73,17 +73,7 @@ class _CondorJobStats:
     cpu_hours: float | None
     max_memory: int | None
     runtime_seconds: float | None
-
-
-def _aggregate_condor_stats(proc_stats: dict[int, ProcStats]) -> _CondorJobStats:
-    cpu = sum(s.cpu_hours for s in proc_stats.values() if s.cpu_hours is not None)
-    mems = [s.max_memory for s in proc_stats.values() if s.max_memory is not None]
-    rt = sum(s.runtime_seconds for s in proc_stats.values() if s.runtime_seconds is not None)
-    return _CondorJobStats(
-        cpu_hours=cpu or None,
-        max_memory=max(mems) if mems else None,
-        runtime_seconds=rt or None,
-    )
+    stats_incomplete: bool = False
 
 
 class KBaseRunner(JobFlow):
@@ -507,6 +497,7 @@ class KBaseRunner(JobFlow):
                 htcondor_cpu_hours=condor_stats.cpu_hours,
                 htcondor_max_memory=condor_stats.max_memory,
                 htcondor_runtime_seconds=condor_stats.runtime_seconds,
+                htcondor_stats_incomplete=condor_stats.stats_incomplete,
             ),
             last_update_time=last_update_time,
         )
@@ -525,6 +516,7 @@ class KBaseRunner(JobFlow):
             htcondor_cpu_hours=condor_stats.cpu_hours,
             htcondor_max_memory=condor_stats.max_memory,
             htcondor_runtime_seconds=condor_stats.runtime_seconds,
+            htcondor_stats_incomplete=condor_stats.stats_incomplete,
         )
         subjobs = await self.get_subjobs(job.id)
         filechecksums = {}
@@ -588,7 +580,42 @@ class KBaseRunner(JobFlow):
             htcondor_cpu_hours=condor_stats.cpu_hours if condor_stats else None,
             htcondor_max_memory=condor_stats.max_memory if condor_stats else None,
             htcondor_runtime_seconds=condor_stats.runtime_seconds if condor_stats else None,
+            htcondor_stats_incomplete=condor_stats.stats_incomplete if condor_stats else None,
         ))
+
+    async def _aggregate_condor_stats(
+        self, job_id: str, proc_stats: dict[int, ProcStats]
+    ) -> _CondorJobStats:
+        missing_ids = [i for i, s in proc_stats.items() if s.state is ProcState.MISSING]
+        if missing_ids:
+            # Some procs are absent from both HTCondor's active queue and history. Check if the
+            # background stats backfiller has resolved them. The backfiller may not have run yet
+            # if the CTS or HTCondor was down long enough for procs to be purged from history
+            # before the backfiller could record their stats — in that case stats are incomplete.
+            subjobs = await self._mongo.get_subjobs(job_id, subjob_ids=missing_ids)
+            for sj in subjobs:
+                htc = sj.htcondor_details
+                if htc is None or htc.stats_missing is not False:
+                    # Backfiller hasn't run (htc absent or stats_missing not yet set), or the proc
+                    # is permanently absent from HTCondor history; stats are incomplete either way.
+                    return _CondorJobStats(
+                        cpu_hours=None, max_memory=None, runtime_seconds=None,
+                        stats_incomplete=True,
+                    )
+                proc_stats[sj.sub_id] = ProcStats(
+                    state=ProcState.COMPLETE,  # arbitrary
+                    cpu_hours=htc.cpu_hours,
+                    max_memory=htc.max_memory,
+                    runtime_seconds=htc.runtime_seconds,
+                )
+        cpu = sum(s.cpu_hours for s in proc_stats.values() if s.cpu_hours is not None)
+        mems = [s.max_memory for s in proc_stats.values() if s.max_memory is not None]
+        rt = sum(s.runtime_seconds for s in proc_stats.values() if s.runtime_seconds is not None)
+        return _CondorJobStats(
+            cpu_hours=cpu or None,
+            max_memory=max(mems) if mems else None,
+            runtime_seconds=rt or None,
+        )
 
     async def _poll_condor_stats(
         self, job: models.AdminJobDetails
@@ -605,7 +632,7 @@ class KBaseRunner(JobFlow):
             await asyncio.sleep(5)  # give Condor a few seconds to finish up
             proc_stats = await self._condor.get_cluster_proc_stats(cluster_id, num_containers)
             if not any(s.state.is_queued_or_running() for s in proc_stats.values()):
-                return _aggregate_condor_stats(proc_stats)
+                return await self._aggregate_condor_stats(job.id, proc_stats)
             attempts += 1
         raise ExternalRunnerTimeoutError(
             "External runner jobs didn't complete for 60s after all executors sent termination"

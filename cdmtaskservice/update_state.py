@@ -64,7 +64,10 @@ class UpdateField(StrEnum):
 
     HTCONDOR_RUNTIME = auto()
     """ The total wall-clock runtime in seconds for a job as reported by HTCondor. """
-    
+
+    HTCONDOR_STATS_INCOMPLETE = auto()
+    """ True if HTCondor stats are incomplete due to missing proc data. """
+
     USER_ERROR = auto()
     """ Error information about a process targeted at a user. """
     
@@ -327,6 +330,7 @@ def _set_htcondor_stats(
     htcondor_cpu_hours: float | None,
     htcondor_max_memory: int | None,
     htcondor_runtime_seconds: float | None,
+    htcondor_stats_incomplete: bool | None = None,
 ):
     if htcondor_cpu_hours is not None:
         flds[UpdateField.HTCONDOR_CPU_HOURS] = _check_num(
@@ -340,6 +344,11 @@ def _set_htcondor_stats(
         flds[UpdateField.HTCONDOR_RUNTIME] = _check_num(
             htcondor_runtime_seconds, "htcondor_runtime_seconds", minimum=0
         )
+    # None means no HTCondor context (non-KBase job); avoids creating a partial
+    # htcondor_details subdocument on NERSC/JAWS jobs. KBase callers always pass True or False
+    # except for canceled jobs.
+    if htcondor_stats_incomplete is not None:
+        flds[UpdateField.HTCONDOR_STATS_INCOMPLETE] = htcondor_stats_incomplete
 
 
 def complete(
@@ -348,6 +357,7 @@ def complete(
     htcondor_cpu_hours: float | None = None,
     htcondor_max_memory: int | None = None,
     htcondor_runtime_seconds: float | None = None,
+    htcondor_stats_incomplete: bool | None = None,
 ) -> JobUpdate:
     """
     Update a job's state from upload submitted to complete.
@@ -355,6 +365,8 @@ def complete(
     output_file_paths - the output file paths.
     htcondor_cpu_hours/max_memory/runtime_seconds - HTCondor-reported stats stored in
         htcondor_details, if available.
+    htcondor_stats_incomplete - True if HTCondor stats could not be fully computed due to
+        missing proc data.
     """
     output_file_paths = output_file_paths or []
     out = [o.model_dump() for o in output_file_paths]
@@ -362,7 +374,10 @@ def complete(
         UpdateField.OUTPUT_FILE_PATHS: out,
         UpdateField.OUTPUT_FILE_COUNT: len(out),
     }
-    _set_htcondor_stats(flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds)
+    _set_htcondor_stats(
+        flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds,
+        htcondor_stats_incomplete,
+    )
     return JobUpdate(
         )._set_current_state(models.JobState.UPLOAD_SUBMITTED
         )._set_new_state(models.JobState.COMPLETE
@@ -416,6 +431,7 @@ def canceled(
     htcondor_cpu_hours: float | None = None,
     htcondor_max_memory: int | None = None,
     htcondor_runtime_seconds: float | None = None,
+    htcondor_stats_incomplete: bool | None = None,
 ) -> JobUpdate:
     """
     Set a job to the canceled state.
@@ -425,10 +441,15 @@ def canceled(
     max_memory - the maximum memory used by the job in bytes, if available.
     htcondor_cpu_hours/max_memory/runtime_seconds - HTCondor-reported stats stored in
         htcondor_details, if available.
+    htcondor_stats_incomplete - True if HTCondor stats could not be fully computed due to
+        missing proc data.
     """
     flds = {}
     _set_job_stats(flds, cpu_hours, max_memory, cpu_factor)
-    _set_htcondor_stats(flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds)
+    _set_htcondor_stats(
+        flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds,
+        htcondor_stats_incomplete,
+    )
     return JobUpdate(
         )._set_current_state(models.JobState.CANCELING
         )._set_new_state(models.JobState.CANCELED
@@ -513,6 +534,7 @@ def error(
     htcondor_cpu_hours: float | None = None,
     htcondor_max_memory: int | None = None,
     htcondor_runtime_seconds: float | None = None,
+    htcondor_stats_incomplete: bool | None = None,
 ) -> JobUpdate:
     """
     Update a job's state to error.
@@ -524,6 +546,8 @@ def error(
     log_files_path - the path to any logs for the job.
     htcondor_cpu_hours/max_memory/runtime_seconds - HTCondor-reported stats stored in
         htcondor_details, if available.
+    htcondor_stats_incomplete - True if HTCondor stats could not be fully computed due to
+        missing proc data.
     """
     flds = {
         UpdateField.ADMIN_ERROR: _require_string(admin_error, "admin_error"),
@@ -532,7 +556,10 @@ def error(
     }
     if user_error is not None:
         flds[UpdateField.USER_ERROR] = user_error
-    _set_htcondor_stats(flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds)
+    _set_htcondor_stats(
+        flds, htcondor_cpu_hours, htcondor_max_memory, htcondor_runtime_seconds,
+        htcondor_stats_incomplete,
+    )
     return JobUpdate(
         )._set_new_state(models.JobState.ERROR
         )._set_disallowed_current_states(
