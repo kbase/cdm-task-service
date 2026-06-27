@@ -1184,16 +1184,23 @@ class KBaseRunner(JobFlow):
         pass # Intentionally do nothing
 
 
-class DeadSubjobDetector:
+class KBaseSubjobMonitor:
     """
-    Periodically queries MongoDB for subjobs with missing or stale heartbeats and dispatches
-    to KBaseRunner.error_unhealthy_subjobs for resolution.
+    Periodically queries MongoDB for subjobs requiring attention and dispatches to KBaseRunner
+    for resolution. Currently handles two concerns:
+
+    - Dead subjob detection: queries for subjobs with missing or stale heartbeats and calls
+      KBaseRunner.error_unhealthy_subjobs.
+    - HTCondor stats backfill: queries for terminal subjobs whose per-proc HTCondor stats have
+      not yet been written and calls KBaseRunner.backfill_htcondor_stats.
     """
-    
+
     _STALE_HEARTBEAT_CHECK_INTERVAL_SEC = 5 * 60
     _STALE_HEARTBEAT_CHECK_JITTER_SEC = 60
     _NO_HEARTBEAT_CHECK_INTERVAL_SEC = 30 * 60
     _NO_HEARTBEAT_CHECK_JITTER_SEC = 300
+    _HTC_STATS_BACKFILL_INTERVAL_SEC = 5 * 60
+    _HTC_STATS_BACKFILL_JITTER_SEC = 60
 
     def __init__(
         self,
@@ -1203,10 +1210,10 @@ class DeadSubjobDetector:
         _timestamp_fn: Callable[[], datetime.datetime] = utcdatetime,
     ):
         """
-        Create and start the detector.
+        Create and start the monitor.
 
         mongo - the Mongo DAO.
-        runner - the KBase job flow runner used to resolve unhealthy subjobs.
+        runner - the KBase job flow runner used to resolve unhealthy subjobs and backfill stats.
         heartbeat_max_age_min - subjobs whose last heartbeat is older than this many minutes
             are considered potentially dead.
         """
@@ -1230,6 +1237,15 @@ class DeadSubjobDetector:
             trigger=IntervalTrigger(
                 seconds=self._NO_HEARTBEAT_CHECK_INTERVAL_SEC,
                 jitter=self._NO_HEARTBEAT_CHECK_JITTER_SEC,
+            ),
+            max_instances=1,
+            coalesce=True,
+        )
+        self._scheduler.add_job(
+            self._backfill_htcondor_stats,
+            trigger=IntervalTrigger(
+                seconds=self._HTC_STATS_BACKFILL_INTERVAL_SEC,
+                jitter=self._HTC_STATS_BACKFILL_JITTER_SEC,
             ),
             max_instances=1,
             coalesce=True,
@@ -1272,6 +1288,21 @@ class DeadSubjobDetector:
                     extra={logfields.JOB_ID: job_id}
                 )
 
+    async def _backfill_htcondor_stats(self):
+        try:
+            job_map = await self._mongo.get_subjobs_missing_htcondor_stats()
+        except Exception:
+            self._logr.exception("HTC stats backfill: failed to query subjobs")
+            return
+        for job_id, subjob_last_times in job_map.items():
+            try:
+                await self._runner.backfill_htcondor_stats(job_id, subjob_last_times)
+            except Exception:
+                self._logr.exception(
+                    "HTC stats backfill: error processing job %s", job_id,
+                    extra={logfields.JOB_ID: job_id},
+                )
+
     def close(self):
         """Shut down the scheduler."""
         self._scheduler.shutdown(wait=True)
@@ -1281,7 +1312,7 @@ class DeadSubjobDetector:
 class _Dependencies():
     refdata_client: RefdataServiceClient
     kbase_job_flow: KBaseRunner
-    detector: DeadSubjobDetector
+    monitor: KBaseSubjobMonitor
 
 
 class KBaseFlowProvider:
@@ -1344,7 +1375,7 @@ class KBaseFlowProvider:
         """
         self._closed = True
         if isinstance(self._build_state, _Dependencies):
-            self._build_state.detector.close()
+            self._build_state.monitor.close()
             await self._build_state.refdata_client.close()
 
     def _check_closed(self):
@@ -1448,8 +1479,8 @@ class KBaseFlowProvider:
                 refcli,
             )
             self._logr.info("Done")
-            detector = DeadSubjobDetector(self._mongodao, kbase, self._HEARTBEAT_MAX_AGE_MIN)
-            return _Dependencies(refcli, kbase, detector)
+            monitor = KBaseSubjobMonitor(self._mongodao, kbase, self._HEARTBEAT_MAX_AGE_MIN)
+            return _Dependencies(refcli, kbase, monitor)
         except Exception as e:
             self._logr.exception(f"Failed to initialize KBase job flow dependencies: {e}")
             return None
