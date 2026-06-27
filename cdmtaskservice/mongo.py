@@ -1121,8 +1121,10 @@ class MongoDAO:
     ):
         """
         Persist HTCondor per-proc stats (or the permanent-missing flag) for a subjob without
-        changing its state. Gated on last_update_time so that a concurrent job recovery that
-        resets the subjob wins; raises SubJobUpdateConflictError in that case.
+        changing its state. Raises SubJobHtcondorStatsAlreadySetError if stats have already
+        been written. Gated on last_update_time so that a concurrent job recovery that resets
+        the subjob wins; raises SubJobUpdateConflictError in that case. Raises MissingSubJobError
+        if the subjob does not exist.
 
         job_id - the job ID.
         subjob_id - the subjob ID (same as the HTCondor proc ID).
@@ -1135,8 +1137,7 @@ class MongoDAO:
             are trusted not to pass True with non-None stats or False with contradictory intent.
         last_update_time - the subjob's last update time as read by the caller; used as an
             optimistic lock. Raises SubJobUpdateConflictError if the subjob was modified
-            since this time. The subjob is expected to exist; a missing subjob and a genuine
-            conflict are not distinguished — both raise SubJobUpdateConflictError.
+            since this time.
         """
         _require_string(job_id, "job_id")
         _check_num(subjob_id, "subjob_id", minimum=0)
@@ -1152,6 +1153,7 @@ class MongoDAO:
                 models.FLD_COMMON_ID: job_id,
                 models.FLD_SUBJOB_ID: subjob_id,
                 _FLD_UPDATE_TIME: last_update_time,
+                f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_SUBJOB_HTC_STATS_MISSING}": None,
             },
             {"$set": {
                 models.FLD_COMMON_HTC_DETAILS: {
@@ -1163,6 +1165,18 @@ class MongoDAO:
             }},
         )
         if not result.matched_count:
+            doc = await self._col_subjobs.find_one(
+                {models.FLD_COMMON_ID: job_id, models.FLD_SUBJOB_ID: subjob_id},
+                {_FLD_UPDATE_TIME: 1},
+            )
+            if not doc:
+                raise MissingSubJobError(
+                    f"Job '{job_id}' subjob {subjob_id} does not exist"
+                )
+            if doc.get(_FLD_UPDATE_TIME) == last_update_time:
+                raise SubJobHtcondorStatsAlreadySetError(
+                    f"Job '{job_id}' subjob {subjob_id} already has HTCondor stats set"
+                )
             raise SubJobUpdateConflictError(
                 f"Job '{job_id}' subjob {subjob_id} was modified since update time "
                 f"{last_update_time} was read; skipping HTCondor stats write"
@@ -1579,6 +1593,10 @@ class JobUpdateConflictError(Exception):
 
 class SubJobUpdateConflictError(Exception):
     """ The subjob was updated by another process since it was last read. """
+
+
+class SubJobHtcondorStatsAlreadySetError(Exception):
+    """ HTCondor stats for this subjob have already been persisted. """
 
 
 class MissingSubJobError(Exception):
