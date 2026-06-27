@@ -152,7 +152,8 @@ async def test_indexes(mongo, mondb):
             "v": 2,
             "key": [("state", 1), ("htcondor_details.stats_missing", 1)],
             "partialFilterExpression": SON([
-                ("state", SON([("$in", ["canceled", "complete", "error"])]))
+                ("state", SON([("$in", ["canceled", "complete", "error"])])),
+                ("htcondor_details.stats_missing", None),
             ]),
         },
     }
