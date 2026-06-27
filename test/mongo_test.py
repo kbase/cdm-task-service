@@ -16,6 +16,7 @@ from cdmtaskservice.mongo import (
     NoSuchJobError,
     NoSuchReferenceDataError,
     NoSuchSubJobError,
+    SubJobHtcondorStatsAlreadySetError,
     SubJobUpdateConflictError,
 )
 from cdmtaskservice.update_state import (
@@ -2041,6 +2042,7 @@ async def test_save_subjob_htcondor_stats(mondb):
     await mc.initialize_subjobs([
         _make_sj("j1", 0, models.JobState.COMPLETE, time=_HTC_T0),
         _make_sj("j1", 1, models.JobState.ERROR, time=_HTC_T1),
+        _make_sj("j1", 2, models.JobState.COMPLETE, time=_HTC_T0),
     ])
 
     # stats_missing=False (default) with full stats
@@ -2060,9 +2062,9 @@ async def test_save_subjob_htcondor_stats(mondb):
     )
 
     # stats_missing=False (default) with all-None stats (proc found but HTCondor reported nothing)
-    await mc.save_subjob_htcondor_stats("j1", 0, None, None, None, _HTC_T0)
-    assert await mc.get_subjob("j1", 0) == _make_sj(
-        "j1", 0, models.JobState.COMPLETE, time=_HTC_T0,
+    await mc.save_subjob_htcondor_stats("j1", 2, None, None, None, _HTC_T0)
+    assert await mc.get_subjob("j1", 2) == _make_sj(
+        "j1", 2, models.JobState.COMPLETE, time=_HTC_T0,
         htcondor_details=models.SubJobHTCondorDetails(stats_missing=False),
     )
 
@@ -2079,6 +2081,33 @@ async def test_save_subjob_htcondor_stats_conflict(mondb):
     assert await mc.get_subjob("j1", 0) == _make_sj(
         "j1", 0, models.JobState.COMPLETE, time=_HTC_T0
     )
+
+
+async def test_save_subjob_htcondor_stats_already_set(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_make_sj("j1", 0, models.JobState.COMPLETE, time=_HTC_T0)])
+
+    await mc.save_subjob_htcondor_stats("j1", 0, 1.5, None, None, _HTC_T0)
+
+    with pytest.raises(SubJobHtcondorStatsAlreadySetError):
+        await mc.save_subjob_htcondor_stats("j1", 0, 2.0, None, None, _HTC_T0)
+
+    # Verify original stats were not overwritten
+    assert await mc.get_subjob("j1", 0) == _make_sj(
+        "j1", 0, models.JobState.COMPLETE, time=_HTC_T0,
+        htcondor_details=models.SubJobHTCondorDetails(
+            cpu_hours=1.5, stats_missing=False
+        ),
+    )
+
+
+async def test_save_subjob_htcondor_stats_missing_subjob(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.initialize_subjobs([_make_sj("j1", 1, models.JobState.COMPLETE, time=_HTC_T0)])
+    await mc.initialize_subjobs([_make_sj("j2", 0, models.JobState.COMPLETE, time=_HTC_T0)])
+
+    with pytest.raises(MissingSubJobError):
+        await mc.save_subjob_htcondor_stats("j1", 0, None, None, None, _HTC_T0)
 
 
 async def test_save_subjob_htcondor_stats_fail(mondb):
