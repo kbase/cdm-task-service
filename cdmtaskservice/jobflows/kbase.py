@@ -37,7 +37,12 @@ from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
 from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates
 from cdmtaskservice import logfields
 from cdmtaskservice import models
-from cdmtaskservice.mongo import MongoDAO, JobUpdateConflictError, SubJobUpdateConflictError
+from cdmtaskservice.mongo import (
+    MongoDAO,
+    JobUpdateConflictError,
+    SubJobHtcondorStatsAlreadySetError,
+    SubJobUpdateConflictError,
+)
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.refserv.client import RefdataServiceClient
 from cdmtaskservice.s3.client import S3ObjectMeta
@@ -599,7 +604,7 @@ class KBaseRunner(JobFlow):
         while attempts < 12:  # 60 seconds for condor to finish the job, seems ample?
             await asyncio.sleep(5)  # give Condor a few seconds to finish up
             proc_stats = await self._condor.get_cluster_proc_stats(cluster_id, num_containers)
-            if not any(s.state in {ProcState.QUEUED, ProcState.RUNNING} for s in proc_stats.values()):
+            if not any(s.state.is_queued_or_running() for s in proc_stats.values()):
                 return _aggregate_condor_stats(proc_stats)
             attempts += 1
         raise ExternalRunnerTimeoutError(
@@ -730,10 +735,11 @@ class KBaseRunner(JobFlow):
             # is expected, but if HTCondor submission fails AND the subsequent error state
             # update also fails (double failure), the job can be permanently stuck in CREATED
             # with active subjobs that never receive heartbeats, which will result in the dead
-            # subjob detector polling them forever. Recovery rejects CREATED jobs
+            # subjob detector polling them forever. Recovery rejects jobs
             # with no cluster ID and tells the user to create a new job; recovery should be
             # updated to explicitly handle this case by erroring the parent and subjobs.
             # Needs thorough analysis for race conditions before implementing
+            # See https://github.com/kbase/cdm-task-service/issues/703
             self._logr.warning(
                 "Dead-subjob check: job %s has no HTCondor cluster ID; "
                 "skipping condor check. If this persists, the job may be stuck in CREATED "
@@ -798,6 +804,113 @@ class KBaseRunner(JobFlow):
                 "Dead-subjob check: failed to update subjob %s of active job %s to ERROR: %s",
                 sub_id, job.id, e,
                 extra={logfields.JOB_ID: job.id}
+            )
+
+    async def backfill_htcondor_stats(
+        self,
+        job_id: str,
+        subjob_last_times: dict[int, datetime.datetime],
+    ):
+        """
+        Fetch and persist HTCondor per-proc stats for terminal subjobs that have not yet
+        been processed by the backfiller.
+
+        For each subjob in subjob_last_times, queries HTCondor for the proc stats and
+        persists them, gated on the subjob's last update time
+        to avoid racing with concurrent job recovery. If recovery wins, the conflict is silently
+        accepted — recovery resets stats information to null, so the backfiller will pick the
+        subjob up again on the next run after the subjob completes.
+
+        Per-subjob save failures are logged and skipped so one bad write does not block the rest.
+
+        job_id - the parent job ID.
+        subjob_last_times - mapping of subjob id -> last update time as read by the caller.
+        """
+        _require_string(job_id, "job_id")
+        _not_falsy(subjob_last_times, "subjob_last_times")
+        try:
+            job = await self._mongo.get_job(job_id, as_admin=True)
+        except Exception:
+            # it's theoretically possible for subjobs to be saved in preflight() and the job
+            # fail to save, which would mean we poll the subjobs forever. Should be extremely
+            # rare though so worry about it later
+            self._logr.exception(
+                "HTC stats backfill: failed to fetch job %s", job_id,
+                extra={logfields.JOB_ID: job_id},
+            )
+            return
+        if not job.htcondor_details or not job.htcondor_details.cluster_id:
+            # Job not yet submitted to HTCondor — normal pre-submission window; retry later.
+            # No cluster ID means the job hasn't been submitted to HTCondor yet. There is a
+            # brief legitimate window between job creation and HTCondor submission where this
+            # is expected, but if the job update fails the job can be permanently stuck 
+            # in CREATED or ERROR, which will result in the missing stats
+            # detector polling them forever. Recovery rejects jobs
+            # with no cluster ID and tells the user to create a new job; recovery should be
+            # updated to explicitly handle this case by erroring the parent and subjobs.
+            # Needs thorough analysis for race conditions before implementing
+            # See https://github.com/kbase/cdm-task-service/issues/703
+            self._logr.warning(
+                "HTC stats backfill: job %s has no HTCondor cluster ID; "
+                "skipping condor check. If this persists, the job may be stuck without a "
+                "cluster ID due to a failure during submission.",
+                job_id,
+                extra={logfields.JOB_ID: job_id},
+            )
+            return
+        cluster_id = job.htcondor_details.cluster_id[-1]
+        try:
+            proc_stats = await self._condor.get_cluster_proc_stats(
+                cluster_id, list(subjob_last_times.keys())
+            )
+        except Exception:
+            self._logr.exception(
+                "HTC stats backfill: condor query failed for job %s cluster %s",
+                job_id, cluster_id,
+                extra={logfields.JOB_ID: job_id},
+            )
+            return
+        for sub_id, stats in proc_stats.items():
+            if stats.state.is_queued_or_running():
+                continue
+            await self._save_htcondor_stats_safe(job_id, sub_id, stats, subjob_last_times[sub_id])
+
+    async def _save_htcondor_stats_safe(
+        self,
+        job_id: str,
+        sub_id: int,
+        stats: ProcStats,
+        last_update_time: datetime.datetime,
+    ):
+        missing = stats.state == ProcState.MISSING
+        try:
+            await self._mongo.save_subjob_htcondor_stats(
+                job_id, sub_id,
+                None if missing else stats.cpu_hours,
+                None if missing else stats.max_memory,
+                None if missing else stats.runtime_seconds,
+                last_update_time,
+                stats_missing=missing,
+            )
+        except SubJobHtcondorStatsAlreadySetError as e:
+            self._logr.warning(
+                "HTC stats backfill: stats already set for subjob %s of job %s; "
+                "skipping: %s",
+                sub_id, job_id, e,
+                extra={logfields.JOB_ID: job_id},
+            )
+        except SubJobUpdateConflictError as e:
+            self._logr.info(
+                "HTC stats backfill: conflict saving stats for subjob %s of job %s; "
+                "recovery won: %s",
+                sub_id, job_id, e,
+                extra={logfields.JOB_ID: job_id},
+            )
+        except Exception:
+            self._logr.exception(
+                "HTC stats backfill: failed to save stats for subjob %s of job %s",
+                sub_id, job_id,
+                extra={logfields.JOB_ID: job_id},
             )
 
     async def clean_job(self, job: models.AdminJobDetails, force: bool = False):

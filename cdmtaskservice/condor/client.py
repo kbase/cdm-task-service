@@ -59,6 +59,10 @@ class ProcState(enum.Enum):
         """ Return True if this state does not indicate a problem requiring intervention. """
         return self in {ProcState.QUEUED, ProcState.RUNNING, ProcState.COMPLETE}
 
+    def is_queued_or_running(self) -> bool:
+        """ Return True if the proc is still in the queue or actively running. """
+        return self in {ProcState.QUEUED, ProcState.RUNNING}
+
 
 _JOB_STATUS_TO_PROC_STATE = {
     1:                ProcState.QUEUED,    # Idle

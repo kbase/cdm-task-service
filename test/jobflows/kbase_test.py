@@ -17,7 +17,12 @@ from cdmtaskservice.jobflows.kbase import (
 from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates, ParentJobUpdate
 from cdmtaskservice import models
 from cdmtaskservice import update_state
-from cdmtaskservice.mongo import MongoDAO, JobUpdateConflictError, SubJobUpdateConflictError
+from cdmtaskservice.mongo import (
+    MongoDAO,
+    JobUpdateConflictError,
+    SubJobHtcondorStatsAlreadySetError,
+    SubJobUpdateConflictError,
+)
 from cdmtaskservice.refserv.client import RefdataServiceClient
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
 from cdmtaskservice.s3.paths import S3Paths
@@ -596,7 +601,10 @@ async def test_update_container_state_terminal_error_no_cluster_id(cluster_ids):
         update_state.error("container failed", traceback="Traceback: container failed"), _T,
         last_update_time=None,
     )
+    updates.get_parent_job_update.assert_called_once_with(job, models.JobState.ERROR)
     condor.get_cluster_proc_stats.assert_not_called()
+    mongo.get_exit_codes_for_subjobs.assert_not_called()
+    updates.update_job_state.assert_not_called()
     exc = updates.handle_exception.call_args.args[0]
     assert isinstance(exc, InvalidJobStateError)
     assert str(exc) == (
@@ -678,7 +686,10 @@ async def test_update_container_state_terminal_complete_no_cluster_id(cluster_id
         "jid", 0, update_state.complete(outputs), _T,
         last_update_time=None,
     )
+    updates.get_parent_job_update.assert_called_once_with(job, models.JobState.COMPLETE)
     condor.get_cluster_proc_stats.assert_not_called()
+    mongo.get_subjobs.assert_not_called()
+    updates.update_job_state.assert_not_called()
     exc = updates.handle_exception.call_args.args[0]
     assert isinstance(exc, InvalidJobStateError)
     assert str(exc) == (
@@ -2527,6 +2538,7 @@ async def test_detector_check_stale_heartbeats_mongo_error(caplog):
     mongo.get_subjobs_with_missing_heartbeat.assert_called_with()
     runner.error_unhealthy_subjobs.assert_not_called()
     assert "Dead-subjob check: failed to query subjobs with stale heartbeat" in caplog.text
+    assert "mongo down" in caplog.text
 
 
 async def test_detector_check_missing_heartbeats_mongo_error(caplog):
@@ -2543,6 +2555,7 @@ async def test_detector_check_missing_heartbeats_mongo_error(caplog):
     )
     runner.error_unhealthy_subjobs.assert_not_called()
     assert "Dead-subjob check: failed to query subjobs with missing heartbeat" in caplog.text
+    assert "mongo down" in caplog.text
 
 
 async def test_detector_check_stale_heartbeats_runner_error_continues(caplog):
@@ -2570,4 +2583,273 @@ async def test_detector_check_stale_heartbeats_runner_error_continues(caplog):
         call("j1", j1_map), call("j2", j2_map)
     ]
     assert "Dead-subjob check: error handling stale heartbeat for job j1" in caplog.text
+    assert "runner error" in caplog.text
     assert "job j2" not in caplog.text
+
+
+######
+# backfill_htcondor_stats tests
+######
+
+
+def _backfill_job(state=models.JobState.ERROR, cluster_ids=_UNSET):
+    if cluster_ids is _UNSET:
+        cluster_ids = [123]
+    return models.AdminJobDetails.model_construct(
+        id="jid",
+        state=state,
+        job_input=models.JobInput.model_construct(num_containers=2, cpus=1),
+        htcondor_details=None if cluster_ids is None
+            else models.HTCondorDetails(cluster_id=cluster_ids),
+    )
+
+
+async def test_backfill_htcondor_stats_bad_args():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^job_id is required$"):
+        await runner.backfill_htcondor_stats(None, {0: _T})
+    with pytest.raises(ValueError, match="^job_id is required$"):
+        await runner.backfill_htcondor_stats("   ", {0: _T})
+    with pytest.raises(ValueError, match="^subjob_last_times is required$"):
+        await runner.backfill_htcondor_stats("jid", None)
+    with pytest.raises(ValueError, match="^subjob_last_times is required$"):
+        await runner.backfill_htcondor_stats("jid", {})
+
+
+async def test_backfill_htcondor_stats_job_fetch_fails(caplog):
+    runner, mongo, condor, _, _ = _make_runner()
+    mongo.get_job.side_effect = IOError("mongo down")
+
+    with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.backfill_htcondor_stats("jid", {0: _T})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_not_called()
+    mongo.save_subjob_htcondor_stats.assert_not_called()
+    assert "HTC stats backfill: failed to fetch job jid" in caplog.text
+    assert "mongo down" in caplog.text
+
+
+@pytest.mark.parametrize("cluster_ids", [
+    pytest.param(None, id="no_htcondor_details"),
+    pytest.param([], id="empty_cluster_id"),
+])
+async def test_backfill_htcondor_stats_no_cluster_id(cluster_ids, caplog):
+    """No cluster ID → nothing saved, warning logged, retry later."""
+    runner, mongo, condor, _, _ = _make_runner()
+    mongo.get_job.return_value = _backfill_job(cluster_ids=cluster_ids)
+
+    with caplog.at_level(logging.WARNING, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.backfill_htcondor_stats("jid", {0: _T})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_not_called()
+    mongo.save_subjob_htcondor_stats.assert_not_called()
+    assert "HTC stats backfill: job jid has no HTCondor cluster ID" in caplog.text
+
+
+async def test_backfill_htcondor_stats_condor_query_fails(caplog):
+    runner, mongo, condor, _, _ = _make_runner()
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.side_effect = IOError("condor down")
+
+    with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.backfill_htcondor_stats("jid", {0: _T, 1: _T})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0, 1])
+    mongo.save_subjob_htcondor_stats.assert_not_called()
+    assert "HTC stats backfill: condor query failed for job jid cluster 123" in caplog.text
+    assert "condor down" in caplog.text
+
+
+async def test_backfill_htcondor_stats_proc_found():
+    """Proc found in condor → save with actual stats, stats_missing=False."""
+    runner, mongo, condor, _, _ = _make_runner()
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(
+            state=ProcState.COMPLETE,
+            cpu_hours=0.5,
+            max_memory=256 * 1024 * 1024,
+            runtime_seconds=600.0,
+        ),
+    }
+
+    await runner.backfill_htcondor_stats("jid", {0: _T})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0])
+    mongo.save_subjob_htcondor_stats.assert_called_once_with(
+        "jid", 0, 0.5, 256 * 1024 * 1024, 600.0, _T, stats_missing=False,
+    )
+
+
+async def test_backfill_htcondor_stats_proc_missing():
+    """Proc absent from condor (MISSING) → save with None stats, stats_missing=True."""
+    runner, mongo, condor, _, _ = _make_runner()
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=ProcState.MISSING),
+    }
+
+    await runner.backfill_htcondor_stats("jid", {0: _T})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0])
+    mongo.save_subjob_htcondor_stats.assert_called_once_with(
+        "jid", 0, None, None, None, _T, stats_missing=True,
+    )
+
+
+async def test_backfill_htcondor_stats_mixed_found_and_missing():
+    """One proc found (COMPLETE with stats), one MISSING → two distinct save calls."""
+    runner, mongo, condor, _, _ = _make_runner()
+    t0 = _T
+    t1 = _T - datetime.timedelta(seconds=1)
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(
+            state=ProcState.COMPLETE,
+            cpu_hours=1.0,
+            max_memory=512 * 1024 * 1024,
+            runtime_seconds=900.0,
+        ),
+        1: ProcStats(state=ProcState.MISSING),
+    }
+
+    await runner.backfill_htcondor_stats("jid", {0: t0, 1: t1})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0, 1])
+    assert mongo.save_subjob_htcondor_stats.call_args_list == [
+        call("jid", 0, 1.0, 512 * 1024 * 1024, 900.0, t0, stats_missing=False),
+        call("jid", 1, None, None, None, t1, stats_missing=True),
+    ]
+
+
+@pytest.mark.parametrize("active_state", [
+    pytest.param(ProcState.QUEUED, id="queued"),
+    pytest.param(ProcState.RUNNING, id="running"),
+])
+async def test_backfill_htcondor_stats_active_proc_skipped(active_state):
+    """QUEUED and RUNNING procs are skipped — stats are not final yet."""
+    runner, mongo, condor, _, _ = _make_runner()
+    t0 = _T
+    t1 = _T - datetime.timedelta(seconds=1)
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=active_state),
+        1: ProcStats(
+            state=ProcState.COMPLETE, cpu_hours=0.5, max_memory=100, runtime_seconds=60.0
+        ),
+    }
+
+    await runner.backfill_htcondor_stats("jid", {0: t0, 1: t1})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0, 1])
+    mongo.save_subjob_htcondor_stats.assert_called_once_with(
+        "jid", 1, 0.5, 100, 60.0, t1, stats_missing=False,
+    )
+
+
+async def test_backfill_htcondor_stats_save_conflict_logged(caplog):
+    """SubJobUpdateConflictError from save → logged at INFO, no propagation."""
+    runner, mongo, condor, _, _ = _make_runner()
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(state=ProcState.MISSING),
+    }
+    mongo.save_subjob_htcondor_stats.side_effect = SubJobUpdateConflictError("recovery won")
+
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.backfill_htcondor_stats("jid", {0: _T})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0])
+    mongo.save_subjob_htcondor_stats.assert_called_once_with(
+        "jid", 0, None, None, None, _T, stats_missing=True,
+    )
+    assert (
+        "HTC stats backfill: conflict saving stats for subjob 0 of job jid; "
+        "recovery won: recovery won"
+    ) in caplog.text
+
+
+async def test_backfill_htcondor_stats_save_already_set_logged(caplog):
+    """SubJobHtcondorStatsAlreadySetError from save → logged at WARNING, no propagation."""
+    runner, mongo, condor, _, _ = _make_runner()
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(
+            state=ProcState.COMPLETE, cpu_hours=0.5, max_memory=100, runtime_seconds=60.0
+        ),
+    }
+    mongo.save_subjob_htcondor_stats.side_effect = SubJobHtcondorStatsAlreadySetError(
+        "Job 'jid' subjob 0 already has HTCondor stats set"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.backfill_htcondor_stats("jid", {0: _T})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0])
+    mongo.save_subjob_htcondor_stats.assert_called_once_with(
+        "jid", 0, 0.5, 100, 60.0, _T, stats_missing=False,
+    )
+    assert (
+        "HTC stats backfill: stats already set for subjob 0 of job jid; "
+        "skipping: Job 'jid' subjob 0 already has HTCondor stats set"
+    ) in caplog.text
+
+
+async def test_backfill_htcondor_stats_save_exception_logged(caplog):
+    """Generic save exception → logged at ERROR (with traceback), no propagation."""
+    runner, mongo, condor, _, _ = _make_runner()
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(
+            state=ProcState.COMPLETE, cpu_hours=0.5, max_memory=100, runtime_seconds=60.0,
+        ),
+    }
+    mongo.save_subjob_htcondor_stats.side_effect = IOError("db down")
+
+    with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.backfill_htcondor_stats("jid", {0: _T})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0])
+    mongo.save_subjob_htcondor_stats.assert_called_once_with(
+        "jid", 0, 0.5, 100, 60.0, _T, stats_missing=False,
+    )
+    assert "HTC stats backfill: failed to save stats for subjob 0 of job jid" in caplog.text
+    assert "db down" in caplog.text
+
+
+async def test_backfill_htcondor_stats_save_error_continues(caplog):
+    """Save exception for one subjob does not prevent saving the next."""
+    runner, mongo, condor, _, _ = _make_runner()
+    t0 = _T
+    t1 = _T - datetime.timedelta(seconds=1)
+    mongo.get_job.return_value = _backfill_job()
+    condor.get_cluster_proc_stats.return_value = {
+        0: ProcStats(
+            state=ProcState.COMPLETE, cpu_hours=0.5, max_memory=100, runtime_seconds=60.0,
+        ),
+        1: ProcStats(state=ProcState.MISSING),
+    }
+    mongo.save_subjob_htcondor_stats.side_effect = [IOError("db down"), None]
+
+    with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.backfill_htcondor_stats("jid", {0: t0, 1: t1})
+
+    mongo.get_job.assert_called_once_with("jid", as_admin=True)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, [0, 1])
+    assert mongo.save_subjob_htcondor_stats.call_args_list == [
+        call("jid", 0, 0.5, 100, 60.0, t0, stats_missing=False),
+        call("jid", 1, None, None, None, t1, stats_missing=True),
+    ]
+    assert "HTC stats backfill: failed to save stats for subjob 0 of job jid" in caplog.text
+    assert "db down" in caplog.text
+    assert "subjob 1" not in caplog.text
