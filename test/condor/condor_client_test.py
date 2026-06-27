@@ -205,6 +205,16 @@ def test_proc_state_is_healthy():
     assert ProcState.MISSING.is_healthy() is False
 
 
+def test_proc_state_is_queued_or_running():
+    assert ProcState.QUEUED.is_queued_or_running() is True
+    assert ProcState.RUNNING.is_queued_or_running() is True
+    assert ProcState.COMPLETE.is_queued_or_running() is False
+    assert ProcState.HELD.is_queued_or_running() is False
+    assert ProcState.CANCELED.is_queued_or_running() is False
+    assert ProcState.OTHER.is_queued_or_running() is False
+    assert ProcState.MISSING.is_queued_or_running() is False
+
+
 def test_condor_client_bad_heartbeat_interval():
     schedd, config, s3config = _make_dependencies()
     with pytest.raises(ValueError, match="^heartbeat_interval_min is required$"):
