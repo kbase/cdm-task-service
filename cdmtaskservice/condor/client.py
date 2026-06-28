@@ -38,6 +38,8 @@ _AD_CPU_SYS = "RemoteSysCpu"
 _AD_CPU_USER = "RemoteUserCpu"
 _AD_MEM = "MemoryUsage"
 _AD_COMMITTED_TIME = "CommittedTime"
+_AD_START_TRANSFER_OUTPUT_DATE = "JobCurrentStartTransferOutputDate"
+_AD_START_EXECUTING_DATE = "JobCurrentStartExecutingDate"
 _AD_JOB_STATUS = "JobStatus"
 _AD_HOLD_REASON = "HoldReason"
 _AD_HOLD_REASON_CODE = "HoldReasonCode"
@@ -84,7 +86,8 @@ def _status_to_proc_state(status: int) -> ProcState:
 _STATUS_ONLY = [_AD_PROC_ID, _AD_JOB_STATUS]
 _STATUS_AND_HOLD = [_AD_PROC_ID, _AD_JOB_STATUS, _AD_HOLD_REASON, _AD_HOLD_REASON_CODE]
 _STATUS_AND_STATS = [
-    _AD_PROC_ID, _AD_JOB_STATUS, _AD_MEM, _AD_CPU_USER, _AD_CPU_SYS, _AD_COMMITTED_TIME,
+    _AD_PROC_ID, _AD_JOB_STATUS, _AD_MEM, _AD_CPU_USER, _AD_CPU_SYS,
+    _AD_START_TRANSFER_OUTPUT_DATE, _AD_START_EXECUTING_DATE,
 ]
 
 _LOCATIONS = ["Iwd", "Err", "Out", "UserLog"]
@@ -189,7 +192,9 @@ def _proc_stats_from_ad(ad: Any) -> ProcStats:
     if isinstance(mem, ExprTree):
         mem = mem.eval(scope=ad)
     cpu_sec = (ad.get(_AD_CPU_USER) or 0) + (ad.get(_AD_CPU_SYS) or 0)
-    rt = ad.get(_AD_COMMITTED_TIME)
+    finish = ad.get(_AD_START_TRANSFER_OUTPUT_DATE)
+    start = ad.get(_AD_START_EXECUTING_DATE)
+    rt = (finish - start) if (finish is not None and start is not None) else None
     return ProcStats(
         state=_status_to_proc_state(ad[_AD_JOB_STATUS]),
         cpu_hours=cpu_sec / 3600.0 if cpu_sec else None,

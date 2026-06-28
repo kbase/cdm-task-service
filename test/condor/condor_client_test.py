@@ -26,7 +26,7 @@ from cdmtaskservice.config_s3 import S3Config
 # together they exercise stat extraction and ExprTree evaluation for the stats spec.
 _ALL_COMPLETE_ADS = [
     {"ProcId": 0, "JobStatus": 4, "RemoteUserCpu": 60.0, "RemoteSysCpu": 10.0,
-     "CommittedTime": 1800},
+     "JobCurrentStartExecutingDate": 1000, "JobCurrentStartTransferOutputDate": 2800},
     ClassAd(
         "[ProcId = 1; JobStatus = 4;"
         " MemoryUsage = ceiling(ResidentSetSize_RAW / 1024.0); ResidentSetSize_RAW = 524288]"
@@ -39,9 +39,9 @@ _ALL_COMPLETE_ADS = [
 _MIXED_ACTIVE_ADS = [
     {"ProcId": 0, "JobStatus": 2},
     {"ProcId": 1, "JobStatus": 5, "HoldReason": "timeout", "HoldReasonCode": 3,
-     "MemoryUsage": 400, "CommittedTime": 900},
-    {"ProcId": 2, "JobStatus": 5},
-    {"ProcId": 3, "JobStatus": 1},
+     "MemoryUsage": 400, "JobCurrentStartExecutingDate": 1000, "JobCurrentStartTransferOutputDate": 1900},
+    {"ProcId": 2, "JobStatus": 5, "JobCurrentStartTransferOutputDate": 2000},
+    {"ProcId": 3, "JobStatus": 1, "JobCurrentStartExecutingDate": 1000},
     {"ProcId": 4, "JobStatus": 7},
     {"ProcId": 5, "JobStatus": 6},
     {"ProcId": 6, "JobStatus": 2},
@@ -138,7 +138,7 @@ _STATS_SPEC = _ProcMapSpec(
     call=lambda c, cid, ep: c.get_cluster_proc_stats(cid, ep),
     missing=ProcStats(state=ProcState.MISSING),
     projection=["ProcId", "JobStatus", "MemoryUsage", "RemoteUserCpu", "RemoteSysCpu",
-                "CommittedTime"],
+                "JobCurrentStartTransferOutputDate", "JobCurrentStartExecutingDate"],
     all_complete_expected={
         # proc 0: cpu/runtime present, no memory; proc 1: ExprTree MemoryUsage, no cpu/runtime
         0: ProcStats(state=ProcState.COMPLETE, cpu_hours=70.0 / 3600, runtime_seconds=1800.0),
