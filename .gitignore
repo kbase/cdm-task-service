@@ -32,3 +32,4 @@ __pycache__
 /tmp_creds/
 /.venv/
 /refdata_mount/
+/condor_share/
