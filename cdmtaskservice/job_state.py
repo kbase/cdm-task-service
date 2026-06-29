@@ -4,9 +4,10 @@ Manages job state.
 
 import datetime
 import logging
+import math
 from pathlib import Path
 import uuid
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from cdmtaskservice import logfields
 from cdmtaskservice import models
@@ -55,10 +56,12 @@ class JobState:
         log_path: str,
         job_max_cpu_hours: float,
         test_mode: bool = False,
+        _timestamp_fn: Callable[[], datetime.datetime] = utcdatetime,
+        _uuid_fn: Callable[[], uuid.UUID] = uuid.uuid4,
     ):
         """
         Create the job state manager.
-        
+
         mongo - a MongoDB DAO.
         s3Client - an S3Client pointed at the S3 storage system to use.
         images - a handler for getting images.
@@ -92,6 +95,8 @@ class JobState:
         self._logpath = _require_string(log_path, "log_path")
         self._cpu_hrs = _check_num(job_max_cpu_hours, "job_max_cpu_hours")
         self._test_mode = test_mode
+        self._timestamp_fn = _timestamp_fn
+        self._uuid_fn = _uuid_fn
         
     async def submit(self, job_input: models.JobInput, user: CTSUser) -> str:
         """
@@ -109,24 +114,22 @@ class JobState:
         compute_time = job_input.get_total_compute_time_sec() / 3600
         if compute_time > self._cpu_hrs:
             raise IllegalParameterError(
-                f"Job compute time of {compute_time} CPU hours is greater than the limit of "
-                + f"{self._cpu_hrs}"
+                f"Job compute time of {math.ceil(compute_time * 1000) / 1000} CPU hours is "
+                + f"greater than the limit of {self._cpu_hrs}"
         )
         # Could parallelize these ops but probably not worth it
         image = await self._images.get_image(job_input.image)
         await self._check_refdata(job_input, image)
         await self._check_output_path(job_input)
         new_input, meta = await self._check_and_update_files(job_input)
-        job_id = str(uuid.uuid4())  # TODO TEST for testing we'll need to set up a mock for this
+        job_id = str(self._uuid_fn())
         if not self._test_mode:
             # check the flow is available before we make any changes
             flow = await self._flowman.get_flow(job_input.cluster)
             await flow.preflight(user, job_id, job_input)
         ji = job_input.model_copy(update={"input_files": new_input})
-        # TODO TEST will need a way to mock out timestamps
-        update_time = utcdatetime()
-        # TODO TEST will need to mock out uuid
-        trans_id = str(uuid.uuid4())
+        update_time = self._timestamp_fn()
+        trans_id = str(self._uuid_fn())
         job = models.AdminJobDetails(
             id=job_id,
             job_input=ji,
@@ -167,21 +170,21 @@ class JobState:
 
     def _check_site_limits(self, job_input: models.JobInput):
         site = sites.CLUSTER_TO_SITE[job_input.cluster]
-        if job_input.cpus > site.cpus_per_node:
-            raise IllegalParameterError(
-                f"The maximum number of CPUs for site {job_input.cluster.value} is "
-                f"{site.cpus_per_node} vs {job_input.cpus} submitted"
-            )
-        if (rt_max := job_input.runtime.total_seconds() / 60) > site.max_runtime_min:
-            raise IllegalParameterError(
-                f"The maximum runtime for site {job_input.cluster.value} is "
-                f"{site.max_runtime_min} minutes vs {rt_max} submitted"
-            )
-        if (gb := int(job_input.memory) / 1_000_000_000) > site.memory_per_node_gb:
-            raise IllegalParameterError(
-                f"The maximum memory for site {job_input.cluster.value} is "
-                f"{site.memory_per_node_gb}GB vs {gb}GB submitted"
-            )
+        cpus = job_input.cpus
+        rt_min = job_input.runtime.total_seconds() / 60
+        gb = int(job_input.memory) / 1_000_000_000
+        for nt in site.node_types:
+            if (
+                cpus <= nt.cpus_per_node
+                and rt_min <= nt.max_runtime_min
+                and gb <= nt.memory_per_node_gb
+            ):
+                return
+        raise IllegalParameterError(
+            f"No node type at site {job_input.cluster.value} can satisfy the requested resources "
+            f"(cpus={cpus}, mem={math.ceil(gb * 1000) / 1000}GB, ",
+            f"runtime={math.ceil(rt_min * 1000) / 1000}min)."
+        )
 
     async def _check_and_update_files(self, job_input: models.JobInput):
         paths = [
