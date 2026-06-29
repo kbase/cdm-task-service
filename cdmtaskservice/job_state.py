@@ -182,7 +182,7 @@ class JobState:
                 return
         raise IllegalParameterError(
             f"No node type at site {job_input.cluster.value} can satisfy the requested resources "
-            f"(cpus={cpus}, mem={math.ceil(gb * 1000) / 1000}GB, ",
+            f"(cpus={cpus}, mem={math.ceil(gb * 1000) / 1000}GB, "
             f"runtime={math.ceil(rt_min * 1000) / 1000}min)."
         )
 
