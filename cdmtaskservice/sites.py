@@ -38,16 +38,12 @@ class SubmittableCluster(str, Enum):
     KBASE = "kbase"
 
 
-class ComputeSite(BaseModel):
-    """ Represents a remote compute site. """
-    
-    cluster: Annotated[Cluster, Field(
-        examples=[Cluster.PERLMUTTER_JAWS.value],
-        description="The site identifier",
-    )]
+class NodeType(BaseModel):
+    """ Represents a class of nodes within a compute site. """
+
     nodes: Annotated[int | None, Field(
         examples=[3042],
-        description="The number of nodes at the site, or null if the node count is not static"
+        description="The number of nodes of this type, or null if the count is not static."
     )] = None
     cpus_per_node: Annotated[int, Field(
         examples=[256],
@@ -63,6 +59,22 @@ class ComputeSite(BaseModel):
         description="The maximum runtime of a job container in minutes."
     )]
     notes: Annotated[list[str], Field(
+        examples=[["These nodes have 4 A100 GPUs each."]],
+        description="Any notes about this node type."
+    )] = []
+
+
+class ComputeSite(BaseModel):
+    """ Represents a remote compute site. """
+
+    cluster: Annotated[Cluster, Field(
+        examples=[Cluster.PERLMUTTER_JAWS.value],
+        description="The site identifier",
+    )]
+    node_types: Annotated[list[NodeType], Field(
+        description="The node types available at this site."
+    )]
+    notes: Annotated[list[str], Field(
         examples=[["Queue times are typically shorter here."]],
         description="Any notes about the site."
     )] = []
@@ -71,10 +83,14 @@ class ComputeSite(BaseModel):
 # https://jaws-docs.jgi.doe.gov/en/latest/Resources/compute_resources.html
 PERLMUTTER_JAWS = ComputeSite(
     cluster=Cluster.PERLMUTTER_JAWS,
-    nodes=3072,
-    cpus_per_node=2 * 2 * 64, # 2 CPUs × 64 cores × 2 hyperthreads
-    memory_per_node_gb=492,  # in GB, not GiB, per the JAWS team
-    max_runtime_min=2 * 24 * 60 - 15,
+    node_types=[
+        NodeType(
+            nodes=3072,
+            cpus_per_node=2 * 2 * 64,  # 2 CPUs × 64 cores × 2 hyperthreads
+            memory_per_node_gb=492,  # in GB, not GiB, per the JAWS team
+            max_runtime_min=2 * 24 * 60 - 15,
+        ),
+    ],
     notes=[
         "The Perlmutter supercomputer at NERSC, serviced by the JAWS job running system.",
         "Queue times can be long - hours to days."
@@ -85,10 +101,14 @@ PERLMUTTER_JAWS = ComputeSite(
 # https://jaws-docs.jgi.doe.gov/en/latest/Resources/compute_resources.html
 LAWRENCIUM_JAWS = ComputeSite(
     cluster=Cluster.LAWRENCIUM_JAWS,
-    nodes=8,
-    cpus_per_node=32,
-    memory_per_node_gb=492,  # in GB, not GiB, per the JAWS team
-    max_runtime_min=3 * 24 * 60 - 15,
+    node_types=[
+        NodeType(
+            nodes=8,
+            cpus_per_node=32,
+            memory_per_node_gb=492,  # in GB, not GiB, per the JAWS team
+            max_runtime_min=3 * 24 * 60 - 15,
+        ),
+    ],
     notes=[
         "The Lawrencium cluster at LBNL, serviced by the JAWS job running system.",
         "Queue times are typically shorter here for smaller jobs."
@@ -98,11 +118,15 @@ LAWRENCIUM_JAWS = ComputeSite(
 
 KBASE = ComputeSite(
     cluster=Cluster.KBASE,
-    nodes=None,
-    cpus_per_node=84 * 2,
-    memory_per_node_gb=990,  # Leave 10GB for overhead
-    # Note 7 days is also hard coded in the condor client
-    max_runtime_min=(7 * 24 * 60) - 15, # Leave 15 slack for overhead
+    node_types=[
+        NodeType(
+            nodes=None,
+            cpus_per_node=84 * 2,
+            memory_per_node_gb=990,  # Leave 10GB for overhead
+            # 7 days; the condor client adds a 6-hour buffer
+            max_runtime_min=7 * 24 * 60,
+        ),
+    ],
     notes=[
         "The DOE Systems Biology Knowledge Base compute systems.",
         "The number of nodes may be adjusted up or down to support the needs of KBase "
@@ -132,15 +156,17 @@ True - managed by this service
 False - managed by an external service (e.g. JAWS)
 """
 
-MAX_CPUS = max([cl.cpus_per_node for cl in CLUSTER_TO_SITE.values()])
+MAX_CPUS = max([nt.cpus_per_node for s in CLUSTER_TO_SITE.values() for nt in s.node_types])
 """
 The maximum number of cpus that can be requested for a container across all clusters.
 """
 
 
-MAX_MEM_GB = max([cl.memory_per_node_gb for cl in CLUSTER_TO_SITE.values()])
+MAX_MEM_GB = max([nt.memory_per_node_gb for s in CLUSTER_TO_SITE.values() for nt in s.node_types])
 """ The maximum amount of memory that can be requested for a container across all clusters. """
 
 
-MAX_RUNTIME_MIN = max([cl.max_runtime_min for cl in CLUSTER_TO_SITE.values()])
+MAX_RUNTIME_MIN = max(
+    [nt.max_runtime_min for s in CLUSTER_TO_SITE.values() for nt in s.node_types]
+)
 """ The maximum runtime that can be requested for a container across all clusters. """
