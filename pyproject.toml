@@ -19,7 +19,7 @@ dependencies = [
     "bidict==0.23.1",
     "cacheout==0.16.0",
     "docker==7.1.0",
-    "docker-image-py==0.1.13",
+    "docker-image-py==0.2.0",
     "fastapi[standard]==0.136.1",
     # stay on htcondor 25.0.X - LTS version
     "htcondor==25.0.9",
