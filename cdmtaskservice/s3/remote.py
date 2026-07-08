@@ -12,10 +12,12 @@ from awscrt import checksums as awschecksums
 import base64
 import gzip
 from hashlib import md5
+import logging
 import os
 from pathlib import Path
 import shutil
 import tarfile
+import time
 from typing import Any, Awaitable
 import uuid
 
@@ -23,6 +25,8 @@ from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string 
 
 # Probably not necessary, but could look into aiofiles for some of these methods
 # Potential future (minor) performance improvement, but means more installs on remote clusters
+
+_logr = logging.getLogger(__name__)
 
 
 _EXT_GZ = ".gz"
@@ -222,17 +226,6 @@ async def _process_uploads(
     await _run_tasks(tasks, concurrency)
 
 
-def _ensure_safe_tar_path(parent_dir: Path, member_name: str, tar_file: str):
-    """Ensure that the target path is within the base directory."""
-    # TODO TEST need to figure out how to make a bad tar file to test this
-    abs_base = parent_dir.absolute()
-    abs_target = (parent_dir / member_name).absolute()
-    if not abs_base.parts == abs_target.parts[:len(abs_base.parts)]:
-        raise ValueError(
-            f"Unsafe path detected for tarfile {tar_file}: {member_name}"
-        )
-
-
 def _extract_gz(file_path: Path):
     """Extract a .gz file."""
     output_path = file_path.parent / file_path.stem
@@ -242,11 +235,17 @@ def _extract_gz(file_path: Path):
 
 def _extract_tar(file_path: Path):
     """Extract a .tar.gz or .tgz file safely."""
+    # TODO SECURITY consider further verification per
+    #      https://docs.python.org/3/library/tarfile.html#hints-for-further-verification
+    # TODO TEST need to figure out how to make a bad tar file to test this
     parent_dir = file_path.parent
     with tarfile.open(file_path, 'r:*') as tar:
-        for member in tar.getmembers():
-            _ensure_safe_tar_path(parent_dir, member.name, file_path)
-        tar.extractall(parent_dir)
+        # The 'data' filter (see https://docs.python.org/3/library/tarfile.html#tarfile.data_filter)
+        # rejects absolute paths, path traversal, symlinks/hardlinks resolving outside the
+        # destination, device/FIFO files, and strips dangerous permissions/ownership. It's
+        # applied member by member during extraction, so unlike a pre-extraction getmembers()
+        # scan this only decompresses the archive once instead of twice.
+        tar.extractall(parent_dir, filter='data')
 
 
 def get_cache_path(cache_dir: Path, crc64nvme_b64: str) -> Path:
@@ -310,6 +309,8 @@ async def _process_download(
             )
     else:  # refdata download
         outputpath = Path(outputpath)
+    _logr.info(f"Starting download of {url.split('?')[0]} to {outputpath}")
+    start = time.monotonic()
     await download_presigned_url(
         session,
         url,
@@ -317,6 +318,10 @@ async def _process_download(
         crc64nvme_expected=crc64nvme_b64,
         insecure_ssl=insecure_ssl,
         timeout_sec=timeout_sec,
+    )
+    _logr.info(
+        f"Download of {outputpath} complete in {time.monotonic() - start:.1f}s, "
+        + f"size {outputpath.stat().st_size} bytes"
     )
     if cache_dir:
         _add_to_cache(outputpath, cache_path)
@@ -326,6 +331,8 @@ async def _process_download(
 
 def unpack_archive(archive: Path):
     """ Unpack a *.tgz, *.tar.gz, or *.gz file. """
+    _logr.info(f"Starting unpack of {archive}")
+    start = time.monotonic()
     try:
         op = str(archive).lower()
         if op.endswith(_EXT_TGZ) or op.endswith(_EXT_TARGZ):
@@ -338,6 +345,7 @@ def unpack_archive(archive: Path):
                 f"Only {', '.join(UNPACK_FILE_EXTENSIONS)} are supported."
             )
     finally:
+        _logr.info(f"Unpack of {archive} finished in {time.monotonic() - start:.1f}s")
         archive.unlink(missing_ok=True)
 
 
@@ -379,6 +387,7 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
     # TODO TEST add tests for this and its dependency functions.
     _not_falsy(manifest, "manifest")
     operation = manifest["op"]
+    _logr.info(f"Processing {operation} manifest with {len(manifest['files'])} file(s)")
     async with aiohttp.ClientSession() as sess:
         if operation == "download":
             await _process_downloads(
@@ -405,6 +414,8 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
         with open(manifest["completion-file"], "w") as f:
             # just raise a keyerror if it's not there
             f.write(manifest["completion-file-contents"] + "\n")
+        _logr.info(f"Wrote completion file {manifest['completion-file']}")
+    _logr.info(f"{operation} manifest processing complete")
 
 
 def _timeout(min_timeout_sec: int, filesize: int, sec_per_GB: float) -> float:
