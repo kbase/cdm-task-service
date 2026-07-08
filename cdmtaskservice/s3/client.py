@@ -155,6 +155,14 @@ class S3Client:
         self._sk = _require_string(secret_key, "secret_key")
         self._config = Config(**config) if config else None
         self._sess = get_session()
+        # Ignore ambient host AWS config/credentials files - this client is always given
+        # explicit credentials and should not be affected by, e.g., a developer's
+        # ~/.aws/config having a region set that alters botocore's signature version
+        # resolution. Setting these to None has no effect since botocore's config chain
+        # treats None as "fall through to the next source" - an empty path makes the
+        # underlying file load raise ConfigNotFound instead, which is handled as absent.
+        self._sess.set_config_variable("config_file", "")
+        self._sess.set_config_variable("credentials_file", "")
         self._insecure_ssl = insecure_ssl
         self._cli_ctx = None
         self._cli = None
