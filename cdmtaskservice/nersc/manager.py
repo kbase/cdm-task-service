@@ -103,21 +103,30 @@ export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
 export CTS_JAWS_OUTPUT_DIR=$CTS_JAWS_OUTPUT_DIR
 export CTS_CHECKSUM_FILE_LOCATION=$CTS_CHECKSUM_FILE_LOCATION
 export CTS_RESULT_FILE_LOCATION=$CTS_RESULT_FILE_LOCATION
+export CTS_LOG_FILE_LOCATION=$CTS_LOG_FILE_LOCATION
 export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
 export SCRATCH=$SCRATCH
+
+# Redirect all further output to a durable log file so a killed (e.g. OOM) process still
+# leaves a trace, since the SFAPI task's captured stdout is only available for a short time
+# after the task ends (successfully or not).
+exec >> "$CTS_LOG_FILE_LOCATION" 2>&1
 
 echo "PYTHONPATH=[$PYTHONPATH]"
 echo "CTS_MODE=[$CTS_MODE]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
 echo "CTS_ERRORS_JSON_LOCATION=[$CTS_ERRORS_JSON_LOCATION]"
 echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
-echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]
-echo "CTS_CHECKSUM_FILE_LOCATION=[$CTS_CHECKSUM_FILE_LOCATION]
+echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]"
+echo "CTS_CHECKSUM_FILE_LOCATION=[$CTS_CHECKSUM_FILE_LOCATION]"
 echo "CTS_RESULT_FILE_LOCATION=[$CTS_RESULT_FILE_LOCATION]"
+echo "CTS_LOG_FILE_LOCATION=[$CTS_LOG_FILE_LOCATION]"
 echo "CTS_CALLBACK_URL=[$CTS_CALLBACK_URL]"
 echo "SCRATCH=[$SCRATCH]"
 
-python $CTS_CODE_LOCATION/{"/".join(remote.__name__.split("."))}.py
+# -u disables python stdout/stderr buffering so output isn't lost if the process is killed
+python -u $CTS_CODE_LOCATION/{"/".join(remote.__name__.split("."))}.py
+echo "python exited with code $?"
 """
 
 
@@ -533,6 +542,7 @@ class NERSCManager:
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_MANIFEST_LOCATION={manifestpath}; ",
             f"export CTS_RESULT_FILE_LOCATION={rootpath / task_type}_result.json; ",
+            f"export CTS_LOG_FILE_LOCATION={rootpath / task_type}_log.txt; ",
             f"export CTS_CALLBACK_URL={callback_url}; ",
             f"export SCRATCH=$SCRATCH; ",
             f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
@@ -816,6 +826,7 @@ class NERSCManager:
             f"export CTS_MODE=checksum; ",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_RESULT_FILE_LOCATION={rootpath / 'upload_checksums_result.json'}; ",
+            f"export CTS_LOG_FILE_LOCATION={rootpath / 'upload_checksums_log.txt'}; ",
             f"export CTS_JAWS_OUTPUT_DIR={jaws_output_dir}; ",
             f"export CTS_CHECKSUM_FILE_LOCATION={rootpath / checksum_file}; ",
             f"export SCRATCH=$SCRATCH; ",

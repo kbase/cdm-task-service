@@ -8,6 +8,7 @@ python versions.
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 import requests
@@ -135,9 +136,13 @@ def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callb
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
     mode = os.environ["CTS_MODE"]
     resfile = os.environ["CTS_RESULT_FILE_LOCATION"]
     callback_url = os.environ["CTS_CALLBACK_URL"]
+    logging.getLogger(__name__).info(f"Starting remote task in mode {mode}")
     if mode == "manifest":
         _error_wrapper(
             process_data_transfer_manifest,
@@ -164,10 +169,11 @@ def main():
                 os.environ["CTS_CHECKSUM_FILE_LOCATION"],
             ],
             resfile,
-            None,  # expected to be run by the manager as a blocking task for now 
+            None,  # expected to be run by the manager as a blocking task for now
         )
     else:  # Should never happen
         raise ValueError(f"unexpected mode: {mode}")
+    logging.getLogger(__name__).info(f"Remote task in mode {mode} complete")
 
 
 if __name__ == "__main__":
