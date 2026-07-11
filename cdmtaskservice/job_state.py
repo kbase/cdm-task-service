@@ -171,18 +171,25 @@ class JobState:
     def _check_site_limits(self, job_input: models.JobInput):
         site = sites.CLUSTER_TO_SITE[job_input.cluster]
         cpus = job_input.cpus
+        gpus = job_input.gpus
         rt_min = job_input.runtime.total_seconds() / 60
         gb = int(job_input.memory) / 1_000_000_000
         for nt in site.node_types:
+            if gpus == 0 and nt.gpus_per_node > 0:
+                # A 0-GPU job should never be routed to a GPU node type, so don't let a job fit
+                # here purely because a GPU node type happens to have a larger CPU/memory
+                # envelope than the non-GPU node types.
+                continue
             if (
                 cpus <= nt.cpus_per_node
+                and gpus <= nt.gpus_per_node
                 and rt_min <= nt.max_runtime_min
                 and gb <= nt.memory_per_node_gb
             ):
                 return
         raise IllegalParameterError(
             f"No node type at site {job_input.cluster.value} can satisfy the requested resources "
-            f"(cpus={cpus}, mem={math.ceil(gb * 1000) / 1000}GB, "
+            f"(cpus={cpus}, gpus={gpus}, mem={math.ceil(gb * 1000) / 1000}GB, "
             f"runtime={math.ceil(rt_min * 1000) / 1000}min)."
         )
 

@@ -44,7 +44,13 @@ class CondorClientConfig(BaseModel):
     The client group to submit jobs to, if any. This is a classad on a worker with
     the name CLIENTGROUP.
     """
-    
+
+    gpu_client_group: str | None
+    """
+    The client group to submit jobs to when the job requests > 0 GPUs, if any. This is a
+    classad on a worker with the name CLIENTGROUP.
+    """
+
     token_path: str
     """
     The path on the condor worker containing a KBase token for use when

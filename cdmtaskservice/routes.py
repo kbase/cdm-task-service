@@ -306,6 +306,7 @@ class JobInputCreate(models.JobInput):
     response_model=SubmitJobResponse,
     summary="Submit a job",
     description="Submit a job to the system.\n\n"
+        + "Jobs requesting no GPUs are never scheduled on GPU-capable nodes.\n\n"
         + "Note that currently the kbase job flow does not support manifest files."
 )
 async def submit_job(

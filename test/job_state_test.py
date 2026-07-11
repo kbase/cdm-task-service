@@ -249,11 +249,18 @@ async def test_stream_job_logs_length_valid():
     js.s3.stream_object.assert_called_once_with(_S3_STDOUT_PATH_0, seek=None, length=50)
 
 
-# KBASE node type limits for reference:
-#   cpus_per_node=168, memory_per_node_gb=990, max_runtime_min=10080
-_KBASE_MAX_CPUS = 84 * 2
-_KBASE_MAX_MEM_BYTES = 990 * 1_000_000_000
-_KBASE_MAX_RUNTIME_MIN = 7 * 24 * 60
+# KBase CPU node type limits: cpus_per_node=168, memory_per_node_gb=990, max_runtime_min=10080
+_KBASE_CPU_MAX_CPUS = 84 * 2
+_KBASE_CPU_MAX_MEM_BYTES = 990 * 1_000_000_000
+
+# KBase GPU node type limits: cpus_per_node=256, memory_per_node_gb=990, gpus_per_node=4
+_KBASE_GPU_MAX_CPUS = 256
+_KBASE_GPU_MAX_MEM_BYTES = 990 * 1_000_000_000
+_KBASE_GPU_MAX_GPUS = 4
+
+# Runtime limits are the same between KBase node types
+_KBASE_CPU_MAX_RUNTIME_MIN = 7 * 24 * 60
+_KBASE_GPU_MAX_RUNTIME_MIN = 7 * 24 * 60
 
 _INPUT_FILE = "mybucket/input/file.txt"
 _OUTPUT_DIR = "mybucket/output/"
@@ -285,6 +292,7 @@ _TEST_JOB_IMAGE = models.JobImage(
 def _make_job_input(
     cluster=sites.Cluster.KBASE,
     cpus=1,
+    gpus=0,
     memory_bytes=1_000_000_000,
     runtime_sec=3600,
     num_containers=1,
@@ -295,6 +303,7 @@ def _make_job_input(
     return models.JobInput.model_construct(
         cluster=cluster,
         cpus=cpus,
+        gpus=gpus,
         memory=memory_bytes,
         runtime=datetime.timedelta(seconds=runtime_sec),
         num_containers=num_containers,
@@ -333,55 +342,63 @@ async def test_submit_compute_time_exceeds_limit():
 
 async def test_submit_cpus_exceed_site_limit():
     js = _make_job_state()
-    job_input = _make_job_input(cpus=_KBASE_MAX_CPUS + 1)
+    job_input = _make_job_input(cpus=_KBASE_CPU_MAX_CPUS + 1)
 
     with pytest.raises(IllegalParameterError) as exc_info:
         await js.jobstate.submit(job_input, _USER)
     assert str(exc_info.value) == (
         "No node type at site kbase can satisfy the requested resources "
-        "(cpus=169, mem=1.0GB, runtime=60.0min)."
+        "(cpus=169, gpus=0, mem=1.0GB, runtime=60.0min)."
     )
 
 
 async def test_submit_memory_exceeds_site_limit():
     js = _make_job_state()
-    job_input = _make_job_input(memory_bytes=_KBASE_MAX_MEM_BYTES + 1)
+    job_input = _make_job_input(memory_bytes=_KBASE_CPU_MAX_MEM_BYTES + 1)
 
     with pytest.raises(IllegalParameterError) as exc_info:
         await js.jobstate.submit(job_input, _USER)
     assert str(exc_info.value) == (
         "No node type at site kbase can satisfy the requested resources "
-        "(cpus=1, mem=990.001GB, runtime=60.0min)."
+        "(cpus=1, gpus=0, mem=990.001GB, runtime=60.0min)."
     )
 
 
 async def test_submit_runtime_exceeds_site_limit():
     js = _make_job_state()
-    job_input = _make_job_input(runtime_sec=(_KBASE_MAX_RUNTIME_MIN * 60) + 1)
+    job_input = _make_job_input(runtime_sec=(_KBASE_CPU_MAX_RUNTIME_MIN * 60) + 1)
 
     with pytest.raises(IllegalParameterError) as exc_info:
         await js.jobstate.submit(job_input, _USER)
     assert str(exc_info.value) == (
         "No node type at site kbase can satisfy the requested resources "
-        "(cpus=1, mem=1.0GB, runtime=10080.017min)."
+        "(cpus=1, gpus=0, mem=1.0GB, runtime=10080.017min)."
     )
 
 
-async def test_submit_kbase_at_site_limits():
-    # compute_time = 168 cpus * 1 container * (10080 min * 60 sec/min) / 3600 sec/hr = 28224 hrs
-    js = _make_job_state(job_max_cpu_hours=28225, test_mode=True)
+async def test_submit_gpus_exceed_site_limit():
+    js = _make_job_state()
     job_input = _make_job_input(
-        cpus=_KBASE_MAX_CPUS,
-        memory_bytes=_KBASE_MAX_MEM_BYTES,
-        runtime_sec=_KBASE_MAX_RUNTIME_MIN * 60,
+        cluster=sites.Cluster.KBASE,
+        gpus=_KBASE_GPU_MAX_GPUS + 1,
     )
+
+    with pytest.raises(IllegalParameterError) as exc_info:
+        await js.jobstate.submit(job_input, _USER)
+    assert str(exc_info.value) == (
+        "No node type at site kbase can satisfy the requested resources "
+        "(cpus=1, gpus=5, mem=1.0GB, runtime=60.0min)."
+    )
+
+
+async def _check_submit_succeeds_at_site_limits(js, job_input):
     js.images.get_image.return_value = _TEST_IMAGE
     js.s3.get_object_meta.return_value = [S3ObjectMeta(_INPUT_FILE, "etag", 1000, crc64nvme=_CRC)]
 
     job_id = await js.jobstate.submit(job_input, _USER)
 
     assert job_id == _JOB_ID
-    
+
     js.images.get_image.assert_called_once_with(job_input.image)
     js.s3.is_paths_writeable.assert_called_once_with(
         S3Paths([_OUTPUT_DIR], no_index_in_errors=True)
@@ -412,3 +429,29 @@ async def test_submit_kbase_at_site_limits():
     await js.kafka.update_job_state.call_args.kwargs["callback"]
     js.mongo.job_update_sent.assert_called_once_with(_JOB_ID, _TRANS_ID)
     js.s3.get_object_meta.assert_called_once_with(S3Paths([_INPUT_FILE]))
+
+
+async def test_submit_kbase_cpu_at_site_limits():
+    # compute_time = 168 cpus * 1 container * (10080 min * 60 sec/min) / 3600 sec/hr = 28224 hrs
+    js = _make_job_state(job_max_cpu_hours=28225, test_mode=True)
+    job_input = _make_job_input(
+        cpus=_KBASE_CPU_MAX_CPUS,
+        gpus=0,
+        memory_bytes=_KBASE_CPU_MAX_MEM_BYTES,
+        runtime_sec=_KBASE_CPU_MAX_RUNTIME_MIN * 60,
+    )
+
+    await _check_submit_succeeds_at_site_limits(js, job_input)
+
+
+async def test_submit_kbase_gpu_at_site_limits():
+    # compute_time = 256 cpus * 1 container * (10080 min * 60 sec/min) / 3600 sec/hr = 43008 hrs
+    js = _make_job_state(job_max_cpu_hours=43009, test_mode=True)
+    job_input = _make_job_input(
+        cpus=_KBASE_GPU_MAX_CPUS,
+        gpus=_KBASE_GPU_MAX_GPUS,
+        memory_bytes=_KBASE_GPU_MAX_MEM_BYTES,
+        runtime_sec=_KBASE_GPU_MAX_RUNTIME_MIN * 60,
+    )
+
+    await _check_submit_succeeds_at_site_limits(js, job_input)

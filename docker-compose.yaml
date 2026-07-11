@@ -49,6 +49,7 @@ services:
       # From ./docker_compose/htcondor/condor_config.local
       - KBCTS_HTC_CLIENT_GROUP=test_cg
       - KBCTS_HTC_ADDL_PATH=/home/submituser/.local/bin
+      - KBCTS_HTC_CACHE_DIR=/home/submituser/job_cache
       - KBCTS_REFDATA_SERVER_URL=http://cdm_refdata_service:5001
       - KBCTS_REFDATA_SERVER_TOKEN=token_with_the_cts_role
       - KBCTS_REFDATA_HOST_PATH=<absolute_path_to_repo>/refdata_mount/data
@@ -165,6 +166,7 @@ services:
     #  - MONGO_INITDB_ROOT_PASSWORD=secret
 
   htcondor-mini:
+    # TODO TEST try and get gpu testing working
     build:
       context: .
       dockerfile: ./docker_compose/htcondor/Dockerfile

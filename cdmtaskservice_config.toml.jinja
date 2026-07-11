@@ -97,6 +97,11 @@ initialdir = "{{ KBCTS_HTC_INITIAL_DIR or "/condor_workdir" }}"
 # If omitted, the service will not distinguish between workers.
 clientgroup = "{{ KBCTS_HTC_CLIENT_GROUP or "" }}"
 
+# The client group to submit to for jobs that request > 0 GPUs, instead of `clientgroup`.
+# This is a ClassAd on HTC workers with the name CLIENTGROUP.
+# If omitted, the service will not distinguish between workers for GPU jobs.
+gpu_clientgroup = "{{ KBCTS_HTC_GPU_CLIENT_GROUP or "" }}"
+
 # The file path on the HTCondor workers that will contain a KBase token for
 # the job executor to use to contact the service. This token must have the external executor role
 # defined in the Authentication section above.
