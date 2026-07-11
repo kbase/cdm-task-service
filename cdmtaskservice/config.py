@@ -60,6 +60,8 @@ class CDMTaskServiceConfig:
     jaws_group: str - the JAWS group used to run jobs.
     condor_initialdir: str - the path to use as the condor initialdir.
     condor_clientgroup: str | None - the clientgroup to use for condor submission, if any.
+    condor_gpu_clientgroup: str | None - the clientgroup to use for condor submission when a job
+        requests > 0 GPUs, if any.
     condor_token_path: str - the path on the condor worker containing a
         KBase token for use when contacting the service.
     condor_s3_access_secret_path: str - the path on the condor worker containing
@@ -171,6 +173,9 @@ class CDMTaskServiceConfig:
         self.jaws_group = _get_string_required(config, _SEC_JAWS, "group")
         self.condor_initialdir = _get_string_required(config, _SEC_HTCONDOR, "initialdir")
         self.condor_clientgroup = _get_string_optional(config, _SEC_HTCONDOR, "clientgroup")
+        self.condor_gpu_clientgroup = _get_string_optional(
+            config, _SEC_HTCONDOR, "gpu_clientgroup"
+        )
         self.condor_token_path = _get_string_required(config, _SEC_HTCONDOR, "token_path")
         self.condor_s3_access_secret_path = _get_string_required(
             config, _SEC_HTCONDOR, "s3_access_secret_path"
@@ -316,6 +321,7 @@ class CDMTaskServiceConfig:
             executable_url_override=self.condor_exe_url_override,
             code_archive_url_override=self.code_archive_url_override,
             client_group=self.condor_clientgroup,
+            gpu_client_group=self.condor_gpu_clientgroup,
             token_path=self.condor_token_path,
             s3_access_secret_path=self.condor_s3_access_secret_path,
             job_update_timeout_min=self.external_executor_job_update_timeout_min,
@@ -350,6 +356,7 @@ class CDMTaskServiceConfig:
             f"JAWS group: {self.jaws_group}",
             f"HTCondor initialdir: {self.condor_initialdir}",
             f"HTCondor client group: {self.condor_clientgroup}",
+            f"HTCondor GPU client group: {self.condor_gpu_clientgroup}",
             f"HTCondor token path: {self.condor_token_path}",
             f"HTCondor S3 access secret path: {self.condor_s3_access_secret_path}",
             f"HTCondor additional $PATH elements: {self.condor_addl_path}",

@@ -542,6 +542,14 @@ class JobInputPreview(BaseModel):
         ge=1,
         le=sites.MAX_CPUS,
     )] = 1
+    gpus: Annotated[int, Field(
+        examples=[1],
+        default=0,
+        description="The number of GPUs to allocate per container. Jobs requesting 0 GPUs "
+            + "are never scheduled on GPU-capable nodes.",
+        ge=0,
+        le=sites.MAX_GPUS,
+    )] = 0
     memory: Annotated[ByteSize, Field(
         examples=["10MB"],
         default="10MB",

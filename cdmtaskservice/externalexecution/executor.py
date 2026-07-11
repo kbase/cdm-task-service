@@ -453,6 +453,7 @@ Local relative path: {loc}
             mounts=mounts,
             command=self._args.args,
             env=self._args.env,
+            gpus=job.job_input.gpus,
         )
         async with self._runner:
             # inside the context manager so the container gets canceled if this line raises
