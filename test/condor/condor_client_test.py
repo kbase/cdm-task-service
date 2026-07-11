@@ -177,6 +177,7 @@ def _make_dependencies():
         executable_url_override="http://example.com/run_job.sh",
         code_archive_url_override="http://example.com/code.tgz",
         client_group=None,
+        gpu_client_group=None,
         token_path="/token",
         s3_access_secret_path="/secret",
         job_update_timeout_min=1,

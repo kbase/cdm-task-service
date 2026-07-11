@@ -201,6 +201,7 @@ class ContainerCreator:
         command: list[str] | None = None,
         env: dict[str, str] | None = None,
         mounts: dict[str, tuple[str, bool]] | None = None,
+        gpus: int = 0,
     ) -> RunningContainer:
         """
         Start a container and return a handle to it.
@@ -213,6 +214,7 @@ class ContainerCreator:
         mounts - mounting directives. A map from host path to a tuple of:
             * the container mount path
             * a boolean: True for read-write, False for read-only.
+        gpus - the number of GPUs to make available to the container. 0 means no GPUs.
         """
         _require_string(image, "image")
         _not_falsy(stdout_path, "stdout_path")
@@ -221,6 +223,9 @@ class ContainerCreator:
             host: {"bind": container_path, "mode": "rw" if rw else "ro"}
             for host, (container_path, rw) in (mounts or {}).items()
         }
+        device_requests = (
+            [docker.types.DeviceRequest(count=gpus, capabilities=[["gpu"]])] if gpus else None
+        )
         container = self._client.containers.run(
             image=image,
             entrypoint=command,
@@ -231,6 +236,7 @@ class ContainerCreator:
             remove=False,  # Don't remove immediately to ensure logs are written
             cap_drop=["ALL"],
             security_opt=["no-new-privileges:true"],
+            device_requests=device_requests,
         )
         logging.getLogger(__name__).info(f"Container started: {container.short_id}")
         return RunningContainer(container, stdout_path, stderr_path)

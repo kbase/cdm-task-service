@@ -58,6 +58,10 @@ class NodeType(BaseModel):
         examples=[2 * 24 * 60 - 15],
         description="The maximum runtime of a job container in minutes."
     )]
+    gpus_per_node: Annotated[int, Field(
+        examples=[4],
+        description="The number of GPUs per node."
+    )] = 0
     notes: Annotated[list[str], Field(
         examples=[["These nodes have 4 A100 GPUs each."]],
         description="Any notes about this node type."
@@ -89,12 +93,13 @@ PERLMUTTER_JAWS = ComputeSite(
             cpus_per_node=2 * 2 * 64,  # 2 CPUs × 64 cores × 2 hyperthreads
             memory_per_node_gb=492,  # in GB, not GiB, per the JAWS team
             max_runtime_min=2 * 24 * 60 - 15,
+            notes=[
+                "Standard nodes, no GPUS",
+                "Queue times are on the order of hours to days"
+            ],
         ),
     ],
-    notes=[
-        "The Perlmutter supercomputer at NERSC, serviced by the JAWS job running system.",
-        "Queue times can be long - hours to days."
-    ]
+    notes=["The Perlmutter supercomputer at NERSC, serviced by the JAWS job running system."]
 )
 
 
@@ -125,13 +130,24 @@ KBASE = ComputeSite(
             memory_per_node_gb=990,  # Leave 10GB for overhead
             # 7 days; the condor client adds a 6-hour buffer
             max_runtime_min=7 * 24 * 60,
+            notes=["Standard nodes, no GPUS"],
+        ),
+        NodeType(
+            nodes=None,
+            cpus_per_node=256,
+            memory_per_node_gb=990,  # Leave 10GB for overhead
+            max_runtime_min=7 * 24 * 60,
+            # 7 days; the condor client adds a 6-hour buffer
+            gpus_per_node=4,
+            notes=["GPUs have 80GB of memory"],
         ),
     ],
     notes=[
         "The DOE Systems Biology Knowledge Base compute systems.",
         "The number of nodes may be adjusted up or down to support the needs of KBase "
-        + "as a whole.",
-        "Queue times are highly dependent on the nodes available and user demand."
+        "as a whole.",
+        "Queue times are highly dependent on the nodes available and user demand but "
+        "are typically short"
     ]
 )
 
@@ -155,6 +171,10 @@ A mapping of compute clusters to their job container management type.
 True - managed by this service
 False - managed by an external service (e.g. JAWS)
 """
+
+MAX_GPUS = max([nt.gpus_per_node for s in CLUSTER_TO_SITE.values() for nt in s.node_types])
+""" The maximum number of GPUs that can be requested for a container across all clusters. """
+
 
 MAX_CPUS = max([nt.cpus_per_node for s in CLUSTER_TO_SITE.values() for nt in s.node_types])
 """

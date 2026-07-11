@@ -21,7 +21,7 @@ from cdmtaskservice import models
 
 
 # Some of this stuff is pretty specific to KBase but the likelihood we'll ever be submitting
-# to some other condor instance is pretty low, so don't worry about it 
+# to some other condor instance is pretty low, so don't worry about it
 
 
 _V = TypeVar("_V")
@@ -96,6 +96,7 @@ _RESOURCES = [
     "RequestCpus",
     "RequestDisk",
     "RequestMemory",
+    "RequestGPUs",
     "CpusProvisioned",
     "DiskProvisioned",
     "GPUsProvisioned",
@@ -281,6 +282,7 @@ class CondorClient:
         # A lot of this is copied from
         # https://github.com/kbase/execution_engine2/blob/develop/lib/execution_engine2/utils/Condor.py
         mem = str(int(job.job_input.memory / (1024 * 1024)))  # Condor expects MiB
+        gpus = job.job_input.gpus
         logprefix = f"cts-{job.id}-$(container_number)-container"
         # Hold jobs running longer than job_timeout + job_update_timeout + fudge.
         # The executor times out at job_timeout; the extra time allows it to update state
@@ -318,10 +320,13 @@ class CondorClient:
             f"+{_AD_JOB_ID}": f'"{job.id}"',  # must be quoted
             f"+{_AD_CONTAINER_NUMBER}": "$(container_number)",
         }
-        if self._config.client_group:
+        if gpus > 0:
+            subdict["request_gpus"] = str(gpus)
+        client_group = self._config.gpu_client_group if gpus > 0 else self._config.client_group
+        if client_group:
             # HTCondor will && this with its own requirements
             # Regex so it can match workers with multiple client groups specified
-            subdict["requirements"] =  f'regexp("{self._config.client_group}",CLIENTGROUP)'
+            subdict["requirements"] =  f'regexp("{client_group}",CLIENTGROUP)'
         sub = htcondor2.Submit(subdict | STATIC_SUB)
         itemdata = [
             {"container_number": str(i)}

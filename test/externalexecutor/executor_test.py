@@ -99,7 +99,7 @@ _JOB_JSON = {
 }
 
 
-def _make_job_json(*, refdata_id=None, declobber=False, input_crc=_EMPTY_CRC):
+def _make_job_json(*, refdata_id=None, declobber=False, input_crc=_EMPTY_CRC, gpus=None):
     import copy
     j = copy.deepcopy(_JOB_JSON)
     j["job_input"]["input_files"] = [{"file": "bucket/input.txt", "crc64nvme": input_crc}]
@@ -108,6 +108,8 @@ def _make_job_json(*, refdata_id=None, declobber=False, input_crc=_EMPTY_CRC):
     if refdata_id:
         j["image"]["refdata_id"] = refdata_id
         j["image"]["default_refdata_mount_point"] = "/refdata"
+    if gpus is not None:
+        j["job_input"]["gpus"] = gpus
     return j
 
 
@@ -341,6 +343,7 @@ async def test_execute_success_returns_zero_with_correct_state_transitions(tmp_p
         },
         command=["cmd"],
         env=[],
+        gpus=0,
     )
     runner.wait.assert_called_once_with()
     runner.cancel.assert_not_called()
@@ -1129,6 +1132,7 @@ async def test_execute_mounts_refdata_when_image_has_refdata_id(tmp_path):
         },
         command=["cmd"],
         env=[],
+        gpus=0,
     )
 
 
@@ -1160,6 +1164,39 @@ async def test_execute_no_refdata_mount_when_image_has_none(tmp_path):
         },
         command=["cmd"],
         env=[],
+        gpus=0,
+    )
+
+
+async def test_execute_passes_gpus_to_start_container(tmp_path):
+    _create_input_file(tmp_path)
+
+    runner, _ = _make_runner()
+    r = _make_executor(working_dir=tmp_path, job_json=_make_job_json(gpus=2))
+    r.creator.start_container.return_value = runner
+
+    await r.exe.execute()
+
+    assert r.sess.get.call_args_list == [call(_CTS_URL), call(_JOB_URL)]
+    assert r.sess.put.call_args_list == [
+        call(_UPDATE_BASE + "job_submitting", json={"time": _ts(0)}),
+        call(_UPDATE_BASE + "job_submitted", json={"time": _ts(1)}),
+        call(_UPDATE_BASE + "upload_submitting",
+             json={"time": _ts(2), "exit_code": 0, **_RESULT_STATS}),
+        call(_UPDATE_BASE + "upload_submitted", json={"time": _ts(3)}),
+        call(_UPDATE_BASE + "complete", json={"time": _ts(4)}),
+    ]
+    r.creator.start_container.assert_called_once_with(
+        "myimage@sha256:abc",
+        tmp_path / f"{_LOG_PREFIX}.out",
+        tmp_path / f"{_LOG_PREFIX}.err",
+        mounts={
+            str(tmp_path / "__input__"): ("/input_files", True),
+            str(tmp_path / "__output__"): ("/output_files", True),
+        },
+        command=["cmd"],
+        env=[],
+        gpus=2,
     )
 
 
@@ -1194,6 +1231,7 @@ async def test_execute_mount_prefix_override_applies_to_all_host_paths(tmp_path)
         },
         command=["cmd"],
         env=[],
+        gpus=0,
     )
 
 
@@ -1232,6 +1270,7 @@ async def test_execute_declobber_appends_container_number_to_output_path(tmp_pat
         },
         command=["cmd"],
         env=[],
+        gpus=0,
     )
     r.s3.upload_objects_from_file.assert_called_once_with(
         S3Paths(["bucket/outputs/0/result.txt"]),
