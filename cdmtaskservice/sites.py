@@ -98,6 +98,17 @@ PERLMUTTER_JAWS = ComputeSite(
                 "Queue times are on the order of hours to days"
             ],
         ),
+        NodeType(
+            nodes=1536,
+            cpus_per_node=2 * 64,  # 1 CPUs × 64 cores × 2 hyperthreads
+            memory_per_node_gb=236,  # in GB, not GiB, per the JAWS team
+            max_runtime_min=24 * 60 - 15,
+            gpus_per_node=4,
+            notes=[
+                "GPUs have 40GB of memory",
+                "Queue times are on the order of several days"
+            ]
+        ),
     ],
     notes=["The Perlmutter supercomputer at NERSC, serviced by the JAWS job running system."]
 )
