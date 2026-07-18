@@ -123,6 +123,11 @@ def _generate_wdl(job: Job, workflow_name: str, manifests: bool, relative_refdat
         ln ~{manifest} ./__input__/$(basename ~{manifest})
     fi"""
     connum = "/~{container_num}" if job.job_input.params.declobber else ""
+    gpu_runtime = ""
+    if job.job_input.gpus:
+        gpu_runtime = f"""
+    gpu: true
+    gpuCount: {job.job_input.gpus}"""
     if relative_refdata_path:
         refdata_mount = f'''
     dynamic_refdata: "{relative_refdata_path}:{job.get_refdata_mount_point()}"'''
@@ -206,7 +211,7 @@ task run_container {{
     docker: "{image}"
     runtime_minutes: {math.ceil(job.job_input.runtime.total_seconds() / 60)}
     memory: "{job.job_input.memory} B"
-    cpu: {job.job_input.cpus}{refdata_mount}
+    cpu: {job.job_input.cpus}{gpu_runtime}{refdata_mount}
     dynamic_input: "__input__:{job.job_input.params.input_mount_point}"
     dynamic_output: "{OUTPUT_DIR}{connum}:{job.job_input.params.output_mount_point}"
   }}

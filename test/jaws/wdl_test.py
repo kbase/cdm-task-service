@@ -201,6 +201,22 @@ def test_wdl_refdata():
     assert jawsinput.wdl == expwdl
 
 
+def test_wdl_gpu():
+    mapping = {models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar")}
+    ji = _JOB_BASIC.job_input.model_copy(update={"gpus": 2})
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_data_for_test()
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar"]],
+        "some_image.file_locs_list": [["file1"]],
+        "some_image.environment_list": [[]],
+        "some_image.cmdline_list": [["main_command"]],
+        "some_image.container_num_list": [0],
+    }
+    assert jawsinput.wdl == expwdl
+
+
 def test_wdl_resources_and_io_mounts():
     mapping = {models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar")}
     p = models.Parameters(input_mount_point="/woot/thing", output_mount_point="/outyout")
