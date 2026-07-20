@@ -119,6 +119,7 @@ class JobState:
         )
         # Could parallelize these ops but probably not worth it
         image = await self._images.get_image(job_input.image)
+        self._check_image_site_compat(job_input, image)
         await self._check_refdata(job_input, image)
         await self._check_output_path(job_input)
         new_input, meta = await self._check_and_update_files(job_input)
@@ -192,6 +193,13 @@ class JobState:
             f"(cpus={cpus}, gpus={gpus}, mem={math.ceil(gb * 1000) / 1000}GB, "
             f"runtime={math.ceil(rt_min * 1000) / 1000}min)."
         )
+
+    def _check_image_site_compat(self, job_input: models.JobInput, image: models.Image):
+        if image.allowed_sites and job_input.cluster not in image.allowed_sites:
+            raise IllegalParameterError(
+                f"Image {image.name_with_digest} is not permitted to run at site "
+                + f"{job_input.cluster.value}"
+            )
 
     async def _check_and_update_files(self, job_input: models.JobInput):
         paths = [

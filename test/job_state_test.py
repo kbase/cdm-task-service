@@ -328,6 +328,29 @@ async def test_submit_null_user():
         await js.jobstate.submit(_make_job_input(), None)
 
 
+async def test_submit_image_allowed_at_site():
+    js = _make_job_state(test_mode=True)
+    job_input = _make_job_input(cluster=sites.Cluster.KBASE)
+    image = _TEST_IMAGE.model_copy(update={"allowed_sites": [sites.SubmittableCluster.KBASE]})
+
+    await _check_submit_succeeds(js, job_input, image=image)
+
+
+async def test_submit_image_not_allowed_at_site():
+    js = _make_job_state()
+    job_input = _make_job_input(cluster=sites.Cluster.KBASE)
+    js.images.get_image.return_value = _TEST_IMAGE.model_copy(
+        update={"allowed_sites": [sites.SubmittableCluster.PERLMUTTER_JAWS]}
+    )
+
+    with pytest.raises(IllegalParameterError) as exc_info:
+        await js.jobstate.submit(job_input, _USER)
+    assert str(exc_info.value) == (
+        "Image ghcr.io/kbase/testimage@sha256:" + "a" * 64
+        + " is not permitted to run at site kbase"
+    )
+
+
 async def test_submit_compute_time_exceeds_limit():
     # 1 cpu * 1 container * 360001 sec / 3600 sec/hr = 100.000... hrs > default limit of 100
     js = _make_job_state(job_max_cpu_hours=100)
@@ -391,8 +414,8 @@ async def test_submit_gpus_exceed_site_limit():
     )
 
 
-async def _check_submit_succeeds_at_site_limits(js, job_input):
-    js.images.get_image.return_value = _TEST_IMAGE
+async def _check_submit_succeeds(js, job_input, image=_TEST_IMAGE):
+    js.images.get_image.return_value = image
     js.s3.get_object_meta.return_value = [S3ObjectMeta(_INPUT_FILE, "etag", 1000, crc64nvme=_CRC)]
 
     job_id = await js.jobstate.submit(job_input, _USER)
@@ -441,7 +464,7 @@ async def test_submit_kbase_cpu_at_site_limits():
         runtime_sec=_KBASE_CPU_MAX_RUNTIME_MIN * 60,
     )
 
-    await _check_submit_succeeds_at_site_limits(js, job_input)
+    await _check_submit_succeeds(js, job_input)
 
 
 async def test_submit_kbase_gpu_at_site_limits():
@@ -454,4 +477,4 @@ async def test_submit_kbase_gpu_at_site_limits():
         runtime_sec=_KBASE_GPU_MAX_RUNTIME_MIN * 60,
     )
 
-    await _check_submit_succeeds_at_site_limits(js, job_input)
+    await _check_submit_succeeds(js, job_input)
