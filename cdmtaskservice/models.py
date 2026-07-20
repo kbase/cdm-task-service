@@ -832,6 +832,20 @@ class Image(ImageUsage, JobImage):
     """
     Information about a docker image.
     """
+    allowed_sites: Annotated[list[sites.SubmittableCluster] | None, Field(
+        examples=[[sites.SubmittableCluster.KBASE.value]],
+        description="The compute sites at which this image is permitted to run. "
+            + "If not set, the image may run at any site. Duplicate sites are ignored."
+    )] = None
+
+    @field_validator("allowed_sites", mode="before")
+    @classmethod
+    def _check_allowed_sites(cls, v):
+        if v is None:
+            return None
+        if not v:
+            raise ValueError("allowed_sites cannot be an empty list")
+        return list(set(v))
 
 
 class JobState(str, Enum):

@@ -32,7 +32,7 @@ from cdmtaskservice.callback_url_paths import (
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
 )
-from cdmtaskservice.exceptions import UnauthorizedError
+from cdmtaskservice.exceptions import IllegalParameterError, UnauthorizedError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.jobflows.flowmanager import JobFlow
@@ -68,6 +68,19 @@ def _ensure_executor(user: CTSUser, err_msg: str):
 def _ensure_refdata_service(user: CTSUser, err_msg: str):
     if not user.is_refdata_service:
         raise UnauthorizedError(err_msg)
+
+
+def _parse_allowed_sites(allowed_sites: str | None) -> set[sites.SubmittableCluster] | None:
+    if not allowed_sites:
+        return None
+    parsed = set()
+    for s in allowed_sites.split(","):
+        s = s.strip()
+        try:
+            parsed.add(sites.SubmittableCluster(s))
+        except ValueError:
+            raise IllegalParameterError(f"Invalid site '{s}' in allowed_sites")
+    return parsed or None
 
 
 def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
@@ -652,6 +665,13 @@ async def approve_image(
         min_length=1,
         max_length=1024,
     )] = None,
+    allowed_sites: Annotated[str, Query(
+        openapi_examples={"comma separated sites": {"value": "kbase,perlmutter-jaws"}},
+        description="A comma separated list of compute sites at which this image is permitted "
+            + "to run. If not provided, the image may run at any site.",
+        min_length=1,
+        max_length=1000,
+    )] = None,
     user: CTSUser=Depends(_AUTH)
 ) -> models.Image:
     _ensure_admin(user, "Only service administrators can approve images.")
@@ -661,7 +681,8 @@ async def approve_image(
         user.user,
         image_reg=image_reg,
         refdata_id=refdata_id,
-        default_refdata_mount_point=default_refdata_mount_point
+        default_refdata_mount_point=default_refdata_mount_point,
+        allowed_sites=_parse_allowed_sites(allowed_sites),
     )
 
 
