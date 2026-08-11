@@ -18,6 +18,9 @@ from cdmtaskservice import models
 # approves an image with suspect characters for the case of the entrypoint, which shouldn't
 # happen). However, we keep the quoting as a secondary safety measure.
 
+SCRIPT_FILENAME = ".__script__"
+""" The name of the user-provided script file as placed in the input mount point root. """
+
 
 @dataclass
 class ContainerData:
@@ -33,6 +36,14 @@ class ContainerData:
     The files for the container in an ordered dictionary from the S3 object data to
     the relative container path.
     """
+
+
+# TODO CODE The argument generator has some issues:
+#           * It doesn't check that the inputs actually have checksum. This is enforced elsewhere
+#             in the code.
+#           * It checks for collisions within the input files and the script, if provided,
+#             bit this happens after the job is created. It should be done before any db writes
+#           * That being said, not super likely to happen.
 
 
 class ArgumentGenerator:
@@ -55,6 +66,8 @@ class ArgumentGenerator:
         self._job = _not_falsy(job, "job")
         if not job.job_input.inputs_are_S3File():
             raise ValueError("input files must be S3 files with a checksum")
+        if job.job_input.script and not isinstance(job.job_input.script, models.S3File):
+            raise ValueError("script must be an S3 file with a checksum")
         self._mfl = manifest_file_list
         param = job.job_input.params.get_file_parameter()
         if param and param.type is models.ParameterType.MANIFEST_FILE and (
@@ -80,6 +93,13 @@ class ArgumentGenerator:
         files = self._job.job_input.get_files_per_container()[container_number]
         file_to_rel_path_all = determine_file_locations(self._job.job_input)
         file_to_rel_path = {f: file_to_rel_path_all[f] for f in files}
+        if self._job.job_input.script:
+            if Path(SCRIPT_FILENAME) in file_to_rel_path.values():
+                raise ValueError(
+                    f"An input file's relative path collides with the reserved script "
+                    + f"filename '{SCRIPT_FILENAME}'"
+                )
+            file_to_rel_path[self._job.job_input.script] = Path(SCRIPT_FILENAME)
         cmd = [shlex.quote(c) for c in self._job.image.entrypoint]
         manifest = self._mfl[container_number] if self._mfl else None 
         cmd.extend(_process_pos_args(

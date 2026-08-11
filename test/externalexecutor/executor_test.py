@@ -19,6 +19,7 @@ from cdmtaskservice.externalexecution.container_runner import (
     ContainerResult,
     RunningContainer,
 )
+from cdmtaskservice.argument_generator import SCRIPT_FILENAME
 from cdmtaskservice.externalexecution.executor import (
     Executor,
     FatalExecutorError,
@@ -99,7 +100,9 @@ _JOB_JSON = {
 }
 
 
-def _make_job_json(*, refdata_id=None, declobber=False, input_crc=_EMPTY_CRC, gpus=None):
+def _make_job_json(
+    *, refdata_id=None, declobber=False, input_crc=_EMPTY_CRC, gpus=None, script=None
+):
     import copy
     j = copy.deepcopy(_JOB_JSON)
     j["job_input"]["input_files"] = [{"file": "bucket/input.txt", "crc64nvme": input_crc}]
@@ -110,6 +113,8 @@ def _make_job_json(*, refdata_id=None, declobber=False, input_crc=_EMPTY_CRC, gp
         j["image"]["default_refdata_mount_point"] = "/refdata"
     if gpus is not None:
         j["job_input"]["gpus"] = gpus
+    if script:
+        j["job_input"]["script"] = script
     return j
 
 
@@ -122,6 +127,15 @@ def _create_input_file(tmp_path: Path) -> Path:
     d = tmp_path / "__input__"
     d.mkdir(exist_ok=True)
     f = d / "input.txt"
+    f.write_bytes(b"")
+    return f
+
+
+def _create_script_file(tmp_path: Path) -> Path:
+    """Create the empty script file the download mock is expected to populate."""
+    d = tmp_path / "__input__"
+    d.mkdir(exist_ok=True)
+    f = d / SCRIPT_FILENAME
     f.write_bytes(b"")
     return f
 
@@ -1334,3 +1348,28 @@ async def test_execute_checksum_mismatch_updates_error_state(tmp_path):
             "traceback": tb,
         },
     )
+
+
+async def test_execute_makes_downloaded_script_executable(tmp_path):
+    old_umask = os.umask(0o022)
+    try:
+        _create_input_file(tmp_path)
+        script_file = _create_script_file(tmp_path)
+        other_file = tmp_path / "__input__" / "input.txt"
+        outdir = tmp_path / "__output__"
+        outdir.mkdir()
+
+        runner, _ = _make_runner(exit_code=0)
+        r = _make_executor(
+            working_dir=tmp_path,
+            job_json=_make_job_json(script={"file": "bucket/script.sh", "crc64nvme": _EMPTY_CRC}),
+        )
+        r.creator.start_container.return_value = runner
+
+        ret = await r.exe.execute()
+
+        assert ret == 0
+        assert script_file.stat().st_mode & 0o777 == 0o755
+        assert other_file.stat().st_mode & 0o777 == 0o644
+    finally:
+        os.umask(old_umask)

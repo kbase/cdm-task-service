@@ -672,6 +672,12 @@ async def approve_image(
         min_length=1,
         max_length=1000,
     )] = None,
+    script_image: Annotated[bool, Query(
+        description="Whether this image is a script-driven image. If true, "
+            + "jobs using this image must provide a script. If false, jobs using this image "
+            + "must not provide a script. If not provided, defaults to False, or the value "
+            + "from `from_image` if provided.",
+    )] = None,
     user: CTSUser=Depends(_AUTH)
 ) -> models.Image:
     _ensure_admin(user, "Only service administrators can approve images.")
@@ -683,6 +689,7 @@ async def approve_image(
         refdata_id=refdata_id,
         default_refdata_mount_point=default_refdata_mount_point,
         allowed_sites=_parse_allowed_sites(allowed_sites),
+        script_image=script_image,
     )
 
 
