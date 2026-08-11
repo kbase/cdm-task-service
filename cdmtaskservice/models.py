@@ -651,7 +651,22 @@ class JobInput(JobInputPreview):
         # multiple file sets can be combined in a JobInput
         max_length=10000,
     )]
-    
+    script: Annotated[str | S3File | None, Field(
+        examples=["mybucket/foo/script.sh"],
+        description="A user-provided script, either as a file path string or a data "
+            + "structure including the file path and optionally a CRC64/NVME checksum. "
+            + "The file path always start with the bucket. "
+            + "The script is expected to have a CRC64/NVME checksum available, even "
+            + "if it is not provided in the input data structure. "
+            + "When returned from the service, the checksum is always included. "
+            + "The script is placed at the root of the input mount point for every container "
+            + "as `.__script__` - as such, the input mount point chosen for the job must be "
+            + "compatible with the image entrypoint. "
+            + "It is the responsibility of the image entrypoint to run the "
+            + "script. Only supported at the `kbase` site, and only for images that "
+            + "allow script execution.",
+    )] = None
+
     @field_validator("input_files", mode="before")
     @classmethod
     def _check_input_files(cls, v):
@@ -664,6 +679,13 @@ class JobInput(JobInputPreview):
             else:
                 newlist.append(f)
         return newlist
+
+    @field_validator("script", mode="before")
+    @classmethod
+    def _check_script(cls, v):
+        if isinstance(v, str):
+            return _validate_s3_path(v)
+        return v
     
     @field_validator("input_files", mode="after")
     @classmethod
@@ -832,6 +854,26 @@ class Image(ImageUsage, JobImage):
     """
     Information about a docker image.
     """
+    allowed_sites: Annotated[list[sites.SubmittableCluster] | None, Field(
+        examples=[[sites.SubmittableCluster.KBASE.value]],
+        description="The compute sites at which this image is permitted to run. "
+            + "If not set, the image may run at any site. Duplicate sites are ignored."
+    )] = None
+    script_image: Annotated[bool, Field(
+        examples=[True],
+        description="Whether this image is a script-driven image. "
+            + "If true, jobs using this image must provide a script. If false, jobs "
+            + "using this image must not provide a script."
+    )] = False
+
+    @field_validator("allowed_sites", mode="before")
+    @classmethod
+    def _check_allowed_sites(cls, v):
+        if v is None:
+            return None
+        if not v:
+            raise ValueError("allowed_sites cannot be an empty list")
+        return list(set(v))
 
 
 class JobState(str, Enum):

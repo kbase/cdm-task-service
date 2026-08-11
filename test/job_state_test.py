@@ -2,10 +2,10 @@ import datetime
 import pytest
 import uuid
 from dataclasses import dataclass
-from unittest.mock import ANY, create_autospec, AsyncMock
+from unittest.mock import ANY, call, create_autospec, AsyncMock
 
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import IllegalParameterError
+from cdmtaskservice.exceptions import ChecksumMismatchError, IllegalParameterError
 from cdmtaskservice.images import Images
 from cdmtaskservice.job_state import JobState, NoJobLogsError
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
@@ -14,7 +14,7 @@ from cdmtaskservice import sites
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.refdata import Refdata
-from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
+from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, S3PathInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSUser
@@ -328,6 +328,29 @@ async def test_submit_null_user():
         await js.jobstate.submit(_make_job_input(), None)
 
 
+async def test_submit_image_allowed_at_site():
+    js = _make_job_state(test_mode=True)
+    job_input = _make_job_input(cluster=sites.Cluster.KBASE)
+    image = _TEST_IMAGE.model_copy(update={"allowed_sites": [sites.SubmittableCluster.KBASE]})
+
+    await _check_submit_succeeds(js, job_input, image=image)
+
+
+async def test_submit_image_not_allowed_at_site():
+    js = _make_job_state()
+    job_input = _make_job_input(cluster=sites.Cluster.KBASE)
+    js.images.get_image.return_value = _TEST_IMAGE.model_copy(
+        update={"allowed_sites": [sites.SubmittableCluster.PERLMUTTER_JAWS]}
+    )
+
+    with pytest.raises(IllegalParameterError) as exc_info:
+        await js.jobstate.submit(job_input, _USER)
+    assert str(exc_info.value) == (
+        "Image ghcr.io/kbase/testimage@sha256:" + "a" * 64
+        + " is not permitted to run at site kbase"
+    )
+
+
 async def test_submit_compute_time_exceeds_limit():
     # 1 cpu * 1 container * 360001 sec / 3600 sec/hr = 100.000... hrs > default limit of 100
     js = _make_job_state(job_max_cpu_hours=100)
@@ -391,8 +414,8 @@ async def test_submit_gpus_exceed_site_limit():
     )
 
 
-async def _check_submit_succeeds_at_site_limits(js, job_input):
-    js.images.get_image.return_value = _TEST_IMAGE
+async def _check_submit_succeeds(js, job_input, image=_TEST_IMAGE):
+    js.images.get_image.return_value = image
     js.s3.get_object_meta.return_value = [S3ObjectMeta(_INPUT_FILE, "etag", 1000, crc64nvme=_CRC)]
 
     job_id = await js.jobstate.submit(job_input, _USER)
@@ -441,7 +464,7 @@ async def test_submit_kbase_cpu_at_site_limits():
         runtime_sec=_KBASE_CPU_MAX_RUNTIME_MIN * 60,
     )
 
-    await _check_submit_succeeds_at_site_limits(js, job_input)
+    await _check_submit_succeeds(js, job_input)
 
 
 async def test_submit_kbase_gpu_at_site_limits():
@@ -454,4 +477,161 @@ async def test_submit_kbase_gpu_at_site_limits():
         runtime_sec=_KBASE_GPU_MAX_RUNTIME_MIN * 60,
     )
 
-    await _check_submit_succeeds_at_site_limits(js, job_input)
+    await _check_submit_succeeds(js, job_input)
+
+
+_SCRIPT_FILE = "mybucket/scripts/run.sh"
+_SCRIPT_CRC = "def456=="
+
+
+async def test_submit_image_requires_script_but_none_provided():
+    js = _make_job_state()
+    job_input = _make_job_input()
+    js.images.get_image.return_value = _TEST_IMAGE.model_copy(update={"script_image": True})
+
+    with pytest.raises(IllegalParameterError) as exc_info:
+        await js.jobstate.submit(job_input, _USER)
+    assert str(exc_info.value) == (
+        "Image ghcr.io/kbase/testimage@sha256:" + "a" * 64
+        + " requires a script but none was provided"
+    )
+    js.s3.get_object_meta.assert_not_called()
+    js.mongo.save_job.assert_not_called()
+
+
+async def test_submit_image_disallows_script_but_one_provided():
+    js = _make_job_state()
+    job_input = _make_job_input().model_copy(
+        update={"script": models.S3File.model_construct(file=_SCRIPT_FILE, crc64nvme=None)}
+    )
+    js.images.get_image.return_value = _TEST_IMAGE.model_copy(update={"script_image": False})
+
+    with pytest.raises(IllegalParameterError) as exc_info:
+        await js.jobstate.submit(job_input, _USER)
+    assert str(exc_info.value) == (
+        "Image ghcr.io/kbase/testimage@sha256:" + "a" * 64
+        + " does not allow script execution but a script was provided"
+    )
+    js.s3.get_object_meta.assert_not_called()
+    js.mongo.save_job.assert_not_called()
+
+
+async def test_submit_script_no_crc():
+    js = _make_job_state(test_mode=True)
+    job_input = _make_job_input().model_copy(
+        update={"script": models.S3File.model_construct(file=_SCRIPT_FILE, crc64nvme=None)}
+    )
+    image = _TEST_IMAGE.model_copy(update={"script_image": True})
+    js.images.get_image.return_value = image
+
+    def get_object_meta(paths):
+        if paths.paths == (_SCRIPT_FILE,):
+            return [S3ObjectMeta(_SCRIPT_FILE, "etag", 100, crc64nvme=None)]
+        return [S3ObjectMeta(_INPUT_FILE, "etag", 1000, crc64nvme=_CRC)]
+    js.s3.get_object_meta.side_effect = get_object_meta
+
+    with pytest.raises(
+        IllegalParameterError,
+        match=f"The S3 path '{_SCRIPT_FILE}' does not have a CRC64/NVME checksum",
+    ):
+        await js.jobstate.submit(job_input, _USER)
+    js.mongo.save_job.assert_not_called()
+
+
+async def test_submit_script_checksum_mismatch():
+    js = _make_job_state(test_mode=True)
+    job_input = _make_job_input().model_copy(
+        update={"script": models.S3File.model_construct(file=_SCRIPT_FILE, crc64nvme="wrong==")}
+    )
+    image = _TEST_IMAGE.model_copy(update={"script_image": True})
+    js.images.get_image.return_value = image
+
+    def get_object_meta(paths):
+        if paths.paths == (_SCRIPT_FILE,):
+            return [S3ObjectMeta(_SCRIPT_FILE, "etag", 100, crc64nvme=_SCRIPT_CRC)]
+        return [S3ObjectMeta(_INPUT_FILE, "etag", 1000, crc64nvme=_CRC)]
+    js.s3.get_object_meta.side_effect = get_object_meta
+
+    with pytest.raises(
+        ChecksumMismatchError,
+        match="The expected CRC64/NMVE checksum 'wrong==' for the path "
+            + f"'{_SCRIPT_FILE}' does not match the actual checksum '{_SCRIPT_CRC}'",
+    ):
+        await js.jobstate.submit(job_input, _USER)
+    js.mongo.save_job.assert_not_called()
+
+
+async def test_submit_script_allowed_path_violation():
+    js = _make_job_state(test_mode=True)
+    js.jobstate._allowedpaths = ["mybucket/input/", "mybucket/output/"]
+    job_input = _make_job_input().model_copy(
+        update={"script": models.S3File.model_construct(file=_SCRIPT_FILE, crc64nvme=None)}
+    )
+    image = _TEST_IMAGE.model_copy(update={"script_image": True})
+    js.images.get_image.return_value = image
+
+    with pytest.raises(
+        S3PathInaccessibleError,
+        match="The script path mybucket/scripts/run.sh is not a subpath of the user's allowed "
+            + "paths",
+    ):
+        await js.jobstate.submit(job_input, _USER)
+    js.mongo.save_job.assert_not_called()
+
+
+async def test_submit_script_succeeds():
+    js = _make_job_state(test_mode=True)
+    job_input = _make_job_input().model_copy(
+        update={"script": models.S3File.model_construct(
+            file=_SCRIPT_FILE, crc64nvme=_SCRIPT_CRC
+        )}
+    )
+    image = _TEST_IMAGE.model_copy(update={"script_image": True})
+    js.images.get_image.return_value = image
+    script_meta = S3ObjectMeta(_SCRIPT_FILE, "etag", 100, crc64nvme=_SCRIPT_CRC)
+    input_meta = S3ObjectMeta(_INPUT_FILE, "etag", 1000, crc64nvme=_CRC)
+
+    def get_object_meta(paths):
+        if paths.paths == (_SCRIPT_FILE,):
+            return [script_meta]
+        return [input_meta]
+    js.s3.get_object_meta.side_effect = get_object_meta
+
+    job_id = await js.jobstate.submit(job_input, _USER)
+
+    assert job_id == _JOB_ID
+    js.images.get_image.assert_called_once_with(job_input.image)
+    js.s3.is_paths_writeable.assert_called_once_with(
+        S3Paths([_OUTPUT_DIR], no_index_in_errors=True)
+    )
+    expected_input_file = models.S3FileWithDataID.model_construct(
+        file=_INPUT_FILE, crc64nvme=_CRC, data_id=None
+    )
+    expected_script = models.S3File.model_construct(file=_SCRIPT_FILE, crc64nvme=_SCRIPT_CRC)
+    expected_ji = job_input.model_copy(
+        update={"input_files": [expected_input_file], "script": expected_script}
+    )
+    js.mongo.save_job.assert_called_once_with(
+        models.AdminJobDetails(
+            id=_JOB_ID,
+            job_input=expected_ji,
+            user="testuser",
+            image=_TEST_JOB_IMAGE,
+            input_file_count=1,
+            state=models.JobState.CREATED,
+            transition_times=[models.AdminJobStateTransition(
+                state=models.JobState.CREATED,
+                time=_T,
+                trans_id=_TRANS_ID,
+                notif_sent=False,
+            )]
+        )
+    )
+    js.kafka.update_job_state.assert_called_once_with(
+        _JOB_ID, models.JobState.CREATED, _T, _TRANS_ID, callback=ANY
+    )
+    await js.kafka.update_job_state.call_args.kwargs["callback"]
+    js.mongo.job_update_sent.assert_called_once_with(_JOB_ID, _TRANS_ID)
+    assert js.s3.get_object_meta.call_args_list == [
+        call(S3Paths([_SCRIPT_FILE])), call(S3Paths([_INPUT_FILE]))
+    ]

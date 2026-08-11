@@ -15,7 +15,7 @@ import traceback
 import uuid
 from typing import Callable, TextIO, Any
 
-from cdmtaskservice.argument_generator import ArgumentGenerator
+from cdmtaskservice.argument_generator import ArgumentGenerator, SCRIPT_FILENAME
 from cdmtaskservice.exceptions import ChecksumMismatchError
 from cdmtaskservice.externalexecution.config import Config
 from cdmtaskservice.externalexecution.container_runner import (
@@ -181,7 +181,7 @@ class Executor:
                     self._cfg.container_number
                 )
                 self._phase = _PHASE_DOWNLOAD
-                await self._download_files()
+                await self._download_files(job)
                 self._phase = _PHASE_CONTAINER
                 result = await self._run_container(job)
                 if self._timed_out:
@@ -365,7 +365,7 @@ class Executor:
         async with self._sess.put(url, json=data) as resp:
             await self._check_resp(resp, "Failed to update job state in the CDM Task Service")
 
-    async def _download_files(self) -> None:
+    async def _download_files(self, job: models.AdminJobDetails) -> None:
         s3paths = []
         local_paths = []
         root = self._workdir / _INPUT
@@ -399,6 +399,8 @@ Local relative path: {loc}
                     f"The expected CRC64/NMVE checksum '{obj.crc64nvme}' for the path "
                     + f"'{obj.file}' does not match the actual checksum '{crc}'"
                 )
+        if job.job_input.script:
+            (root / SCRIPT_FILENAME).chmod(0o755)
 
     def _get_log_prefix(self, job: models.AdminJobDetails):
         return f"cts-{job.id}-{self._cfg.container_number}-container"

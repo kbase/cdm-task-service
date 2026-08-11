@@ -6,6 +6,7 @@ import re
 from typing import Awaitable, NamedTuple
 
 from cdmtaskservice import models
+from cdmtaskservice import sites
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.exceptions import IllegalParameterError
 from cdmtaskservice.image_remote_lookup import DockerImageInfo, parse_image_name
@@ -22,6 +23,8 @@ class _ImageFields(NamedTuple):
     usage_notes: str | None
     refdata_id: str | None
     default_refdata_mount_point: str | None
+    allowed_sites: set[sites.SubmittableCluster] | None
+    script_image: bool
 
 
 class Images:
@@ -46,7 +49,9 @@ class Images:
         username: str,
         image_reg: models.ImageRegistration = None,
         refdata_id: str = None,
-        default_refdata_mount_point: str = None
+        default_refdata_mount_point: str = None,
+        allowed_sites: set[sites.SubmittableCluster] = None,
+        script_image: bool = None,
     ) -> models.Image:
         """
         Register an image to the service.
@@ -59,9 +64,16 @@ class Images:
         refdata_id - the ID of reference data to associate with the image.
         default_refdata_mount_point - the default mount point for refdata in an image container.
             Must be an absolute path with at least one path element.
+        allowed_sites - the compute sites at which the image is permitted to run. If not
+            provided, the image may run at any site.
+        script_image - whether the image is a script-driven image requiring a user-provided
+            script to be run. If not provided, defaults to False (or the from_image value,
+            if from_image is provided).
         """
         image_reg = image_reg or models.ImageRegistration()
-        fields = await self._resolve_image_fields(image_reg, refdata_id, default_refdata_mount_point)
+        fields = await self._resolve_image_fields(
+            image_reg, refdata_id, default_refdata_mount_point, allowed_sites, script_image
+        )
         if fields.default_refdata_mount_point:
             if not fields.refdata_id:
                 raise IllegalParameterError(
@@ -89,6 +101,8 @@ class Images:
             default_refdata_mount_point=fields.default_refdata_mount_point,
             usage_notes=fields.usage_notes,
             urls=fields.urls,
+            allowed_sites=fields.allowed_sites,
+            script_image=fields.script_image,
         )
         await self._mongo.save_image(img)
         return img
@@ -98,6 +112,8 @@ class Images:
         image_reg: models.ImageRegistration,
         refdata_id: str,
         default_refdata_mount_point: str,
+        allowed_sites: set[sites.SubmittableCluster] | None,
+        script_image: bool | None,
     ) -> _ImageFields:
         """
         Resolve the final user-supplied field values for image registration from the two
@@ -116,11 +132,17 @@ class Images:
                 refdata_id = from_img.refdata_id
             if default_refdata_mount_point is None:
                 default_refdata_mount_point = from_img.default_refdata_mount_point
+            if allowed_sites is None and from_img.allowed_sites:
+                allowed_sites = set(from_img.allowed_sites)
+            if script_image is None:
+                script_image = from_img.script_image
         return _ImageFields(
             urls=urls,
             usage_notes=usage_notes,
             refdata_id=refdata_id or None,  # ensure not empty string, etc.
             default_refdata_mount_point=default_refdata_mount_point,
+            allowed_sites=allowed_sites,
+            script_image=script_image or False,
         )
     
     async def get_image(self, imagename: str) -> models.Image:
