@@ -122,13 +122,14 @@ class JobState:
         self._check_image_site_compat(job_input, image)
         await self._check_refdata(job_input, image)
         await self._check_output_path(job_input)
+        new_script = await self._check_and_update_script(job_input, image)
         new_input, meta = await self._check_and_update_files(job_input)
         job_id = str(self._uuid_fn())
         if not self._test_mode:
             # check the flow is available before we make any changes
             flow = await self._flowman.get_flow(job_input.cluster)
             await flow.preflight(user, job_id, job_input)
-        ji = job_input.model_copy(update={"input_files": new_input})
+        ji = job_input.model_copy(update={"input_files": new_input, "script": new_script})
         update_time = self._timestamp_fn()
         trans_id = str(self._uuid_fn())
         job = models.AdminJobDetails(
@@ -200,6 +201,38 @@ class JobState:
                 f"Image {image.name_with_digest} is not permitted to run at site "
                 + f"{job_input.cluster.value}"
             )
+
+    async def _check_and_update_script(self, job_input: models.JobInput, image: models.Image):
+        if image.script_image and not job_input.script:
+            raise IllegalParameterError(
+                f"Image {image.name_with_digest} requires a script but none was provided"
+            )
+        if not image.script_image and job_input.script:
+            raise IllegalParameterError(
+                f"Image {image.name_with_digest} does not allow script execution "
+                + "but a script was provided"
+            )
+        if not job_input.script:
+            return None
+        script = job_input.script
+        path = script.file if isinstance(script, models.S3File) else script
+        if self._allowedpaths:
+            if not any([path.startswith(ap) for ap in self._allowedpaths]):
+                raise S3PathInaccessibleError(
+                    f"The script path {path} is not a subpath of the user's allowed paths")
+        meta = (await self._s3.get_object_meta(S3Paths([path])))[0]
+        if not meta.crc64nvme:
+            raise IllegalParameterError(
+                f"The S3 path '{meta.path}' does not have a CRC64/NVME checksum"
+            )
+        if (isinstance(script, models.S3File) and script.crc64nvme
+                and script.crc64nvme != meta.crc64nvme):
+            raise ChecksumMismatchError(
+                f"The expected CRC64/NMVE checksum '{script.crc64nvme}' for the path "
+                + f"'{script.file}' does not match the actual checksum "
+                + f"'{meta.crc64nvme}'"
+            )
+        return models.S3File.model_construct(file=meta.path, crc64nvme=meta.crc64nvme)
 
     async def _check_and_update_files(self, job_input: models.JobInput):
         paths = [

@@ -172,7 +172,12 @@ class NERSCJAWSRunner(JobFlow):
         job_input - the job input.
         """
         _not_falsy(user, "user")
-        _not_falsy(job_input, "job_input")  # unused for now
+        _not_falsy(job_input, "job_input")
+        if job_input.script:
+            raise UnsupportedOperationError(
+                "User-provided scripts are not supported for the "
+                + f"{self.CLUSTER.value} job flow"
+            )
         if not user.is_cts_user() or not user.has_nersc_account:
             raise UnauthorizedError(
                 f"To use the {self.CLUSTER.value} site, you must be a CTS user "
