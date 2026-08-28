@@ -108,7 +108,9 @@ def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callb
         callback_file = cf.parent / f"{cf.stem}.callback_error{cf.suffix}"
         try:
             # may want some retries here, halting on incorrect job state messages
-            ret = requests.get(callback_url)
+            # Redirects are disallowed since the callback target is dynamically supplied and
+            # a redirect could be used to route the request to an arbitrary, untrusted host.
+            ret = requests.get(callback_url, allow_redirects=False)
             if ret.status_code < 200 or ret.status_code > 299:
                 failed = True
                 # log callback errors for debugging purposes, service will never see this
@@ -118,6 +120,7 @@ def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callb
                         "result": "fail",
                         "callback_text": ret.text,
                         "callback_code": ret.status_code,
+                        "callback_redirect_location": ret.headers.get("Location"),
                         "cts_env": cts_env
                     }
                     json.dump(j, f, indent=4)
