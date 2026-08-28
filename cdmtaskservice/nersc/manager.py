@@ -84,8 +84,21 @@ _JAWS_INPUT_JSON = "input.json"
 
 
 # TODO PERF add start and end time to task output and log / record in db / put in result file)
-# TODO NERSCFEATURE if NERSC puts python 3.11 on the dtns revert to regular load 
-_PYTHON_LOAD_HACK = "module use /global/common/software/nersc/pe/modulefiles/latest"
+# TODO NERSCFEATURE if NERSC puts python on the dtns revert to regular load
+# Pinned rather than floating on `latest`: pip dependencies (see _install_pip_dependencies)
+# are installed once, at server startup, into the site-packages of whatever Python version
+# is resolved at that moment. Every later job run resolves `module load python` again from
+# scratch. If `latest` moves to a different default Python version in between (NERSC ships
+# a new dated PE release roughly monthly), the two resolutions disagree and previously
+# installed packages become invisible to the newer interpreter, e.g. NoModuleFoundError:
+# awscrt at job runtime despite a successful install at startup.
+# To check the current released versions / find a newer one to pin to, on a NERSC
+# DTN node run `ls -l /global/common/software/nersc/pe/modulefiles/` (the `latest` entry
+# there is a symlink to the currently recommended release). After updating this constant,
+# restart the CTS server so _install_pip_dependencies reinstalls under the newly pinned
+# version.
+_NERSC_PE_MODULEFILES_VERSION = "26.8.1"
+_PYTHON_LOAD_HACK = f"module use /global/common/software/nersc/pe/modulefiles/{_NERSC_PE_MODULEFILES_VERSION}"
 _RUN_CTS_REMOTE_CODE_FILENAME = "run_cts_remote_code.sh"
 # Might want to make a shared constants module for all these env var names and update this
 # file and remote.py
