@@ -15,6 +15,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Self, NamedTuple
 
 from docker_image import reference
@@ -87,6 +88,13 @@ class DockerImageInfo:
             # Require an absolute path to avoid various malicious attacks
             raise CranePathError("crane_absolute_path must be absolute")
         self._crane = crane_absolute_path
+        # Ensure crane never picks up ambient host credentials (e.g. ~/.docker/config.json),
+        # which can make anonymous registry lookups behave inconsistently across hosts.
+        # Held as an instance attr so it isn't cleaned up until this object is GC'd.
+        self._anon_docker_config = tempfile.TemporaryDirectory(
+            prefix="cts_crane_anon_docker_config_")
+        (Path(self._anon_docker_config.name) / "config.json").write_text("{}")
+        self._crane_env = dict(os.environ, DOCKER_CONFIG=self._anon_docker_config.name)
 
     async def normalize_image_name(self, image_name: str) -> CompleteImageName:
         """
@@ -166,7 +174,8 @@ class DockerImageInfo:
             proc = await asyncio.create_subprocess_exec(
                 self._crane, *args,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=self._crane_env,
             )
         except FileNotFoundError as e:
             raise CranePathError(
