@@ -127,9 +127,6 @@ async def test_image_methods_fail():
         "workspace_deluxe:0.15.0": ImageInfoFetchError(
             "Failed to access information for image docker.io/library/workspace_deluxe:0.15.0. "
             + "Unauthorized to access image"),
-        "ghcr.io/kb/ase/workspace_deluxe:0.15.0": ImageInfoFetchError(
-            "Failed to access information for image ghcr.io/kb/ase/workspace_deluxe:0.15.0. "
-            + "Error code was: requested access to the resource is denied"),
         "superfakehostforrealihope.io/kbase/workspace_deluxe:0.15.0": ImageInfoFetchError(
             "Failed to access information for image "
             + "superfakehostforrealihope.io/kbase/workspace_deluxe:"
@@ -141,9 +138,6 @@ async def test_image_methods_fail():
         "hcr.io/kbase/workspace_deluxe:0.15.0": ImageInfoFetchError(
             "Failed to access information for image hcr.io/kbase/workspace_deluxe:0.15.0. "
             + "Image was not found on the host"),
-        "ghcr.io/kbase/workspace_not_deluxe:0.15.0": ImageInfoFetchError(
-            "Failed to access information for image ghcr.io/kbase/workspace_not_deluxe:0.15.0. "
-            + "Error code was: requested access to the resource is denied"),
     }
     dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
     for k, v in testset.items():
@@ -165,6 +159,12 @@ async def test_normalize_image_name_fail():
         "ghcr.io/kbase/workspace_deluxe:0.14.1@" + _SHA_WS_0_14_2: ImageInfoFetchError(
             f"The digest for image ghcr.io/kbase/workspace_deluxe:0.14.1, {_SHA_WS_0_14_1}, "
             + f"does not equal the expected digest, {_SHA_WS_0_14_2}"),
+        "ghcr.io/kb/ase/workspace_deluxe:0.15.0": ImageInfoFetchError(
+            "Failed to access information for image ghcr.io/kb/ase/workspace_deluxe:0.15.0. "
+            + "Image was not found on the host"),
+        "ghcr.io/kbase/workspace_not_deluxe:0.15.0": ImageInfoFetchError(
+            "Failed to access information for image ghcr.io/kbase/workspace_not_deluxe:0.15.0. "
+            + "Image was not found on the host"),
     }
     dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
     for k, v in testset.items():
@@ -182,6 +182,12 @@ async def test_get_entrypoint_from_name_fail():
             + f"{_SHA_WS_0_14_2}. Manifest is unknown"),
         "ghcr.io/kbase/workspace_deluxe:0.14.3@" + _SHA_WS_0_14_2: ImageInfoFetchError(
             "Failed to access information for image ghcr.io/kbase/workspace_deluxe:0.14.3. "
+            + "Manifest is unknown"),
+        "ghcr.io/kb/ase/workspace_deluxe:0.15.0": ImageInfoFetchError(
+            "Failed to access information for image ghcr.io/kb/ase/workspace_deluxe:0.15.0. "
+            + "Manifest is unknown"),
+        "ghcr.io/kbase/workspace_not_deluxe:0.15.0": ImageInfoFetchError(
+            "Failed to access information for image ghcr.io/kbase/workspace_not_deluxe:0.15.0. "
             + "Manifest is unknown"),
     }
     dii = await DockerImageInfo.create(testcfg.CRANE_EXE_PATH)
