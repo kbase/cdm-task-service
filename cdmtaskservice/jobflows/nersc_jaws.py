@@ -265,14 +265,14 @@ class NERSCJAWSRunner(JobFlow):
             callback_url = get_download_complete_callback(self._callback_root, job.id)
             # TODO PERF config / set concurrency
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
-            task_id = await self._nman.download_s3_files(
+            job_id = await self._nman.download_s3_files(
                 job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
             )
             # Hmm. really this should go through job state but that seems pointless right now.
             # May need to refactor this and the mongo method later to be more generic to
             # remote cluster and have job_state handle choosing the correct mongo method & params
             # to run
-            await self._updates.update_job_state(job.id, submitted_nersc_download(task_id))
+            await self._updates.update_job_state(job.id, submitted_nersc_download(job_id))
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "starting file download for")
 
@@ -296,7 +296,7 @@ class NERSCJAWSRunner(JobFlow):
         try:
             # TODO PERF configure file download concurrency
             jaws_job_id = await self._nman.run_JAWS(job)
-            # See notes above about adding the NERSC task id to the job
+            # See notes above about adding the NERSC job id to the job
             await self._updates.update_job_state(job.id, submitted_jaws_job(jaws_job_id))
         except Exception as e:
             if jaws_job_id:
@@ -385,14 +385,14 @@ class NERSCJAWSRunner(JobFlow):
         
         try:
             # TODO PERF config / set concurrency
-            task_id = await self._nman.upload_JAWS_log_files_on_error(
+            job_id = await self._nman.upload_JAWS_log_files_on_error(
                 job,
                 jaws_info["output_dir"],
                 presign,
                 get_error_log_upload_complete_callback(self._callback_root, job.id),
                 insecure_ssl=self._s3insecure,
             )
-            await self._updates.update_job_state(job.id, submitted_nersc_error_processing(task_id))
+            await self._updates.update_job_state(job.id, submitted_nersc_error_processing(job_id))
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "starting error processing for")
     
@@ -407,15 +407,15 @@ class NERSCJAWSRunner(JobFlow):
         
         try:
             # TODO PERF config / set concurrency
-            task_id = await self._nman.upload_JAWS_job_files(
+            job_id = await self._nman.upload_JAWS_job_files(
                 job,
                 jaws_info["output_dir"],
                 presign,
                 get_upload_complete_callback(self._callback_root, job.id),
                 insecure_ssl=self._s3insecure,
             )
-            # See notes above about adding the NERSC task id to the job
-            await self._updates.update_job_state(job.id, submitted_nersc_upload(task_id))
+            # See notes above about adding the NERSC job id to the job
+            await self._updates.update_job_state(job.id, submitted_nersc_upload(job_id))
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "starting file upload for")
 
@@ -588,7 +588,7 @@ class NERSCJAWSRunner(JobFlow):
             )
             # TODO DISKSPACE clean up no longer used refdata @ NERSC
             #                keep the refdata mongo record so it can be restaged if necessary
-            task_id = await self._nman.download_s3_files(
+            job_id = await self._nman.download_s3_files(
                 refdata.id,
                 [objmeta],
                 presigned,
@@ -598,7 +598,7 @@ class NERSCJAWSRunner(JobFlow):
                 unpack=refdata.unpack,
             )
             await self._updates.update_refdata_state(
-                refdata.id, submitted_nersc_refdata_download(task_id)
+                refdata.id, submitted_nersc_refdata_download(job_id)
             )
         except Exception as e:
             await self._updates.handle_exception(

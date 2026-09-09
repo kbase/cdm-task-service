@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 import requests
+import subprocess
 import sys
 import traceback
 from typing import Callable
@@ -38,9 +39,16 @@ def calculate_checksums(jaws_output_dir: str, checksum_output_file: str):
         outs = parse_outputs_json(f)
     res = {"files": [], "stdouts": [], "stderrs": []}
     # TODO PERF may want to parallelize this with a max process limit
+    # TODO PERF could also chunk large files and combine CRCs via awscrt.checksums.combine_crc64nvme
     for s3_path, result_path in outs.output_files.items():
-        crc = crc64nvme_b64(jdir / result_path)
-        res["files"].append({"crc64nvme": crc, "s3path": s3_path, "respath": result_path})
+        fpath = jdir / result_path
+        crc = crc64nvme_b64(fpath)
+        res["files"].append({
+            "crc64nvme": crc,
+            "s3path": s3_path,
+            "respath": result_path,
+            "size": fpath.stat().st_size,
+        })
     for so in outs.stdout:
         crc = crc64nvme_b64(jdir / so)
         res["stdouts"].append({"crc64nvme": crc, "respath": so})
@@ -66,6 +74,86 @@ def process_data_transfer_manifest(manifest_file_path: str):
     with open(manifest_file_path) as f:
         manifest = json.load(f)
     asyncio.run(s3_pdtm(manifest["file-transfers"]))
+    return None
+
+
+def sync_refdata_to_dtn(
+    staging_dir: str,
+    dtn_host: str,
+    dest_dir: str,
+    completion_file: str,
+    completion_file_contents: str,
+):
+    """
+    Copy reference data downloaded and unpacked into a local staging directory to its final
+    location on a NERSC DTN-mounted filesystem, and write the completion file JAWS watches for.
+
+    This is necessary because reference data lives on a filesystem (/global/dna) that is only
+    writable from NERSC DTNs, but `xfer` QOS Slurm jobs run on Perlmutter login nodes. This
+    relies on the NERSC sshproxy SSH key already present in $HOME being valid and shared between
+    login and DTN nodes, requiring no further authentication.
+
+    staging_dir - the local directory the reference data was downloaded and unpacked into.
+    dtn_host - the DTN hostname to copy the data to.
+    dest_dir - the final, DTN-only-writable destination directory for the reference data.
+    completion_file - the path, on the DTN host, of the completion file JAWS watches for.
+    completion_file_contents - the contents to write to the completion file.
+    """
+    # --protect-args: dest_dir / completion_file are always built from a server-generated UUID
+    #     plus fixed config strings, never user input, so this is defense in depth rather than a
+    #     fix for a reachable bug.
+    # --timeout / ConnectTimeout: without these a stalled connection hangs until the enclosing
+    #     Slurm job's wall-clock limit kills it (up to 48h under the `xfer` QOS).
+    # --partial: keep partially-transferred files on interruption so a retry isn't guaranteed to
+    #     re-copy everything from scratch.
+    rsync_base_args = [
+        "rsync", "-a", "--mkpath", "--protect-args", "--partial", "--timeout=300",
+        "-e", "ssh -o BatchMode=yes -o ConnectTimeout=30",
+    ]
+    subprocess.run(
+        [
+            *rsync_base_args,
+            f"{str(staging_dir).rstrip('/')}/",
+            f"{dtn_host}:{dest_dir}/",
+        ],
+        check=True,
+    )
+    # Write the completion file locally, next to the (by now already synced) staging dir, and
+    # let rsync push it over rather than shelling out to write it remotely.
+    local_completion_file = Path(staging_dir).parent / Path(completion_file).name
+    local_completion_file.write_text(f"{completion_file_contents}\n")
+    subprocess.run(
+        [
+            *rsync_base_args,
+            str(local_completion_file),
+            f"{dtn_host}:{completion_file}",
+        ],
+        check=True,
+    )
+
+
+def process_refdata_download_manifest(
+    manifest_file_path: str,
+    staging_dir: str,
+    dtn_host: str,
+    dest_dir: str,
+    completion_file: str,
+    completion_file_contents: str,
+):
+    """
+    Downloads reference data files per a transfer manifest into a local staging directory, then
+    copies them to their final DTN-only-writable location and writes the JAWS completion file.
+
+    manifest_file_path - the path to the transfer manifest file. Its file entries are expected
+        to point into staging_dir.
+    staging_dir - the local directory the reference data will be downloaded and unpacked into.
+    dtn_host - the DTN hostname to copy the data to.
+    dest_dir - the final, DTN-only-writable destination directory for the reference data.
+    completion_file - the path, on the DTN host, of the completion file JAWS watches for.
+    completion_file_contents - the contents to write to the completion file.
+    """
+    process_data_transfer_manifest(manifest_file_path)
+    sync_refdata_to_dtn(staging_dir, dtn_host, dest_dir, completion_file, completion_file_contents)
     return None
 
 
@@ -150,6 +238,22 @@ def main():
         _error_wrapper(
             process_data_transfer_manifest,
             [os.environ["CTS_MANIFEST_LOCATION"]],
+            resfile,
+            callback_url
+        )
+    elif mode == "refdata_manifest":
+        _error_wrapper(
+            process_refdata_download_manifest,
+            [
+                # TODO CODE staging dir is redundant with the manifest, the file in
+                #           the manifest should be prefixed with the staging dir
+                os.environ["CTS_MANIFEST_LOCATION"],
+                os.environ["CTS_STAGING_DIR"],
+                os.environ["CTS_DTN_HOST"],
+                os.environ["CTS_REFDATA_DEST_DIR"],
+                os.environ["CTS_COMPLETION_FILE_LOCATION"],
+                os.environ["CTS_COMPLETION_FILE_CONTENTS"],
+            ],
             resfile,
             callback_url
         )

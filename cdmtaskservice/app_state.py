@@ -332,7 +332,7 @@ async def _register_nersc_job_flows(
         kafka_notifier,
         coman,
         cfg.service_group,
-        cfg.service_root_url
+        cfg.service_root_url,
     )
     dest.register("JAWS flow provider", jaws_job_flows.close())
     flowman.register_flow(NERSCJAWSRunner.CLUSTER, jaws_job_flows.get_nersc_job_flow)

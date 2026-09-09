@@ -20,7 +20,7 @@ class UpdateField(StrEnum):
     Fields which may be present in an update.
     """
     
-    NERSC_DOWNLOAD_TASK_ID = auto()
+    NERSC_DOWNLOAD_JOB_ID = auto()
     """ The NERSC Superfacility ID for an download task. """
     
     JAWS_RUN_ID = auto()
@@ -38,10 +38,10 @@ class UpdateField(StrEnum):
     CPU_FACTOR = auto()
     """ The ratio of cpu time actually used to cpu time requested. """ 
     
-    NERSC_UPLOAD_TASK_ID = auto()
+    NERSC_UPLOAD_JOB_ID = auto()
     """ The NERSC Superfacility ID for an upload task. """
     
-    NERSC_LOG_UPLOAD_TASK_ID = auto()
+    NERSC_LOG_UPLOAD_JOB_ID = auto()
     """ The NERSC Superfacility ID for a log upload task. """
     
     OUTPUT_FILE_PATHS = auto()
@@ -187,16 +187,16 @@ def submitted_download() -> JobUpdate:
     )
 
 
-def submitted_nersc_download(task_id: str) -> JobUpdate:
+def submitted_nersc_download(job_id: str) -> JobUpdate:
     """
     Update a job's state from created to download submitted and add a NERSC
-    superfacility API download task ID.
+    superfacility API download job ID.
     """
     return JobUpdate(
         )._set_current_state(models.JobState.CREATED
         )._set_new_state(models.JobState.DOWNLOAD_SUBMITTED
         )._set_fields(
-            {UpdateField.NERSC_DOWNLOAD_TASK_ID: _require_string(task_id, "task_id")}
+            {UpdateField.NERSC_DOWNLOAD_JOB_ID: _require_string(job_id, "job_id")}
     )
 
 
@@ -285,15 +285,15 @@ def submitted_upload() -> JobUpdate:
     )
 
 
-def submitted_nersc_upload(task_id: str) -> JobUpdate:
+def submitted_nersc_upload(job_id: str) -> JobUpdate:
     """
     Update a job's state from upload submitting to upload submitted and add a NERSC
-    superfacility API upload task ID.
+    superfacility API upload job ID.
     """
     return JobUpdate(
         )._set_current_state(models.JobState.UPLOAD_SUBMITTING
         )._set_new_state(models.JobState.UPLOAD_SUBMITTED
-        )._set_fields({UpdateField.NERSC_UPLOAD_TASK_ID: _require_string(task_id, "task_id")}
+        )._set_fields({UpdateField.NERSC_UPLOAD_JOB_ID: _require_string(job_id, "job_id")}
     )
 
 
@@ -512,16 +512,16 @@ def submitted_error_processing() -> JobUpdate:
     )
 
 
-def submitted_nersc_error_processing(task_id: str) -> JobUpdate:
+def submitted_nersc_error_processing(job_id: str) -> JobUpdate:
     """
     Update a job's state from error processing submitting to error processing submitted and add
-    a NERSC superfacility API upload task ID.
+    a NERSC superfacility API upload job ID.
     """
     return JobUpdate(
         )._set_current_state(models.JobState.ERROR_PROCESSING_SUBMITTING
         )._set_new_state(models.JobState.ERROR_PROCESSING_SUBMITTED
         )._set_fields(
-            {UpdateField.NERSC_LOG_UPLOAD_TASK_ID: _require_string(task_id, "task_id")}
+            {UpdateField.NERSC_LOG_UPLOAD_JOB_ID: _require_string(job_id, "job_id")}
     )
 
 
@@ -584,16 +584,16 @@ def submitted_refdata_download() -> RefdataUpdate:
     )
 
 
-def submitted_nersc_refdata_download(task_id: str) -> RefdataUpdate:
+def submitted_nersc_refdata_download(job_id: str) -> RefdataUpdate:
     """
     Update a refdata staging process's state from created to download submitted and add a NERSC
-    superfacility API download task ID.
+    superfacility API download job ID.
     """
     return RefdataUpdate(
         )._set_current_state(models.ReferenceDataState.CREATED
         )._set_new_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED
         )._set_fields(
-            {UpdateField.NERSC_DOWNLOAD_TASK_ID: _require_string(task_id, "task_id")}
+            {UpdateField.NERSC_DOWNLOAD_JOB_ID: _require_string(job_id, "job_id")}
     )
 
 

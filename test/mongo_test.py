@@ -1502,7 +1502,7 @@ async def test_refdata_redundant_update_time(mondb):
         state=models.ReferenceDataState.DOWNLOAD_SUBMITTED,
         time=dt,
     ))
-    rd.statuses[0].nersc_download_task_id = ["ntid"]
+    rd.statuses[0].nersc_download_job_id = ["ntid"]
     assert got == rd
     
     # check that the update time is set correctly

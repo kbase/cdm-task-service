@@ -49,9 +49,12 @@ FLD_JOB_STATE_TRANSITION_ID = "trans_id"
 FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT = "notif_sent"
 FLD_JOB_ADMIN_META = "admin_meta"
 FLD_JOB_NERSC_DETAILS = "nersc_details"
-FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
-FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
-FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"
+FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"  # deprecated, see FLD_NERSC_DETAILS_DL_JOB_ID
+FLD_NERSC_DETAILS_DL_JOB_ID = "download_job_id"
+FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"  # deprecated, see FLD_NERSC_DETAILS_UL_JOB_ID
+FLD_NERSC_DETAILS_UL_JOB_ID = "upload_job_id"
+FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"  # deprecated, see *_LOG_UL_JOB_ID
+FLD_NERSC_DETAILS_LOG_UL_JOB_ID = "log_upload_job_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_HTC_CLUSTER_ID = "cluster_id"
@@ -68,7 +71,8 @@ FLD_SUBJOB_HTC_STATS_MISSING = "stats_missing"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
-FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
+FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"  # deprecated, see FLD_REFDATA_NERSC_DL_JOB_ID
+FLD_REFDATA_NERSC_DL_JOB_ID = "nersc_download_job_id"
 # Fields that are shared between multiple models for consistency
 # Currently refdata, jobs, and subjobs
 FLD_COMMON_ID = "id"
@@ -1169,24 +1173,43 @@ class NERSCDetails(BaseModel):
     Details about a job run at NERSC.
     """
     # Output only model, no validation
-    download_task_id: Annotated[list[str], Field(
-        description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
-            + "instance to NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
+    download_task_id: Annotated[list[str] | None, Field(
+        default=None,
+        deprecated="Replaced by download_job_id. Only present on records created before NERSC "
+            + "downloads were migrated from SFAPI async tasks to Slurm jobs.",
+        description="IDs for SFAPI download tasks. Deprecated - see download_job_id."
     )]
-    upload_task_id: Annotated[list[str], Field(
-        default_factory=list,
-        description="IDs for tasks run via the NERSC SFAPI to upload files to an S3 "
-            + "instance from NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
-            + "Empty if an upload task has not yet been submitted to NERSC."
+    download_job_id: Annotated[list[str] | None, Field(
+        default=None,
+        description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to download files from "
+            + "an S3 instance to NERSC. Multiple job IDs indicate job retries after failures. "
+            + "Missing if the record predates the migration to Slurm jobs, see download_task_id."
     )]
-    log_upload_task_id: Annotated[list[str], Field(
-        default_factory=list,
-        description="IDs for tasks run via the NERSC SFAPI to upload log files to an S3 "
-            + "instance from NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
-            + "Empty if a log upload task has not yet been submitted to NERSC."
+    upload_task_id: Annotated[list[str] | None, Field(
+        default=None,
+        deprecated="Replaced by upload_job_id. Only present on records created before NERSC "
+            + "uploads were migrated from SFAPI async tasks to Slurm jobs.",
+        description="IDs for SFAPI upload tasks. Deprecated - see upload_job_id."
+    )]
+    upload_job_id: Annotated[list[str] | None, Field(
+        default=None,
+        description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to upload files to an S3 "
+            + "instance from NERSC. Multiple job IDs indicate job retries after failures. "
+            + "Missing if an upload job has not yet been submitted to NERSC, or if the record "
+            + "predates the migration to Slurm jobs, see upload_task_id."
+    )]
+    log_upload_task_id: Annotated[list[str] | None, Field(
+        default=None,
+        deprecated="Replaced by log_upload_job_id. Only present on records created before NERSC "
+            + "log uploads were migrated from SFAPI async tasks to Slurm jobs.",
+        description="IDs for SFAPI log upload tasks. Deprecated - see log_upload_job_id."
+    )]
+    log_upload_job_id: Annotated[list[str] | None, Field(
+        default=None,
+        description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to upload log files to "
+            + "an S3 instance from NERSC. Multiple job IDs indicate job retries after failures. "
+            + "Missing if a log upload job has not yet been submitted to NERSC, or if the record "
+            + "predates the migration to Slurm jobs, see log_upload_task_id."
     )]
 
 
@@ -1406,11 +1429,17 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
             + "download manifests and results, etc."
     )] = False
     nersc_download_task_id: Annotated[list[str] | None, Field(
-        default_factory=list,
-        description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
-            + "instance to NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures. "
-            + "Only present if the refdata is being downloaded to NERSC."
+        default=None,
+        deprecated="Replaced by nersc_download_job_id. Only present on records created before "
+            + "NERSC refdata downloads were migrated from SFAPI async tasks to Slurm jobs.",
+        description="IDs for SFAPI download tasks. Deprecated - see nersc_download_job_id."
+    )]
+    nersc_download_job_id: Annotated[list[str] | None, Field(
+        default=None,
+        description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to download files from "
+            + "an S3 instance to NERSC. Multiple job IDs indicate job retries after failures. "
+            + "Only present if the refdata is being downloaded to NERSC via a Slurm job, i.e. "
+            + "the record postdates the migration to Slurm jobs, see nersc_download_task_id."
     )]
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
