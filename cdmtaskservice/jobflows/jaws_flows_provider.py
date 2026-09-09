@@ -79,9 +79,9 @@ class JAWSFlowProvider:
     ):
         """
         WARNING: this class is not thread safe.
-        
+
         Create the JAWS based job flows provider.
-        
+
         superfacility_api_credential_path - a path to an SFAPI credential file.
             The first line of the file must be the client ID, and the rest the client
             secret in PEM format.
@@ -111,7 +111,7 @@ class JAWSFlowProvider:
         jfp._coman = _not_falsy(coman, "coman")
         jfp._service_group = _require_string(service_group, "service_group")
         jfp._service_root_url = _require_string(service_root_url, "service_root_url")
-        
+
         # setup other variables
         jfp._logr = logging.getLogger(__name__)
         jfp._nersc_status_cli = NERSCStatus()

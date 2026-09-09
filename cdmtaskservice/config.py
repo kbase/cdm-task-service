@@ -48,7 +48,6 @@ class CDMTaskServiceConfig:
     nersc_jaws_user: str - the user name of the user associated with the NERSC and JAWS
         credentials.
     jaws_refdata_root_dir: str - the JAWS refdata root directory to use for refdata storage.
-    jaws_staging_dir_dtn: str - the JAWS staging directory for the `kbase` site on a NERSC DTN.
     jaws_staging_dir_prl: str - the JAWS staging directory for the `kbase` site on the NERSC
         Perlmutter system.
     sfapi_cred_path: str - the path to a NERSC Superfacility API credential file. The file is
@@ -153,15 +152,10 @@ class CDMTaskServiceConfig:
         self.jaws_refdata_root_dir = _get_string_required(
             config, _SEC_NERSC_JAWS, "refdata_root_dir"
         )
-        # These typically have $PSCRATCH for the kbjaws kbase site user embedded in it,
+        # This typically has $PSCRATCH for the kbjaws kbase site user embedded in it,
         # which I'd prefer not to specify literally in a config. Not sure if there's a better
         # way to deal with it since the service doesn't know anything about the jaws site user.
-        # Worry about it later 
-        # Also not a fan of having to specify both but so far the other solutions I've considered
-        # are even uglier
-        self.jaws_staging_dir_dtn = _get_string_required(
-            config, _SEC_NERSC_JAWS, "jaws_staging_dir_dtn"
-        )
+        # Worry about it later
         self.jaws_staging_dir_prl = _get_string_required(
             config, _SEC_NERSC_JAWS, "jaws_staging_dir_perlmutter"
         )
@@ -262,7 +256,6 @@ class CDMTaskServiceConfig:
         self._nersc_paths = NERSCPaths(  # fail early if paths fail validation
             f"{self.nersc_remote_code_dir}/{version}",
             self.jaws_refdata_root_dir,
-            self.jaws_staging_dir_dtn,
             self.jaws_staging_dir_prl
         )
         self._check_path_overlap()
@@ -347,7 +340,6 @@ class CDMTaskServiceConfig:
             f"Authentication refdata service role: {self.refdata_service_role}",
             f"NERSC / JAWS user: {self.nersc_jaws_user}",
             f"NERSC / JAWS refdata root dir: {self.jaws_refdata_root_dir}",
-            f"NERSC / JAWS DTN staging dir: {self.jaws_staging_dir_dtn}",
             f"NERSC / JAWS Perlmutter staging dir: {self.jaws_staging_dir_prl}",
             f"NERSC client credential path: {self.sfapi_cred_path}",
             f"NERSC remote code dir: {self.nersc_remote_code_dir}",

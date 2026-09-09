@@ -13,7 +13,13 @@ class Status(NamedTuple):
     """ The status of the NERSC compute systems. """
     
     ok: bool
-    """ True if all systems are available. """
+    """
+    True if all systems are available. Note that job execution no longer uses the DTNs
+    (SFAPI compute now targets Perlmutter exclusively), so a DTN outage only actually
+    blocks refdata staging, not job submission - `ok` is not that precise, though, and
+    still requires both systems to be up. Making job submission proceed independently of
+    DTN status is more work than is warranted right now.
+    """
     
     perlmutter_up: bool
     """ True if perlmutter is available. """

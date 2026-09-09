@@ -5,7 +5,6 @@ Handler for data transfer between CDM sources and NERSC.
 import asyncio
 from collections.abc import Callable
 from enum import Enum
-from httpx import HTTPStatusError
 import io
 import inspect
 import json
@@ -50,15 +49,32 @@ from cdmtaskservice.s3.remote import get_cache_path
 #              servers on a different version. Note in admin docs that old unused installs
 #              can be deleted. Server code is tiny anyway
 
-_DT_TARGET = Machine.dtns
-# TODO NERSCUPDATE delete the following line when DTN downloads work normally.
-#       See https://nersc.servicenowservices.com/sp?sys_id=ad33e85f1b5a5610ac81a820f54bcba0&view=sp&id=ticket&table=incident
-_DT_WORKAROUND = "source /etc/bashrc"
-
-_COMMAND_PATH = "utilities/command"
-
 _MIN_TIMEOUT_SEC = 300
 _SEC_PER_GB = 2 * 60  # may want to make this configurable
+# Large file transfers are submitted as Slurm jobs on the `xfer` QOS (NERSC's data transfer
+# queue) rather than SFAPI async tasks, since tasks are capped at 10 minutes of execution time.
+# The `xfer` QOS runs on Perlmutter login nodes, requires `--licenses=SCRATCH`, forbids `-N`/
+# `--nodes`, and has a 48 hour wall time ceiling. See https://docs.nersc.gov/jobs/policy/
+_XFER_QOS = "xfer"
+_MAX_SBATCH_TIME_SEC = 48 * 60 * 60
+# Buffer applied to the size-based transfer time estimate before submitting the Slurm job, so
+# a hung transfer still hits Slurm's own wall time limit rather than running indefinitely and
+# tying up one of the `xfer` QOS' limited (15) concurrent job slots per user.
+#
+# Kept small (1.5x) rather than large because the estimate it's applied to is already very
+# conservative on its own:
+#   * _SEC_PER_GB (2 min/GB, ~67 Mbps) is a slow rate for a transfer expected to run over ESnet
+#     between two DOE-facility endpoints.
+#   * The estimate sums bytes across every file in the batch with no credit for concurrency, i.e.
+#     it assumes the whole batch transfers serially even though multiple files transfer at once.
+#   * Actual hangs on individual files/connections are caught independently and much sooner by
+#     the per-file timeout in s3/remote.py's _timeout(), so this buffer isn't the primary hang
+#     detector - it mainly needs to absorb variance in the rate estimate, not find hangs itself.
+_TIME_BUFFER_MULTIPLIER = 1.5
+_STAGING_DIR_NAME = "staged"
+# `ssh dtn` resolves to a NERSC Data Transfer Node from a Perlmutter login node without further
+# configuration, so no configurable hostname is needed here.
+_DTN_HOST = "dtn"
 
 _JOB_MANIFESTS = Path("manifests")
 _MANIFEST_FILE_PREFIX = "manifest-"
@@ -84,29 +100,25 @@ _JAWS_INPUT_JSON = "input.json"
 
 
 # TODO PERF add start and end time to task output and log / record in db / put in result file)
-# TODO NERSCFEATURE if NERSC puts python on the dtns revert to regular load
-# Pinned rather than floating on `latest`: pip dependencies (see _install_pip_dependencies)
-# are installed once, at server startup, into the site-packages of whatever Python version
-# is resolved at that moment. Every later job run resolves `module load python` again from
-# scratch. If `latest` moves to a different default Python version in between (NERSC ships
-# a new dated PE release roughly monthly), the two resolutions disagree and previously
-# installed packages become invisible to the newer interpreter, e.g. NoModuleFoundError:
-# awscrt at job runtime despite a successful install at startup.
-# To check the current released versions / find a newer one to pin to, on a NERSC
-# DTN node run `ls -l /global/common/software/nersc/pe/modulefiles/` (the `latest` entry
-# there is a symlink to the currently recommended release). After updating this constant,
-# restart the CTS server so _install_pip_dependencies reinstalls under the newly pinned
-# version.
-_NERSC_PE_MODULEFILES_VERSION = "26.8.1"
-_PYTHON_LOAD_HACK = f"module use /global/common/software/nersc/pe/modulefiles/{_NERSC_PE_MODULEFILES_VERSION}"
+# Pinned to a specific NERSC `python` module rather than a bare `module load python` (which
+# floats to whatever NERSC currently defaults to): pip dependencies (see
+# _install_pip_dependencies) are installed once, at server startup, into the site-packages of
+# whatever Python version is resolved at that moment. Every later job run resolves the same
+# module load again from scratch. If the default moved to a different Python version in
+# between, the two resolutions disagree and previously installed packages become invisible to
+# the newer interpreter, e.g. NoModuleFoundError: awscrt at job runtime despite a successful
+# install at startup.
+# To check for newer versions to pin to, run `module avail python` on a NERSC Perlmutter login
+# node. After updating this constant, restart the CTS server so _install_pip_dependencies
+# reinstalls under the newly pinned version.
+_PYTHON_MODULE = "python/3.13-26.8.0"
 _RUN_CTS_REMOTE_CODE_FILENAME = "run_cts_remote_code.sh"
 # Might want to make a shared constants module for all these env var names and update this
 # file and remote.py
 _RUN_CTS_REMOTE_CODE = f"""
 #!/usr/bin/env bash
 
-{_PYTHON_LOAD_HACK}
-module load python
+module load {_PYTHON_MODULE}
 
 export PYTHONPATH=$CTS_CODE_LOCATION
 export CTS_MODE=$CTS_MODE
@@ -115,6 +127,11 @@ export CTS_ERRORS_JSON_LOCATION=$CTS_ERRORS_JSON_LOCATION
 export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
 export CTS_JAWS_OUTPUT_DIR=$CTS_JAWS_OUTPUT_DIR
 export CTS_CHECKSUM_FILE_LOCATION=$CTS_CHECKSUM_FILE_LOCATION
+export CTS_STAGING_DIR=$CTS_STAGING_DIR
+export CTS_DTN_HOST=$CTS_DTN_HOST
+export CTS_REFDATA_DEST_DIR=$CTS_REFDATA_DEST_DIR
+export CTS_COMPLETION_FILE_LOCATION=$CTS_COMPLETION_FILE_LOCATION
+export CTS_COMPLETION_FILE_CONTENTS=$CTS_COMPLETION_FILE_CONTENTS
 export CTS_RESULT_FILE_LOCATION=$CTS_RESULT_FILE_LOCATION
 export CTS_LOG_FILE_LOCATION=$CTS_LOG_FILE_LOCATION
 export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
@@ -132,6 +149,11 @@ echo "CTS_ERRORS_JSON_LOCATION=[$CTS_ERRORS_JSON_LOCATION]"
 echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
 echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]"
 echo "CTS_CHECKSUM_FILE_LOCATION=[$CTS_CHECKSUM_FILE_LOCATION]"
+echo "CTS_STAGING_DIR=[$CTS_STAGING_DIR]"
+echo "CTS_DTN_HOST=[$CTS_DTN_HOST]"
+echo "CTS_REFDATA_DEST_DIR=[$CTS_REFDATA_DEST_DIR]"
+echo "CTS_COMPLETION_FILE_LOCATION=[$CTS_COMPLETION_FILE_LOCATION]"
+echo "CTS_COMPLETION_FILE_CONTENTS=[$CTS_COMPLETION_FILE_CONTENTS]"
 echo "CTS_RESULT_FILE_LOCATION=[$CTS_RESULT_FILE_LOCATION]"
 echo "CTS_LOG_FILE_LOCATION=[$CTS_LOG_FILE_LOCATION]"
 echo "CTS_CALLBACK_URL=[$CTS_CALLBACK_URL]"
@@ -142,14 +164,23 @@ python -u $CTS_CODE_LOCATION/{"/".join(remote.__name__.split("."))}.py
 echo "python exited with code $?"
 """
 
+# Submitted to the `xfer` QOS on Perlmutter. `-N`/`--nodes` is forbidden on this QOS since it
+# runs on shared login nodes rather than dedicated compute nodes.
+_SBATCH_SCRIPT_TEMPLATE = f"""#!/usr/bin/env bash
+#SBATCH --qos={_XFER_QOS}
+#SBATCH --licenses=SCRATCH
+#SBATCH --time={{time}}
+
+{{body}}
+"""
+
 
 # Note there's a race condition that theoretically could happen here if the path is removed
 # after the existence check but before the rm. Since this is just for clean up not an issue. 
 # Also note I wasted way too much time trying to make this fail cleanly if there was a write
 # protected file in the path tree, which should never happen.
 # It'll still fail if it really can't delete the path.
-_REMOVE_DTN_PATH_TEMPLATE = f"""
-{_DT_WORKAROUND}
+_REMOVE_PATH_TEMPLATE = """
 if [ ! -e "{{path}}" ]; then
     exit 0
 fi
@@ -179,6 +210,22 @@ def _get_dependencies(mod: ModuleType, cts_dep: set[ModuleType], pip_dep: set[Mo
         elif rootname not in sys.stdlib_module_names:
             pip_dep.add(sys.modules[rootname])
 _get_dependencies(remote, _CTS_DEPENDENCIES, _PIP_DEPENDENCIES)
+
+
+def _compute_sbatch_time_sec(total_bytes: int) -> int:
+    """
+    Compute the wall time, in seconds, to request for a `xfer` QOS Slurm job transferring
+    total_bytes of data, capped at the QOS' 48 hour maximum.
+    """
+    estimate = max(_MIN_TIMEOUT_SEC, _SEC_PER_GB * total_bytes / 1_000_000_000)
+    return int(min(_MAX_SBATCH_TIME_SEC, estimate * _TIME_BUFFER_MULTIPLIER))
+
+
+def _seconds_to_slurm_time(seconds: int) -> str:
+    """ Convert a number of seconds to a Slurm `--time` argument in HH:MM:SS format. """
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 class TransferState(Enum):
@@ -222,7 +269,7 @@ class NERSCManager:
     ) -> Self:
         """
         Create the NERSC manager.
-        
+
         client_provider - a function that provides a valid SFAPI client. It is assumed that
             the user associated with the client does not change.
         nersc_paths - the set of paths for NERSC manager use.
@@ -237,7 +284,7 @@ class NERSCManager:
         nm = NERSCManager(client_provider, nersc_paths, jaws_config.user, service_group)
         await nm._setup_remote_code(nersc_paths, jaws_config.token, jaws_config.group)
         return nm
-        
+
     def __init__(
             self,
             client_provider: Callable[[], str],
@@ -282,19 +329,12 @@ class NERSCManager:
                 ),
                 chmod = "600"
             ))
-            pm_scratch = tg.create_task(self._set_up_perlmutter_scratch(cli))
-            dtn_scratch = tg.create_task(self._set_up_dtn_scratch(cli))
+            pm_scratch = tg.create_task(self._set_up_perlmutter_scratch())
             if _PIP_DEPENDENCIES:
-                tg.create_task(self._install_pip_dependencies(cli))
-        self._dtn_scratch = dtn_scratch.result()
+                tg.create_task(self._install_pip_dependencies(perlmutter))
         self._perlmutter_scratch = pm_scratch.result()
-        self._nersc_dtn_file_cache_path = self._make_cache_path(nersc_paths.jaws_staging_dir_dtns)
         self._nersc_perlmutter_file_cache_path = self._make_cache_path(
             nersc_paths.jaws_staging_dir_perlmutter)
-        logr.info(
-            "NERSC DTN JAWS staging cache path",
-            extra={logfields.FILE: self._nersc_dtn_file_cache_path}
-        )
         logr.info(
             "NERSC perlmutter JAWS staging cache path",
             extra={logfields.FILE: self._nersc_perlmutter_file_cache_path}
@@ -312,54 +352,48 @@ class NERSCManager:
             / "cache"
         )
     
-    async def _install_pip_dependencies(self, client: AsyncClient):
+    async def _install_pip_dependencies(self, compute: AsyncCompute):
         logr = logging.getLogger(__name__)
         deps = " ".join(
             # may need to do something else if module doesn't have __version__
             [f"{mod.__name__}=={mod.__version__}" for mod in _PIP_DEPENDENCIES])
         logr.info(f"Installing pip modules at NERSC: {deps}")
         command = (
-            f"{_DT_WORKAROUND}; "
-            + f"{_PYTHON_LOAD_HACK}; "
-            + f"module load python; "
+            f"module load {_PYTHON_MODULE}; "
             # Unlikely, but this could cause problems if multiple versions
-            # of the server are running at once. Don't worry about it for now 
+            # of the server are running at once. Don't worry about it for now
             + f"pip install {deps}"  # adding notapackage causes a failure
         )
-        dt = await client.compute(_DT_TARGET)
-        await dt.run(command)
+        await compute.run(command)
         logr.info(f"Installed pip modules at NERSC")
-    
-    
-    async def _set_up_perlmutter_scratch(self, client: AsyncClient) -> Path:
+
+
+    async def _set_up_perlmutter_scratch(self) -> Path:
         logr = logging.getLogger(__name__)
         logr.info("Getting Perlmutter scratch path from NERSC")
-        perlmutter = await client.compute(Machine.perlmutter)
-        scratch = (await perlmutter.run("echo $SCRATCH")).strip()
+        cli = self._client_provider()
+        compute = await cli.compute(Machine.perlmutter)
+        scratch = (await compute.run("echo $SCRATCH")).strip()
+        if not scratch:  # have had issues here previously
+            raise ValueError("Unable to determine $SCRATCH variable for NERSC perlmutter")
         logr.info("NERSC perlmutter scratch path", extra={logfields.FILE: scratch})
         return Path(scratch)
-    
-    async def _set_up_dtn_scratch(self, client: AsyncClient) -> Path:
-        logr = logging.getLogger(__name__)
-        logr.info("Getting DTN scratch path from NERSC")
-        dt = await client.compute(_DT_TARGET)
-        scratch = await dt.run(f"{_DT_WORKAROUND}; echo $SCRATCH")
-        scratch = scratch.strip()
-        if not scratch:  # have had issues here previously
-            raise ValueError("Unable to determine $SCRATCH variable for NERSC dtns")
-        logr.info("NERSC DTN scratch path", extra={logfields.FILE: scratch})
-        return Path(scratch)
-    
-    def _get_job_scratch(self, job_id, perlmutter=False) -> Path:
-        sc = self._perlmutter_scratch if perlmutter else self._dtn_scratch
-        return sc / self._work_loc / _JOBS_DIR / job_id
-    
+
+    def _get_job_scratch(self, job_id) -> Path:
+        return self._perlmutter_scratch / self._work_loc / _JOBS_DIR / job_id
+
     def _get_refdata_scratch(self, refdata_id) -> Path:
-        return self._dtn_scratch / self._work_loc / _REFDATA_DIR / refdata_id
-    
+        return self._perlmutter_scratch / self._work_loc / _REFDATA_DIR / refdata_id
+
+    def _get_refdata_staging_loc(self, refdata_id) -> Path:
+        # Perlmutter login nodes (where `xfer` QOS jobs run) cannot write to the DTN-only
+        # refdata root, so refdata is staged here first and copied to its final location by a
+        # DTN-side step at the end of the job.
+        return self._get_refdata_scratch(refdata_id) / _STAGING_DIR_NAME
+
     def _get_refdata_loc(self, refdata_id) -> Path:
         return self._refdata_root / self._get_relative_refdata_loc(refdata_id)
-    
+
     def _get_relative_refdata_loc(self, refdata_id) -> Path:
         return self._work_loc / refdata_id
     
@@ -381,10 +415,6 @@ class NERSCManager:
             )
         )
     
-    async def _run_command(self, client: AsyncClient, machine: Machine, exe: str):
-        # TODO ERRORHANDlING deal with errors 
-        return (await client.post(f"{_COMMAND_PATH}/{machine}", data={"executable": exe})).json()
-    
     async def _upload_file_to_nersc(
         self,
         compute: AsyncCompute,
@@ -392,12 +422,11 @@ class NERSCManager:
         file: Path = None,
         bio: io.BytesIO = None,
         chmod: str = None,
-    ):
+    ):  
         logr = logging.getLogger(__name__)
         logr.info("Uploading file to NERSC.", extra={logfields.FILE: target})
-        dtw = f"{_DT_WORKAROUND}; " if compute.name == Machine.dtns else ""
         if target.parent != Path("."):
-            cmd = f"{dtw}mkdir -p {target.parent}"
+            cmd = f"mkdir -p {target.parent}"
             await compute.run(cmd)
         asrp = self._get_async_path(compute, target)
         # TODO ERRORHANDLING throw custom errors
@@ -408,19 +437,19 @@ class NERSCManager:
             await asrp.upload(bio)
         logr.info("Upload of file to NERSC complete.", extra={logfields.FILE: target})
         if chmod:
-            cmd = f"{dtw}chmod {chmod} {target}"
+            cmd = f"chmod {chmod} {target}"
             await compute.run(cmd)
             logr.info("chmod of uploaded file complete.", extra={logfields.FILE: target})
 
-    async def _delete_dtn_paths(self, paths: list[Path]):
+    async def _delete_paths(self, paths: list[Path]):
         logr = logging.getLogger(__name__)
         cli = self._client_provider()
-        dtns = await cli.compute(Machine.dtns)
+        perlmutter = await cli.compute(Machine.perlmutter)
         async with asyncio.TaskGroup() as tg:
             for p in paths:
                 logr.info("Deleting path at NERSC", extra={logfields.FILE: p})
                 # May need to catch SFAPI client errors and wrap. YAGNI for now
-                tg.create_task(dtns.run(_REMOVE_DTN_PATH_TEMPLATE.format(path=p)))
+                tg.create_task(perlmutter.run(_REMOVE_PATH_TEMPLATE.format(path=p)))
 
     def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
         # skip some API calls vs. the upload example in the NERSC docs
@@ -428,36 +457,6 @@ class NERSCManager:
         asrp = AsyncRemotePath(path=target, compute=compute)
         asrp.perms = "-"  # hack to prevent an unnecessary network call
         return asrp
-
-    async def is_task_complete(self, task_id: str, max_retries=10) -> bool:
-        """
-        Returns true if the the task is complete, signified by:
-        * The task data denoting it as complete, or
-        * The task not being available in the NERSC SFAPI (e.g. HTTP 404), as tasks are removed
-          10 minutes after completion.
-        The task may be in a successful or errored state. Polls the task 1/s up to `max_retries`.
-        
-        Note that if a task ID never existed, this method will return that it is
-        complete, as there is no way to tell the difference.
-        """
-        logr = logging.getLogger(__name__)
-        cli = self._client_provider()
-        retries = 1
-        while True:
-            try:
-                task = await cli.get(f"tasks/{task_id}")
-            except HTTPStatusError as e:
-                if e.response.status_code == 404:
-                    return True
-                raise
-            if task.json()["status"] == "completed":
-                return True
-            elif retries > max_retries:
-                return False
-            else:
-                logr.info(f"Polling state of task {task_id} in 1s, retry attempt {retries}")
-                retries += 1
-                await asyncio.sleep(1)
 
     async def download_s3_files(
         self,
@@ -485,49 +484,98 @@ class NERSCManager:
         refdata - whether this is a refdata download and files should be stored in the NERSC
             refdata location.
         unpack - whether to unpack *.gz, *.tar.gz, or *.tgz files.
-        
-        Returns the NERSC task ID for the download.
+
+        Returns the NERSC Slurm job ID for the download.
         """
         maniio = self._create_download_manifest(
             download_id, objects, presigned_urls, concurrency, insecure_ssl, refdata, unpack)
+        total_bytes = sum(o.size for o in objects)
         return await self._process_manifest(
             maniio,
             download_id,
             callback_url,
             "download_manifest.json",
             "download",
-            refdata=refdata,
+            total_bytes,
+            mode="refdata_manifest" if refdata else "manifest",
         )
-    
-    async def upload_presigned_files(
+
+    async def _upload_presigned_files(
         self,
         job_id: str,
         remote_files: list[Path],
         presigned_urls: list[PresignedPost],
         callback_url: str,
+        total_bytes: int,
         concurrency: int = 10,
-        insecure_ssl: bool = False
+        insecure_ssl: bool = False,
     ) -> str:
         """
         Upload a set of files to presigned URLs from NERSC.
-        
-        job_id - the ID of the job for which the files are being transferred. 
+
+        job_id - the ID of the job for which the files are being transferred.
             This must be a unique ID, and no other transfers should be occurring for the job.
         remote_files - the files to upload.
         presigned_urls - the presigned upload URLs for each file, in the same order as
             the file.
         callback_url - the URL to GET as a callback for when the upload is complete.
+        total_bytes - the total size of the files to upload, used to compute the Slurm job's
+            wall time limit.
         concurrency - the number of simultaneous uploads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
-        
-        Returns the NERSC task ID for the upload.
+
+        Returns the NERSC Slurm job ID for the upload.
         """
         maniio = self._create_upload_manifest(
             remote_files, presigned_urls, concurrency, insecure_ssl)
         return await self._process_manifest(
-            maniio, job_id, callback_url, "upload_manifest.json", "upload"
+            maniio,
+            job_id,
+            callback_url,
+            "upload_manifest.json",
+            "upload",
+            total_bytes,
         )
-    
+
+    def _build_process_manifest_command(
+        self,
+        entity_id: str,
+        callback_url: str,
+        mode: str,
+        manifestpath: Path,
+        task_base_path: Path,
+        error_json_file_location: str = None,
+        container_logs_location: str = None,
+    ) -> list[str]:
+        refdata = mode == "refdata_manifest"
+        command = [
+            f"export CTS_MODE={mode}",
+            f"export CTS_CODE_LOCATION={self._nersc_code_path}",
+            f"export CTS_MANIFEST_LOCATION={manifestpath}",
+            f"export CTS_RESULT_FILE_LOCATION={task_base_path}_result.json",
+            f"export CTS_LOG_FILE_LOCATION={task_base_path}_log.txt",
+            f"export CTS_CALLBACK_URL={callback_url}",
+            f"export SCRATCH=$SCRATCH",
+        ]
+        if error_json_file_location:
+            command.append(f"export CTS_ERRORS_JSON_LOCATION={error_json_file_location}")
+            command.append(f"export CTS_CONTAINER_LOGS_LOCATION={container_logs_location}")
+        if refdata:
+            command.append(f"export CTS_STAGING_DIR={self._get_refdata_staging_loc(entity_id)}")
+            command.append(f"export CTS_DTN_HOST={_DTN_HOST}")
+            command.append(f"export CTS_REFDATA_DEST_DIR={self._get_refdata_loc(entity_id)}")
+            # TODO CLEANUP need to delete this and the JAWS written completion file
+            # see https://jaws-docs.jgi.doe.gov/en/latest/jaws/jaws_refdata.html#adding-data-to-refdata-directory
+            command.append(
+                "export CTS_COMPLETION_FILE_LOCATION="
+                f"{self._get_refdata_file_change_path(entity_id)}"
+            )
+            command.append(
+                f"export CTS_COMPLETION_FILE_CONTENTS={self._get_refdata_loc(entity_id)}"
+            )
+        command.append(f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}')
+        return command
+
     async def _process_manifest(
         self,
         manifest: io.BytesIO,
@@ -535,45 +583,48 @@ class NERSCManager:
         callback_url: str,
         filename: str,
         task_type: str,
-        mode="manifest",
+        total_bytes: int,
+        mode: str = "manifest",
         error_json_file_location: str = None,
         container_logs_location: str = None,  # this is expected to be present if the above is
-        refdata: bool = False
     ):
+        refdata = mode == "refdata_manifest"
         if refdata:
             rootpath = self._get_refdata_scratch(entity_id)
         else:
             rootpath = self._get_job_scratch(entity_id)
         manifestpath = rootpath / filename
         cli = self._client_provider()
-        dt = await cli.compute(_DT_TARGET)
+        perl = await cli.compute(Machine.perlmutter)
         # TODO CLEANUP manifests after some period of time
-        await self._upload_file_to_nersc(dt, manifestpath, bio=manifest)
-        command = [
-            f"{_DT_WORKAROUND}; ",
-            f"export CTS_MODE={mode}; ",
-            f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
-            f"export CTS_MANIFEST_LOCATION={manifestpath}; ",
-            f"export CTS_RESULT_FILE_LOCATION={rootpath / task_type}_result.json; ",
-            f"export CTS_LOG_FILE_LOCATION={rootpath / task_type}_log.txt; ",
-            f"export CTS_CALLBACK_URL={callback_url}; ",
-            f"export SCRATCH=$SCRATCH; ",
-            f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
-        ]
-        if error_json_file_location:
-            command.insert(2, f"export CTS_ERRORS_JSON_LOCATION={error_json_file_location}; ")
-            command.insert(3, f"export CTS_CONTAINER_LOGS_LOCATION={container_logs_location}; ")
-        command = "".join(command)
-        task_id = (await self._run_command(cli, _DT_TARGET, command))["task_id"]
+        await self._upload_file_to_nersc(perl, manifestpath, bio=manifest)
+        command = self._build_process_manifest_command(
+            entity_id,
+            callback_url,
+            mode,
+            manifestpath,
+            rootpath / task_type,
+            error_json_file_location=error_json_file_location,
+            container_logs_location=container_logs_location,
+        )
+        script = _SBATCH_SCRIPT_TEMPLATE.format(
+            time=_seconds_to_slurm_time(_compute_sbatch_time_sec(total_bytes)),
+            body="\n".join(command),
+        )
+        # upload script to make debugging easier
+        scriptpath = rootpath / f"{task_type}_submit.sh"
+        await self._upload_file_to_nersc(perl, scriptpath, bio=io.BytesIO(script.encode()))
+        job = await perl.submit_job(str(scriptpath))
+        job_id = str(job.jobid)
         logging.getLogger(__name__).info(
-            f"Created {task_type} task for {'refdata' if refdata else 'job'}",
+            f"Submitted {task_type} Slurm job for {'refdata' if refdata else 'job'}",
             extra={
-                logfields.NERSC_TASK_ID: task_id,
+                logfields.NERSC_JOB_ID: job_id,
                 logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id
             }
         )
-        return task_id
-    
+        return job_id
+
     def _create_download_manifest(
         self,
         download_id: str,
@@ -593,13 +644,13 @@ class NERSCManager:
             raise ValueError("All the S3 objects must have a CRC64/NVME checksum")
         manifest = self._base_manifest("download", concurrency, insecure_ssl)
         if refdata:
-            sc = self._get_refdata_loc(download_id)
-            # TODO CLEANUP need to delete this and the JAWS written completion file
-            # see https://jaws-docs.jgi.doe.gov/en/latest/jaws/jaws_refdata.html#adding-data-to-refdata-directory
-            manifest["completion-file"] = str(self._get_refdata_file_change_path(download_id))
-            manifest["completion-file-contents"] = str(sc)
+            # The final refdata location and completion file live under the DTN-only-writable
+            # refdata root, so they can't be written directly by this manifest (it runs on a
+            # Perlmutter login node). Files are staged here and moved into place, and the
+            # completion file written, by a DTN-side step at the end of the Slurm job.
+            sc = self._get_refdata_staging_loc(download_id)
         else:
-            manifest["cache-dir"] = str(self._nersc_dtn_file_cache_path)
+            manifest["cache-dir"] = str(self._nersc_perlmutter_file_cache_path)
         manifest["files"] = []
         for url, meta in zip(presigned_urls, objects):
             fileman = {
@@ -700,7 +751,7 @@ class NERSCManager:
         sc = self._get_refdata_scratch(entity_id) if refdata else self._get_job_scratch(entity_id)
         path = sc / f"{op}_result.json"
         res = await self._download_json_file_from_NERSC(
-            Machine.dtns, path, no_exception_on_missing_file=True
+            Machine.perlmutter, path, no_exception_on_missing_file=True
         )
         if not res:
             return TransferResult(state=TransferState.INCOMPLETE), None
@@ -725,7 +776,7 @@ class NERSCManager:
         cli = self._client_provider()
         await self._generate_and_load_job_files_to_nersc(cli, job, file_download_concurrency)
         perl = await cli.compute(Machine.perlmutter)
-        pre = self._get_job_scratch(job.id, perlmutter=True)
+        pre = self._get_job_scratch(job.id)
         try:
             res = await perl.run(_JAWS_COMMAND_TEMPLATE.format(
                 job_id=job.id,
@@ -775,7 +826,7 @@ class NERSCManager:
         downloads = {pre / fp: f for fp, f in zip(manifest_file_paths, manifest_files)}
         downloads[pre / _JAWS_INPUT_WDL] = wdljson.wdl
         downloads[pre / _JAWS_INPUT_JSON] = json.dumps(wdljson.input_json, indent=4)
-        dt = await cli.compute(_DT_TARGET)
+        perl = await cli.compute(Machine.perlmutter)
         semaphore = asyncio.Semaphore(concurrency)
         async def sem_coro(coro):
             async with semaphore:
@@ -785,7 +836,7 @@ class NERSCManager:
             async with asyncio.TaskGroup() as tg:
                 for path, file in downloads.items():
                     coros.append(self._upload_file_to_nersc(
-                        dt, path, bio=io.BytesIO(file.encode())
+                        perl, path, bio=io.BytesIO(file.encode())
                     ))
                     tg.create_task(sem_coro(coros[-1]))
         except ExceptionGroup as eg:
@@ -822,8 +873,8 @@ class NERSCManager:
         callback_url - the URL to GET as a callback for when the upload is complete.
         concurrency - the number of simultaneous uploads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
-        
-        Returns the NERSC task ID for the upload.
+
+        Returns the NERSC Slurm job ID for the upload.
         """
         _not_falsy(job, "job")
         _not_falsy(files_to_urls, "files_to_urls")
@@ -831,11 +882,10 @@ class NERSCManager:
         cburl = _require_string(callback_url, "callback_url")
         _check_num(concurrency, "concurrency")
         cli = self._client_provider()
-        dtns = await cli.compute(Machine.dtns)
+        perl = await cli.compute(Machine.perlmutter)
         rootpath = self._get_job_scratch(job.id)
         checksum_file = _CRC64NVME_CHECKSUMS_JSON_FILE_NAME
         command = [  # similar to the command in _process_manifest
-            f"{_DT_WORKAROUND}; ",
             f"export CTS_MODE=checksum; ",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_RESULT_FILE_LOCATION={rootpath / 'upload_checksums_result.json'}; ",
@@ -848,23 +898,26 @@ class NERSCManager:
         command = "".join(command)
         # May want to make this non-blocking if calculating checksums takes too long
         # Would require another set of job states and another callback URL so try to avoid
-        await dtns.run(command)
-        
+        await perl.run(command)
+
         checksumpath = rootpath / checksum_file
-        checksums = await self._download_json_file_from_NERSC(Machine.dtns, checksumpath)
+        checksums = await self._download_json_file_from_NERSC(Machine.perlmutter, checksumpath)
         s3_paths = []
         crc64nvmes = []
         nersc_rel_paths = []
+        total_bytes = 0
         for c in checksums["files"]:
             s3_paths.append(Path(c["s3path"]))
             crc64nvmes.append(c["crc64nvme"])
             nersc_rel_paths.append(c["respath"])
+            total_bytes += c["size"]
         presigns = await files_to_urls(s3_paths, crc64nvmes)
-        return await self.upload_presigned_files(
+        return await self._upload_presigned_files(
             job.id,
             [os.path.join(jaws_output_dir, nrp) for nrp in nersc_rel_paths],
             presigns,
             cburl,
+            total_bytes,
             concurrency,
             insecure_ssl,
         )
@@ -882,7 +935,7 @@ class NERSCManager:
         path = self._get_job_scratch(job.id) / _CRC64NVME_CHECKSUMS_JSON_FILE_NAME
         # This uploads the same file from NERSC again. We could put the results in a temporary DB
         # collection if it turns out to be too expensive. YAGNI 
-        checksums = await self._download_json_file_from_NERSC(Machine.dtns, path)
+        checksums = await self._download_json_file_from_NERSC(Machine.perlmutter, path)
         return {c["s3path"]: c["crc64nvme"] for c in checksums["files"]}
 
     async def upload_JAWS_log_files_on_error(
@@ -909,7 +962,7 @@ class NERSCManager:
         concurrency - the number of simultaneous uploads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
         
-        Returns the NERSC task ID for the upload.
+        Returns the NERSC Slurm job ID for the upload.
         """
         _not_falsy(job, "job")
         _not_falsy(files_to_urls, "files_to_urls")
@@ -924,7 +977,14 @@ class NERSCManager:
         
         rootpath = self._get_job_scratch(job.id)
         remotelogs = [rootpath / _JOB_LOGS / f for f in logs]
-        
+        # The extracted log files don't exist yet - they're written by the same Slurm job this
+        # method submits below, so they can't be stat'd ahead of time to size that job's wall
+        # time. Use the size of errors.json itself instead: it already exists (JAWS wrote it),
+        # a stat is instant regardless of its size, and its on-disk size is a safe upper bound
+        # for the stdout/stderr content that will be extracted from it (JSON string-escaping
+        # only inflates size relative to the raw decoded content).
+        total_bytes = await self._get_remote_file_sizes([errfilepath])
+
         manifest = self._create_upload_manifest(remotelogs, presigns, concurrency, insecure_ssl)
         return await self._process_manifest(
             manifest,
@@ -932,10 +992,28 @@ class NERSCManager:
             cburl,
             "error_log_upload_manifest.json",
             "error_log",
+            total_bytes,
             mode="errorsjson",
             error_json_file_location=errfilepath,
             container_logs_location=str(rootpath / _JOB_LOGS)
         )
+
+    async def _get_remote_file_sizes(self, paths: list[Path]) -> int:
+        """
+        Get the total size in bytes of a list of files on NERSC. Raises an error if any file
+        does not exist.
+        """
+        cli = self._client_provider()
+        perl = await cli.compute(Machine.perlmutter)
+        total = 0
+        # TODO PERF parallelize the ls calls if this ever needs to handle more than a handful
+        #           of paths
+        for p in paths:
+            entries = await perl.ls(str(p))
+            if not entries:
+                raise ValueError(f"File does not exist on NERSC: {p}")
+            total += int(entries[0].size)
+        return total
 
     async def setup_refdata_transfer_callback(
         self, refdata: models.ReferenceData, site: sites.Cluster, callback_url: str
@@ -960,9 +1038,14 @@ class NERSCManager:
         sfcli = AsyncClient(api_base_url="https://api.nersc.gov/api/beta", access_token=token)
         payload = {
             "path_condition": {
-                "path": str(self._get_refdata_file_complete_path(refdata.id, site)), 
-                "machine": Machine.dtns.value
-            }, 
+                "path": str(self._get_refdata_file_complete_path(refdata.id, site)),
+                # The completion file lives in the DTN-only-writable refdata area, but that
+                # area is readable (just not writable) from Perlmutter login nodes, so the
+                # watch itself can run from either machine.
+                # TODO VERIFY confirm against a live NERSC callback (beta endpoint, no
+                #      automated test coverage) before relying on this in production.
+                "machine": Machine.perlmutter.value
+            },
             "url": cb_url,
             # seconds. Assume that refdata transfers take less than a day. Make configurable?
             "timeout": 24 * 60 * 60,
@@ -986,7 +1069,7 @@ class NERSCManager:
         # similar to _get_transfer_result, but not similar enough to warrant DRYing things up
         path = self._get_refdata_file_complete_path(refdata.id, site)
         res = await self._download_json_file_from_NERSC(
-            Machine.dtns, path, no_exception_on_missing_file=True
+            Machine.perlmutter, path, no_exception_on_missing_file=True
         )
         if not res:
             return TransferResult(state=TransferState.INCOMPLETE)
@@ -1019,7 +1102,7 @@ class NERSCManager:
         # extra JAWS call for nothing...
         to_delete = list(jaws_output_dirs or [])  # if jaws_output_dirs is None or empty
         to_delete.append(self._get_job_scratch(_not_falsy(job, "job").id))
-        await self._delete_dtn_paths(to_delete)
+        await self._delete_paths(to_delete)
 
     async def clean_refdata(self, refdata: models.ReferenceData):
         """
@@ -1031,4 +1114,4 @@ class NERSCManager:
         Note that running this method on reference data where staging is not in a terminal
         state may result in undefined behavior.
         """
-        await self._delete_dtn_paths([self._get_refdata_scratch(refdata.id)])
+        await self._delete_paths([self._get_refdata_scratch(refdata.id)])

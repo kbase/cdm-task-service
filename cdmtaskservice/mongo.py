@@ -639,7 +639,7 @@ class MongoDAO:
             pre_doc, job_id, update, time, subjob_id, recovery_cooldown, last_update_time
         )
 
-    _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
+    _FLD_NERSC_DL_JOB = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_JOB_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
     _FLD_HTC_CLUSTER_ID = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_JOB_HTC_CLUSTER_ID}"
     _FLD_HTC_CPU_HOURS = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_CPU_HOURS}"
@@ -648,13 +648,13 @@ class MongoDAO:
     _FLD_HTC_STATS_INCOMPLETE = (
         f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_JOB_HTC_STATS_INCOMPLETE}"
     )
-    _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
-    _FLD_NERSC_LOG_UL_TASK = (
-        f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
+    _FLD_NERSC_UL_JOB = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_JOB_ID}"
+    _FLD_NERSC_LOG_UL_JOB = (
+        f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_JOB_ID}"
     )
     def _setup_field_mappings(self):
         self._FIELD_TO_KEY_AND_PUSH = {
-            UpdateField.NERSC_DOWNLOAD_TASK_ID: (self._FLD_NERSC_DL_TASK, True),
+            UpdateField.NERSC_DOWNLOAD_JOB_ID: (self._FLD_NERSC_DL_JOB, True),
             UpdateField.JAWS_RUN_ID: (self._FLD_JAWS_RUN_ID, True),
             UpdateField.HTCONDOR_CLUSTER_ID: (self._FLD_HTC_CLUSTER_ID, True),
             UpdateField.HTCONDOR_CPU_HOURS: (self._FLD_HTC_CPU_HOURS, False),
@@ -664,10 +664,10 @@ class MongoDAO:
             UpdateField.CPU_HOURS: (models.FLD_COMMON_CPU_HOURS, False),
             UpdateField.CPU_FACTOR: (models.FLD_JOB_CPU_FACTOR, False),
             UpdateField.MAX_MEMORY: (models.FLD_COMMON_MAX_MEM, False),
-            UpdateField.NERSC_UPLOAD_TASK_ID: (self._FLD_NERSC_UL_TASK, True),
+            UpdateField.NERSC_UPLOAD_JOB_ID: (self._FLD_NERSC_UL_JOB, True),
             UpdateField.OUTPUT_FILE_PATHS: (models.FLD_COMMON_OUTPUTS, False),
             UpdateField.OUTPUT_FILE_COUNT: (models.FLD_JOB_OUTPUT_FILE_COUNT, False),
-            UpdateField.NERSC_LOG_UPLOAD_TASK_ID: (self._FLD_NERSC_LOG_UL_TASK, True),
+            UpdateField.NERSC_LOG_UPLOAD_JOB_ID: (self._FLD_NERSC_LOG_UL_JOB, True),
             UpdateField.EXIT_CODE: (models.FLD_SUBJOB_EXIT_CODE, False),
             UpdateField.RUNTIME: (models.FLD_SUBJOB_RUNTIME, False),
             UpdateField.USER_ERROR: (models.FLD_COMMON_ERROR, False),
@@ -676,7 +676,7 @@ class MongoDAO:
             UpdateField.LOG_PATH: (models.FLD_JOB_LOGPATH, False),
         }
         self._REFDATA_FIELD_TO_KEY_AND_PUSH = {
-            UpdateField.NERSC_DOWNLOAD_TASK_ID: (models.FLD_REFDATA_NERSC_DL_TASK_ID, True),
+            UpdateField.NERSC_DOWNLOAD_JOB_ID: (models.FLD_REFDATA_NERSC_DL_JOB_ID, True),
             UpdateField.USER_ERROR: (models.FLD_COMMON_ERROR, False),
             UpdateField.ADMIN_ERROR: (models.FLD_COMMON_ADMIN_ERROR, False),
             UpdateField.TRACEBACK: (models.FLD_COMMON_TRACEBACK, False),
@@ -1371,7 +1371,7 @@ class MongoDAO:
         # to ensure unique IDs
 
         # TDOO REFDATA add a force option to allow for file overwrites if needed
-        r = refdata.model_dump()
+        r = refdata.model_dump(exclude_none=True)
         # Could add a check in the refdata model that rds have > 0 statuses,
         # statuses have > 0 transitions and the last
         # transition == the redfdata cluster state... probably not necessary.
@@ -1395,7 +1395,7 @@ class MongoDAO:
         refdata_id - the ID of the refdata to modify.
         rds - the information for the new site.
         """
-        s = _not_falsy(rds, "rds").model_dump()
+        s = _not_falsy(rds, "rds").model_dump(exclude_none=True)
         s[_FLD_UPDATE_TIME] = rds.transition_times[-1].time
         result = await self._col_refdata.update_one(
             {
