@@ -33,6 +33,7 @@ from cdmtaskservice.mongo import (
     NoSuchSubJobError,
     ReferenceDataExistsError,
 )
+from cdmtaskservice.pipelines.registry import NoSuchPipelineError
 from cdmtaskservice.routes import ClientLifeTimeError
 from cdmtaskservice.s3.client import (
     S3BucketInaccessibleError,
@@ -89,6 +90,7 @@ _ERR_MAP = {
     IllegalParameterError: ErrorMapping(ErrorType.ILLEGAL_PARAMETER, _H400),
     UnsupportedOperationError: ErrorMapping(ErrorType.UNSUPPORTED_OP, _H400),
     NoJobLogsError: ErrorMapping(ErrorType.NO_JOB_LOGS, _H404),
+    NoSuchPipelineError: ErrorMapping(ErrorType.NO_SUCH_PIPELINE, _H404),
 }
 
 

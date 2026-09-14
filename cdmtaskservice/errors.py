@@ -99,6 +99,9 @@ class ErrorType(Enum):
     NO_JOB_LOGS =                (40070, "No logs available")
     """ The job logs were not available. """
 
+    NO_SUCH_PIPELINE =           (40080, "No such pipeline")
+    """ The pipeline, or pipeline version, was not found in the system. """
+
     IMAGE_TAG_EXISTS =           (50000, "Image tag exists")
     """ The tag for the image already exists in the system. """
 
