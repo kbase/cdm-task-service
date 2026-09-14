@@ -1,0 +1,81 @@
+#v2026.04.10
+# Supports multiplatform (amd64+arm64) on release, single platform otherwise. Max image size ~14GB.
+name: Build, Publish and Scan Docker Image (Customizable)
+on:
+  workflow_dispatch:
+    inputs:
+      free_disk_space:
+        description: 'Free disk space before build (adds ~1-2 min, useful for large images)'
+        type: boolean
+        default: false
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
+    branches: [ "main", "master", "develop" ]
+  release:
+    types: [published]
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+jobs:
+  build-push-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Free Disk Space (Ubuntu)
+        if: ${{ inputs.free_disk_space || (github.event_name == 'release' && github.event.action == 'published') }}
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      - name: Build and push Docker image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ github.event_name == 'release' && github.event.action == 'published' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          sbom: ${{ github.event_name == 'release' && github.event.action == 'published' }}
+      - name: Run Trivy vulnerability scanner
+        if: github.event_name != 'release'
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
+      - name: Display vulnerability summary and fail on CRITICAL
+        if: always() && github.event_name != 'release'
+        run: |
+          set -o pipefail
+          echo "## Vulnerability Summary" | tee -a $GITHUB_STEP_SUMMARY
+          jq -r '.Results[]? | select(.Vulnerabilities) | "### \(.Target) (\(.Type))", (.Vulnerabilities | sort_by(.Severity) | group_by(.Severity) | map("\(.[0].Severity): \(length)") | .[])' trivy-results.json | tee -a $GITHUB_STEP_SUMMARY || echo "No vulnerabilities found" | tee -a $GITHUB_STEP_SUMMARY
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          echo "To see full details, run: trivy image ${{ fromJSON(steps.meta.outputs.json).tags[0] }}" | tee -a $GITHUB_STEP_SUMMARY
+          if jq -e '.Results[]? | select(.Vulnerabilities) | .Vulnerabilities[] | select(.Severity == "CRITICAL")' trivy-results.json > /dev/null; then
+            echo "::error::CRITICAL vulnerabilities found! Build failed."
+            exit 1
+          fi
