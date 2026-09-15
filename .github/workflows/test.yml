@@ -54,7 +54,9 @@ jobs:
 
         # set up crane
         # don't bother to verify provenance here
-        curl -sL "https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz" > go-containerregistry.tar.gz
+        curl -sL -f --retry 5 --retry-all-errors --retry-connrefused \
+          "https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz" \
+          > go-containerregistry.tar.gz
         tar -zxf go-containerregistry.tar.gz
         export CRANE_EXE_PATH=`pwd`/crane
         
