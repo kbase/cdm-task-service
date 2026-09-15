@@ -11,7 +11,7 @@ from pathlib import Path
 from cdmtaskservice.models import JobInput, S3FileWithDataID
 
 
-def determine_file_locations(job_input: JobInput) -> dict[S3FileWithDataID | str, Path]:
+def determine_file_locations(job_input: JobInput) -> dict[S3FileWithDataID, Path]:
     """
     Given job input, determine where files should be placed given a set of input roots.
     
@@ -24,23 +24,22 @@ def determine_file_locations(job_input: JobInput) -> dict[S3FileWithDataID | str
     ret = {}
     seen = {}
     for i, f in enumerate(job_input.input_files):
-        fstr = f.file if isinstance(f, S3FileWithDataID) else f
         # if the trie is empty or only contains "" could speed things up by not translating the
         # path
-        idpath = _path_to_id_string(fstr, pathseg_to_id)
+        idpath = _path_to_id_string(f.file, pathseg_to_id)
         pref = [p for p in trie.prefixes(idpath) if p != idpath]
         if pref:
             pref = sorted(pref, key=lambda x: len(x))[-1]
             loc = _id_string_to_path(idpath.removeprefix(pref + "/"), pathseg_to_id)
         else:
-            loc = os.path.basename(fstr)
+            loc = os.path.basename(f.file)
         if loc in seen:
             raise InputFileCollisionError(
-                f"Input files '{fstr}' at index {i} and '{seen[loc][0]}' "
+                f"Input files '{f.file}' at index {i} and '{seen[loc][0]}' "
                 + f"at index {seen[loc][1]} collide at path "
                 + f"'{job_input.params.input_mount_point}/{loc}'")
         ret[f] = Path(loc)
-        seen[loc] = (fstr, i)
+        seen[loc] = (f.file, i)
     return ret
 
 
@@ -58,7 +57,7 @@ def _setup_trie(job_input: JobInput) -> (marisa_trie.Trie, bidict[str, str]):
             else:
                 id_ = _process_path(ir, id_, pathseg_to_id)
     for f in job_input.input_files:
-        id_ = _process_path(f.file if isinstance(f, S3FileWithDataID) else f, id_, pathseg_to_id)
+        id_ = _process_path(f.file, id_, pathseg_to_id)
     # Make all IDs the same length so an ID of 2 can't prefix and ID of 22, etc.
     # Could probably save some space using base64 or something... YAGNI for now
     digits = int(math.log10(len(pathseg_to_id))) + 1

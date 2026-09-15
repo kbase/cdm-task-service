@@ -770,9 +770,7 @@ class NERSCManager:
         file_download_concurrency - the number of files at one time to download to NERSC.
         """
         _check_num(file_download_concurrency, "file_download_concurrency")
-        if not _not_falsy(job, "job").job_input.inputs_are_S3File():
-            raise ValueError("Job files must be S3File objects")
-        site = get_jaws_site(job.job_input.cluster)
+        site = get_jaws_site(_not_falsy(job, "job").job_input.cluster)
         cli = self._client_provider()
         await self._generate_and_load_job_files_to_nersc(cli, job, file_download_concurrency)
         perl = await cli.compute(Machine.perlmutter)
