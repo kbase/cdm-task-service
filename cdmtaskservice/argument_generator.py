@@ -64,10 +64,6 @@ class ArgumentGenerator:
         # If the kbase site ever supports manifest files this will need more thought as it
         # will be run in a context where only one manifest file exists vs. a list
         self._job = _not_falsy(job, "job")
-        if not job.job_input.inputs_are_S3File():
-            raise ValueError("input files must be S3 files with a checksum")
-        if job.job_input.script and not isinstance(job.job_input.script, models.S3File):
-            raise ValueError("script must be an S3 file with a checksum")
         self._mfl = manifest_file_list
         param = job.job_input.params.get_file_parameter()
         if param and param.type is models.ParameterType.MANIFEST_FILE and (

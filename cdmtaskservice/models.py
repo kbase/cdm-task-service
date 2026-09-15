@@ -480,7 +480,12 @@ class S3File(BaseModel):
         min_length=CRC64NVME_B64ENC_LENGTH,
         max_length=CRC64NVME_B64ENC_LENGTH,
     )] = None
-    
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_path_string(cls, v):
+        return {"file": v} if isinstance(v, str) else v
+
     @field_validator("file", mode="before")
     @classmethod
     def _check_file(cls, v):
@@ -632,7 +637,7 @@ class JobInput(JobInputPreview):
     """
     model_config = ConfigDict(extra='forbid')
 
-    input_files: Annotated[list[str] | list[S3FileWithDataID], Field(
+    input_files: Annotated[list[S3FileWithDataID], Field(
         examples=[
             [{
                 "file": "mybucket/foo/bat",
@@ -655,7 +660,7 @@ class JobInput(JobInputPreview):
         # multiple file sets can be combined in a JobInput
         max_length=10000,
     )]
-    script: Annotated[str | S3File | None, Field(
+    script: Annotated[S3File | None, Field(
         examples=["mybucket/foo/script.sh"],
         description="A user-provided script, either as a file path string or a data "
             + "structure including the file path and optionally a CRC64/NVME checksum. "
@@ -671,31 +676,9 @@ class JobInput(JobInputPreview):
             + "allow script execution.",
     )] = None
 
-    @field_validator("input_files", mode="before")
-    @classmethod
-    def _check_input_files(cls, v):
-        if v is None:
-            return None
-        newlist = []
-        for i, f in enumerate(v):
-            if isinstance(f, str):
-                newlist.append(_validate_s3_path(f, index=i))
-            else:
-                newlist.append(f)
-        return newlist
-
-    @field_validator("script", mode="before")
-    @classmethod
-    def _check_script(cls, v):
-        if isinstance(v, str):
-            return _validate_s3_path(v)
-        return v
-    
     @field_validator("input_files", mode="after")
     @classmethod
     def _check_data_ids(cls, v):
-        if not isinstance(v[0], S3FileWithDataID):
-            return v
         data_ids = bool(v[0].data_id)
         for f in v:
             if bool(f.data_id) is not data_ids:
@@ -710,10 +693,7 @@ class JobInput(JobInputPreview):
             # manifest file format is ignored, but not necc None, if type is not manifest file
             and fp.type is ParameterType.MANIFEST_FILE
             and fp.manifest_file_format is ManifestFileFormat.DATA_IDS
-            and (
-                not isinstance(self.input_files[0], S3FileWithDataID)
-                or not self.input_files[0].data_id
-            )
+            and not self.input_files[0].data_id
         ):
             raise ValueError(
                 "If a manifest file with data IDs is specified, "
@@ -729,13 +709,7 @@ class JobInput(JobInputPreview):
             )
         return self
 
-    def inputs_are_S3File(self) -> bool:
-        """
-        Returns True if the inputfiles are of type S3FileWithDataID, False otherwise.
-        """
-        return isinstance(self.input_files[0], S3FileWithDataID)
-        
-    def get_files_per_container(self) -> list[list[S3FileWithDataID | str]]:
+    def get_files_per_container(self) -> list[list[S3FileWithDataID]]:
         """
         Returns the input files split up by container.
         """

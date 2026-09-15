@@ -24,7 +24,9 @@ jobs:
           - python-version: "3.12.13"
             mongo: "mongodb-linux-x86_64-ubuntu2204-7.0.18"
             minio: "2025-02-07T23-21-09Z"  # minimum supported version
+            minio_sha256: "5a1b5bc661f0b8fd55eee530ea472205e77624718e31f7b4402bc269299501d5"
             mc: "2024-08-13T05-33-17Z"
+            mc_sha256: "279825b9b3761e6f39f931bb4984d3bbf664af5510cdbe3dea2a3c9e4b518e19"
 
     steps:
     
@@ -54,7 +56,9 @@ jobs:
 
         # set up crane
         # don't bother to verify provenance here
-        curl -sL "https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz" > go-containerregistry.tar.gz
+        curl -sL -f --retry 5 --retry-all-errors --retry-connrefused \
+          "https://github.com/google/go-containerregistry/releases/download/$CRANE_VER/go-containerregistry_Linux_x86_64.tar.gz" \
+          > go-containerregistry.tar.gz
         tar -zxf go-containerregistry.tar.gz
         export CRANE_EXE_PATH=`pwd`/crane
         
@@ -64,11 +68,18 @@ jobs:
         export MONGOD=`pwd`/${{matrix.mongo}}/bin/mongod
         
         # set up Minio
-        wget -q https://dl.minio.io/server/minio/release/linux-amd64/archive/minio.RELEASE.${{matrix.minio}} -O minio
+        # dl.minio.io no longer serves open-source Minio/mc releases; pull from GitHub releases instead
+        curl -sL -f --retry 5 --retry-all-errors --retry-connrefused \
+          "https://github.com/minio/minio/releases/download/RELEASE.${{matrix.minio}}/minio.linux-amd64.RELEASE.${{matrix.minio}}" \
+          -o minio
+        echo "${{matrix.minio_sha256}}  minio" | sha256sum -c -
         chmod a+x minio
         export MINIOD=`pwd`/minio
-        
-        wget -q https://dl.minio.io/client/mc/release/linux-amd64/archive/mc.RELEASE.${{matrix.mc}} -O mc
+
+        curl -sL -f --retry 5 --retry-all-errors --retry-connrefused \
+          "https://github.com/minio/mc/releases/download/RELEASE.${{matrix.mc}}/mc.linux-amd64.RELEASE.${{matrix.mc}}" \
+          -o mc
+        echo "${{matrix.mc_sha256}}  mc" | sha256sum -c -
         chmod a+x mc
         export MINIO_MC=`pwd`/mc
         

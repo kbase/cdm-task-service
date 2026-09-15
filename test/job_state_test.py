@@ -307,7 +307,7 @@ def _make_job_input(
         memory=memory_bytes,
         runtime=datetime.timedelta(seconds=runtime_sec),
         num_containers=num_containers,
-        input_files=input_files or [_INPUT_FILE],
+        input_files=input_files or [models.S3FileWithDataID(file=_INPUT_FILE)],
         output_dir=output_dir,
         image=image,
         params=models.Parameters(),

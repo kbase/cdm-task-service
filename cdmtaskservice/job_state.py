@@ -215,7 +215,7 @@ class JobState:
         if not job_input.script:
             return None
         script = job_input.script
-        path = script.file if isinstance(script, models.S3File) else script
+        path = script.file
         if self._allowedpaths:
             if not any([path.startswith(ap) for ap in self._allowedpaths]):
                 raise S3PathInaccessibleError(
@@ -225,8 +225,7 @@ class JobState:
             raise IllegalParameterError(
                 f"The S3 path '{meta.path}' does not have a CRC64/NVME checksum"
             )
-        if (isinstance(script, models.S3File) and script.crc64nvme
-                and script.crc64nvme != meta.crc64nvme):
+        if script.crc64nvme and script.crc64nvme != meta.crc64nvme:
             raise ChecksumMismatchError(
                 f"The expected CRC64/NMVE checksum '{script.crc64nvme}' for the path "
                 + f"'{script.file}' does not match the actual checksum "
@@ -235,10 +234,7 @@ class JobState:
         return models.S3File.model_construct(file=meta.path, crc64nvme=meta.crc64nvme)
 
     async def _check_and_update_files(self, job_input: models.JobInput):
-        paths = [
-            f.file if isinstance(f, models.S3FileWithDataID) else f
-                 for f in job_input.input_files
-        ]
+        paths = [f.file for f in job_input.input_files]
         if self._allowedpaths:
             for p in paths:
                 if not any([p.startswith(ap) for ap in self._allowedpaths]):
@@ -253,17 +249,14 @@ class JobState:
                 raise IllegalParameterError(
                     f"The S3 path '{m.path}' does not have a CRC64/NVME checksum"
                 )
-            data_id = None
-            if isinstance(f, models.S3FileWithDataID):
-                data_id = f.data_id
-                if f.crc64nvme and f.crc64nvme != m.crc64nvme:
-                    raise ChecksumMismatchError(
-                        f"The expected CRC64/NMVE checksum '{f.crc64nvme}' for the path "
-                        + f"'{f.file}' does not match the actual checksum '{m.crc64nvme}'"
-                    )
+            if f.crc64nvme and f.crc64nvme != m.crc64nvme:
+                raise ChecksumMismatchError(
+                    f"The expected CRC64/NMVE checksum '{f.crc64nvme}' for the path "
+                    + f"'{f.file}' does not match the actual checksum '{m.crc64nvme}'"
+                )
             # no need to validate the path again
             new_input.append(models.S3FileWithDataID.model_construct(
-                file=m.path, crc64nvme=m.crc64nvme, data_id=data_id)
+                file=m.path, crc64nvme=m.crc64nvme, data_id=f.data_id)
             )
         return new_input, meta
 
