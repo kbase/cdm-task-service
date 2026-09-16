@@ -31,6 +31,7 @@ from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice import logfields
 from cdmtaskservice import models_errors
 from cdmtaskservice.pipelines.definition import PipelineInputValidationError
+from cdmtaskservice.pipelines import routes as pipeline_routes
 from cdmtaskservice.refserv import routes as refroutes
 from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
 from cdmtaskservice import routes
@@ -231,6 +232,7 @@ def create_app():
     app.include_router(routes.ROUTER_JOBS)
     app.include_router(routes.ROUTER_IMAGES)
     app.include_router(routes.ROUTER_REFDATA)
+    app.include_router(pipeline_routes.ROUTER_PIPELINES)
     app.include_router(routes.ROUTER_ADMIN)
     app.include_router(routes.ROUTER_CALLBACKS)
     app.include_router(routes.ROUTER_EXTERNAL_EXEC)

@@ -20,6 +20,7 @@ from cdmtaskservice.arg_checkers import (
     verify_aware_datetime
 )
 from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
+from cdmtaskservice.pipelines.models import AdminPipelineJob, PipelineJob
 from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 
 
@@ -65,6 +66,7 @@ class MongoDAO:
         self._col_sites = self._db.sites
         self._col_images = self._db.images
         self._col_jobs = self._db.jobs
+        self._col_pipeline_jobs = self._db.pipeline_jobs
         self._col_subjobs = self._db.subjobs
         self._col_exitcodes = self._db.exitcodes
         self._col_refdata = self._db.refdata
@@ -139,6 +141,11 @@ class MongoDAO:
                 },
             ),
         ])
+        # Only the unique ID index is needed for now; add more as pipeline job querying is built.
+        await self._col_pipeline_jobs.create_indexes([
+            IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
+        ])
+        # TODO PIPELINES will need more indexes for listing
         statefield = f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_COMMON_STATE_TRANSITION_STATE}"
         retryfield = f"{models.FLD_COMMON_TRANS_TIMES}.{_FLD_RETRY_ATTEMPT}"
         await self._col_subjobs.create_indexes([
@@ -348,6 +355,34 @@ class MongoDAO:
         # don't bother checking for duplicate key exceptions since the service is supposed
         # to ensure unique IDs
         await self._col_jobs.insert_one(jobd)
+
+    async def save_pipeline_job(self, job: AdminPipelineJob):
+        """ Save a pipeline job. Job IDs are expected to be unique. """
+        _not_falsy(job, "job")
+        jobd = job.model_dump(exclude_none=True)
+        jobd[_FLD_UPDATE_TIME] = job.transition_times[-1].time
+        jobd[_FLD_RETRY_ATTEMPT] = 0  # unused for now
+        self._add_retry_attempt_to_trans_times(jobd)
+        # don't bother checking for duplicate key exceptions since the service is supposed
+        # to ensure unique IDs
+        await self._col_pipeline_jobs.insert_one(jobd)
+
+    async def get_pipeline_job(
+        self, job_id: str, as_admin: bool = False
+    ) -> PipelineJob | AdminPipelineJob:
+        """
+        Get a pipeline job by its ID.
+
+        job_id - the job ID.
+        as_admin - get additional details about the job.
+        """
+        doc = await self._col_pipeline_jobs.find_one(
+            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
+        )
+        if not doc:
+            raise NoSuchJobError(f"No pipeline job with ID '{job_id}' exists")
+        doc = self._clean_doc(doc)
+        return AdminPipelineJob(**doc) if as_admin else PipelineJob(**doc)
 
     async def get_job(
         self, job_id: str, as_admin: bool = False

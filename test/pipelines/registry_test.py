@@ -16,6 +16,9 @@ class _FakeInput(PipelineInput):
     def get_s3_files(self):
         return []
 
+    def set_s3_files(self, resolved):
+        return self
+
 
 def _fake_build(pipeline_input, file_locations):
     raise NotImplementedError()

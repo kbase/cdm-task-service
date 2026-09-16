@@ -13,6 +13,7 @@ from cdmtaskservice import models
 from cdmtaskservice import sites
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
+from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, S3PathInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
@@ -68,6 +69,7 @@ def _make_job_state(
         refdata=create_autospec(Refdata, spec_set=True, instance=True),
         coro_manager=create_autospec(CoroutineWrangler, spec_set=True, instance=True),
         flow_manager=create_autospec(JobFlowManager, spec_set=True, instance=True),
+        pipeline_registry=create_autospec(PipelineRegistry, spec_set=True, instance=True),
         allowed_paths=[],
         log_path="cts-logs/",
         job_max_cpu_hours=job_max_cpu_hours,

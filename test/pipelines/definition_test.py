@@ -19,6 +19,9 @@ class _FakeInput(PipelineInput):
     def get_s3_files(self):
         return []
 
+    def set_s3_files(self, resolved):
+        return self
+
 
 class _FakeInputWithField(PipelineInput):
     value: int
@@ -26,12 +29,18 @@ class _FakeInputWithField(PipelineInput):
     def get_s3_files(self):
         return []
 
+    def set_s3_files(self, resolved):
+        return self
+
 
 class _FakeInputWithFiles(PipelineInput):
     files: list[models.S3File]
 
     def get_s3_files(self):
         return self.files
+
+    def set_s3_files(self, resolved):
+        return self.model_copy(update={"files": [resolved[f.file] for f in self.files]})
 
 
 def _build(pipeline_input, file_locations):

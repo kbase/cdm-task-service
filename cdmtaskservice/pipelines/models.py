@@ -20,6 +20,13 @@ from cdmtaskservice import models, sites
 from cdmtaskservice.s3.paths import validate_path, S3PathSyntaxError
 
 
+FLD_PIPELINE_JOB_INPUT_CLUSTER = "cluster"
+""" The field name of the cluster in a PipelineJobInput. """
+
+FLD_PIPELINE_JOB_INPUT_INPUT = "input"
+""" The field name of the pipeline input in a PipelineJobInput. """
+
+
 SemverVersion = Annotated[
     semver.Version,
     PlainValidator(lambda v: v if isinstance(v, semver.Version) else semver.Version.parse(v)),
@@ -45,8 +52,8 @@ class PipelineJobInput(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    cluster: Annotated[sites.PipelineCluster, Field(
-        examples=[sites.PipelineCluster.PERLMUTTER_JAWS.value],
+    cluster: Annotated[sites.Cluster, Field(
+        examples=[sites.Cluster.PERLMUTTER_JAWS.value],
         description="The cluster on which to run the pipeline.",
     )]
     input: Annotated[dict[str, Any], Field(

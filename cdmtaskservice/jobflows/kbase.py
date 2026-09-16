@@ -214,6 +214,12 @@ class KBaseRunner(JobFlow):
             ) for i in range(job_input.num_containers)
         ])
 
+    async def preflight_pipeline(self, user: CTSUser, job_id: str):
+        """ Throws an exception as pipelines are not supported for this job flow. """
+        raise UnsupportedOperationError(
+            f"Pipelines are not supported for the {self.CLUSTER.value} job flow"
+        )
+
     async def get_subjobs(self, job_id: str, container_num: int = None
     ) -> models.SubJob | list[models.SubJob]:
         """

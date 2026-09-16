@@ -13,7 +13,7 @@ from cdmtaskservice.pipelines.models import (
 
 def _job_input(**overrides) -> PipelineJobInput:
     kwargs = dict(
-        cluster=sites.PipelineCluster.PERLMUTTER_JAWS,
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
         input={"output_prefix": "proj-xyz"},
         pipeline="readsqc",
         version=semver.Version.parse("0.1.0"),
@@ -26,7 +26,7 @@ def _job_input(**overrides) -> PipelineJobInput:
 def test_pipeline_job_input():
     pji = _job_input()
 
-    assert pji.cluster == sites.PipelineCluster.PERLMUTTER_JAWS
+    assert pji.cluster == sites.Cluster.PERLMUTTER_JAWS
     assert pji.input == {"output_prefix": "proj-xyz"}
     assert pji.pipeline == "readsqc"
     assert pji.version == semver.Version.parse("0.1.0")
@@ -44,7 +44,7 @@ def test_pipeline_job_input_serializes_version_as_string():
     pji = _job_input()
 
     assert pji.model_dump() == {
-        "cluster": sites.PipelineCluster.PERLMUTTER_JAWS.value,
+        "cluster": sites.Cluster.PERLMUTTER_JAWS.value,
         "input": {"output_prefix": "proj-xyz"},
         "pipeline": "readsqc",
         "version": "0.1.0",

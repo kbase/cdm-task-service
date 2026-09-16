@@ -97,6 +97,34 @@ def test_input_paired_multiple_files():
     assert inp.get_s3_files() == [_F1, f3, _F2, f4]
 
 
+def test_set_s3_files_interleaved():
+    inp = ReadsQCInput(
+        input_files=[_F1], output_prefix="proj-xyz", read_mode=ReadMode.INTERLEAVED,
+    )
+    resolved_f1 = models.S3File(file=_F1.file, crc64nvme="cccccccccccc")
+
+    new_inp = inp.set_s3_files({_F1.file: resolved_f1})
+
+    assert new_inp.input_files == [resolved_f1]
+    assert new_inp.input_files2 is None
+    assert inp.input_files == [_F1]  # original is unchanged
+
+
+def test_set_s3_files_paired():
+    inp = ReadsQCInput(
+        input_files=[_F1], input_files2=[_F2], output_prefix="proj-xyz", read_mode=ReadMode.PAIRED,
+    )
+    resolved_f1 = models.S3File(file=_F1.file, crc64nvme="aaaaaaaaaaaa")
+    resolved_f2 = models.S3File(file=_F2.file, crc64nvme="bbbbbbbbbbbb")
+
+    new_inp = inp.set_s3_files({_F1.file: resolved_f1, _F2.file: resolved_f2})
+
+    assert new_inp.input_files == [resolved_f1]
+    assert new_inp.input_files2 == [resolved_f2]
+    assert inp.input_files == [_F1]  # original is unchanged
+    assert inp.input_files2 == [_F2]
+
+
 def test_input_fail_no_input_files():
     with pytest.raises(ValidationError, match="input_files"):
         ReadsQCInput(output_prefix="proj-xyz", read_mode=ReadMode.INTERLEAVED)
