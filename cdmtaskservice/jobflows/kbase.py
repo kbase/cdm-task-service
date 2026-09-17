@@ -34,7 +34,7 @@ from cdmtaskservice.exceptions import (
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
-from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates
+from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates, EntityType
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice.mongo import (
@@ -1162,7 +1162,7 @@ class KBaseRunner(JobFlow):
             await self._refcli.stage_refdata(refdata.id, self.CLUSTER)
         except Exception as e:
             await self._updates.handle_exception(
-                e, refdata.id, "starting staging for", refdata=True
+                e, refdata.id, "starting staging for", entity_type=EntityType.REFDATA
             )
 
     async def refdata_complete(self, refdata_id: str):
