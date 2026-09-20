@@ -9,7 +9,7 @@ from typing import Coroutine, Callable, Any
 from cdmtaskservice import models
 from cdmtaskservice import sites
 from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
-from cdmtaskservice.pipelines.models import AdminPipelineJob, PipelineJobInput
+from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.mongo import (
     MissingSubJobError,
     JobUpdateConflictError,
@@ -77,9 +77,9 @@ _BASEJOB = models.AdminJobDetails(
     ]
 )
 
-_BASEPIPEJOB = AdminPipelineJob(
+_BASEPIPEJOB = pipe_models.AdminPipelineJob(
     id="pipefoo",
-    pipeline_input=PipelineJobInput(
+    pipeline_input=pipe_models.PipelineJobInput(
         cluster=sites.Cluster.PERLMUTTER_JAWS,
         input={"output_prefix": "proj-xyz"},
         pipeline="readsqc",

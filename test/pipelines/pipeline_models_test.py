@@ -3,15 +3,10 @@ from pydantic import ValidationError
 import pytest
 
 from cdmtaskservice import models, sites
-from cdmtaskservice.pipelines.models import (
-    AdminPipelineJob,
-    PipelineJob,
-    PipelineJobInput,
-    PipelineJobPreview,
-)
+from cdmtaskservice.pipelines import models as pipe_models
 
 
-def _job_input(**overrides) -> PipelineJobInput:
+def _job_input(**overrides) -> pipe_models.PipelineJobInput:
     kwargs = dict(
         cluster=sites.Cluster.PERLMUTTER_JAWS,
         input={"output_prefix": "proj-xyz"},
@@ -20,7 +15,7 @@ def _job_input(**overrides) -> PipelineJobInput:
         output_dir="mybucket/out",
     )
     kwargs.update(overrides)
-    return PipelineJobInput(**kwargs)
+    return pipe_models.PipelineJobInput(**kwargs)
 
 
 def test_pipeline_job_input():
@@ -68,7 +63,7 @@ def test_pipeline_job_input_fail_extra_field():
 
 
 def test_pipeline_job_preview():
-    pjp = PipelineJobPreview(
+    pjp = pipe_models.PipelineJobPreview(
         id="jobid",
         state=models.JobState.COMPLETE,
         transition_times=[],
@@ -87,7 +82,7 @@ def test_pipeline_job_preview():
 
 
 def test_pipeline_job():
-    pj = PipelineJob(
+    pj = pipe_models.PipelineJob(
         id="jobid",
         state=models.JobState.COMPLETE,
         transition_times=[],
@@ -107,7 +102,7 @@ def test_pipeline_job():
 
 def test_pipeline_job_with_outputs():
     outputs = [models.S3File(file="mybucket/out/results.txt")]
-    pj = PipelineJob(
+    pj = pipe_models.PipelineJob(
         id="jobid",
         state=models.JobState.COMPLETE,
         transition_times=[],
@@ -120,7 +115,7 @@ def test_pipeline_job_with_outputs():
 
 
 def test_admin_pipeline_job():
-    apj = AdminPipelineJob(
+    apj = pipe_models.AdminPipelineJob(
         id="jobid",
         state=models.JobState.COMPLETE,
         transition_times=[],
@@ -139,7 +134,7 @@ def test_admin_pipeline_job():
 
 
 def test_admin_pipeline_job_transition_times_are_admin_variant():
-    apj = AdminPipelineJob(
+    apj = pipe_models.AdminPipelineJob(
         id="jobid",
         state=models.JobState.COMPLETE,
         transition_times=[models.AdminJobStateTransition(
@@ -160,7 +155,7 @@ def test_admin_pipeline_job_transition_times_are_admin_variant():
     )]
 
     with pytest.raises(ValidationError, match="trans_id"):
-        AdminPipelineJob(
+        pipe_models.AdminPipelineJob(
             id="jobid",
             state=models.JobState.COMPLETE,
             # missing trans_id / notif_sent required by AdminJobStateTransition

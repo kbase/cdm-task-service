@@ -112,7 +112,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         async def tfunc():
             return await self._nman.get_refdata_transfer_result(refdata, self.CLUSTER), None
         await self._get_transfer_result(  # check for errors
-            tfunc, refdata.id, "Transfer", "transferring", refdata=True
+            tfunc, refdata.id, "Transfer", "transferring", entity_type=EntityType.REFDATA
         )
         await self._updates.update_refdata_state(refdata.id, refdata_complete())
 

@@ -33,7 +33,6 @@ def test_init():
         "https://github.com/kbaseincubator/ReadsQC",
         "https://docs.microbiomedata.org/workflows/chapters/3_Metagenome_Reads_QC/",
     ]
-    assert p._build_fn is v0_1_0.build
 
 
 def test_input_interleaved_minimal():
@@ -198,16 +197,15 @@ def test_build_interleaved():
     )
     locs = {_F1.file: Path("/scratch/cache/aa/reads_1.fastq.gz")}
 
-    run = v0_1_0.build(inp, locs)
+    run = inp.get_input_json(locs)
 
-    assert run.input_json == {
+    assert run == {
         "rqcfilter.proj": "proj-xyz",
         "rqcfilter.interleaved": True,
         "rqcfilter.shortRead": True,
-        "rqcfilter.rqcfilterdata": "/cdm_task_service/_pipelines/RQCFilterData/2026_09_10",
+        "rqcfilter.rqcfilterdata": "/refdata/cdm_task_service/_pipelines/RQCFilterData/2026_09_10",
         "rqcfilter.input_files": ["/scratch/cache/aa/reads_1.fastq.gz"],
     }
-    assert run.pipeline_def is None
 
 
 def test_build_paired():
@@ -222,13 +220,13 @@ def test_build_paired():
         _F2.file: Path("/scratch/cache/bb/reads_2.fastq.gz"),
     }
 
-    run = v0_1_0.build(inp, locs)
+    run = inp.get_input_json(locs)
 
-    assert run.input_json == {
+    assert run == {
         "rqcfilter.proj": "proj-xyz",
         "rqcfilter.interleaved": False,
         "rqcfilter.shortRead": True,
-        "rqcfilter.rqcfilterdata": "/cdm_task_service/_pipelines/RQCFilterData/2026_09_10",
+        "rqcfilter.rqcfilterdata": "/refdata/cdm_task_service/_pipelines/RQCFilterData/2026_09_10",
         "rqcfilter.input_fq1": ["/scratch/cache/aa/reads_1.fastq.gz"],
         "rqcfilter.input_fq2": ["/scratch/cache/bb/reads_2.fastq.gz"],
     }
@@ -242,16 +240,22 @@ def test_build_fail_missing_file_location():
     with pytest.raises(
         ValueError, match="No file location provided for S3 file 'bucket/reads_1.fastq.gz'"
     ):
-        v0_1_0.build(inp, {})
+        inp.get_input_json({})
 
 
-def test_init_build_sets_pipeline_def():
+def test_init_validate_input_then_get_input_json():
     p = v0_1_0.init()
     inp = ReadsQCInput(
         input_files=[_F1], output_prefix="proj-xyz", read_mode=ReadMode.INTERLEAVED,
     )
     locs = {_F1.file: Path("/scratch/cache/aa/reads_1.fastq.gz")}
 
-    run = p.build(inp, locs)
+    run = p.validate_input(inp).get_input_json(locs)
 
-    assert run.pipeline_def is p
+    assert run == {
+        "rqcfilter.proj": "proj-xyz",
+        "rqcfilter.interleaved": True,
+        "rqcfilter.shortRead": True,
+        "rqcfilter.rqcfilterdata": "/refdata/cdm_task_service/_pipelines/RQCFilterData/2026_09_10",
+        "rqcfilter.input_files": ["/scratch/cache/aa/reads_1.fastq.gz"],
+    }

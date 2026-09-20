@@ -8,7 +8,7 @@ from typing import Annotated
 
 from cdmtaskservice import app_state, sites
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
-from cdmtaskservice.pipelines.models import FLD_PIPELINE_JOB_INPUT_CLUSTER, PipelineJobInput
+from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.user import CTSUser
 
 ROUTER_PIPELINES = APIRouter(tags=["Pipelines - Experimental"], prefix="/pipelines")
@@ -21,7 +21,7 @@ class SubmitPipelineJobResponse(BaseModel):
     job_id: Annotated[str, Field(description="An opaque job ID.")]
 
 
-class PipelineJobInputCreate(PipelineJobInput):
+class PipelineJobInputCreate(pipe_models.PipelineJobInput):
     """ Input to a pipeline job. """
 
     # restrict to clusters registered for pipeline jobs
@@ -47,9 +47,11 @@ async def submit_pipeline_job(
     # but downstream code expects PipelineJobInput with cluster typed as Cluster.
     # model_construct skips re-validation of the already-checked fields; only cluster is
     # overridden to convert PipelineCluster -> Cluster.
-    job_input = PipelineJobInput.model_construct(**{
+    job_input = pipe_models.PipelineJobInput.model_construct(**{
         **vars(pipeline_job_input),
-        FLD_PIPELINE_JOB_INPUT_CLUSTER: sites.Cluster(pipeline_job_input.cluster.value),
+        pipe_models.FLD_PIPELINE_JOB_INPUT_CLUSTER: sites.Cluster(
+            pipeline_job_input.cluster.value
+        ),
     })
     del pipeline_job_input
     job_id = await job_state.submit_pipeline_job(job_input, user)

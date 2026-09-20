@@ -35,6 +35,9 @@ from cdmtaskservice.jobflows.container_filenames import get_filenames_for_contai
 from cdmtaskservice.manifest_files import generate_manifest_files
 from cdmtaskservice.nersc import remote
 from cdmtaskservice.nersc.paths import NERSCPaths
+from cdmtaskservice.pipelines.definition import PipelineDefinition
+from cdmtaskservice.pipelines import models as pipe_models
+from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.remote import get_cache_path
 
@@ -266,6 +269,7 @@ class NERSCManager:
         client_provider: Callable[[], AsyncClient],
         nersc_paths: NERSCPaths,
         jaws_config: JAWSConfig,
+        pipeline_registry: PipelineRegistry,
         service_group: str = "dev",
     ) -> Self:
         """
@@ -277,12 +281,15 @@ class NERSCManager:
         jaws_config - configuration for communicating with the JAWS job runner at NERSC. The JAWS
             username is expected to be a NERSC user and the same user as for the client provider.
             It is typically a collaboration account.
+        pipeline_registry - the registry of available pipeline versions.
         service_group - The service group to which this instance of the manager belongs.
             This is used to separate files at NERSC so files from different S3 instances
             (say production and development) don't collide.
         """
         _not_falsy(jaws_config, "jaws_config")
-        nm = NERSCManager(client_provider, nersc_paths, jaws_config.user, service_group)
+        nm = NERSCManager(
+            client_provider, nersc_paths, jaws_config.user, pipeline_registry, service_group
+        )
         await nm._setup_remote_code(nersc_paths, jaws_config.token, jaws_config.group)
         return nm
 
@@ -291,11 +298,13 @@ class NERSCManager:
             client_provider: Callable[[], str],
             nersc_paths: NERSCPaths,
             nesrc_jaws_user: str,
+            pipeline_registry: PipelineRegistry,
             service_group: str,
         ):
         self._client_provider = _not_falsy(client_provider, "client_provider")
         self._nersc_code_path = _not_falsy(nersc_paths, "nersc_paths").code_path / service_group
         self._nersc_jaws_user = _require_string(nesrc_jaws_user, "nesrc_jaws_user")
+        self._pipereg = _not_falsy(pipeline_registry, "pipeline_registry")
         self._service_group = _require_string(service_group, "service_group")
         self._work_loc = Path("cdm_task_service") / service_group
         self._jawscfg = f"jaws_cts_{service_group}.conf"
@@ -766,21 +775,60 @@ class NERSCManager:
     async def run_JAWS(self, job: models.Job, file_download_concurrency: int = 10) -> str:
         """
         Run a JAWS job at NERSC and return the job ID.
-        
+
         job - the job to process
         file_download_concurrency - the number of files at one time to download to NERSC.
         """
         _check_num(file_download_concurrency, "file_download_concurrency")
-        site = get_jaws_site(_not_falsy(job, "job").job_input.cluster)
+        cluster = _not_falsy(job, "job").job_input.cluster
         cli = self._client_provider()
         await self._generate_and_load_job_files_to_nersc(cli, job, file_download_concurrency)
-        perl = await cli.compute(Machine.perlmutter)
         pre = self._get_job_scratch(job.id)
+        return await self._submit_jaws_run(
+            cli,
+            job.id,
+            pre / _JAWS_INPUT_WDL,
+            pre / _JAWS_INPUT_JSON,
+            cluster,
+            "Submitted JAWS job",
+        )
+
+    async def run_pipeline_JAWS(self, job: pipe_models.AdminPipelineJob) -> str:
+        """
+        Run a pipeline JAWS job at NERSC and return the JAWS run ID.
+
+        job - the pipeline job to process.
+        """
+        pipeline_input = _not_falsy(job, "job").pipeline_input
+        pipeline_def = self._pipereg.get(pipeline_input.pipeline, pipeline_input.version)
+        cli = self._client_provider()
+        await self._generate_and_load_pipeline_job_files_to_nersc(cli, job, pipeline_def)
+        pre = self._get_job_scratch(job.id)
+        return await self._submit_jaws_run(
+            cli,
+            job.id,
+            pipeline_def.nersc_path / pipeline_def.main_wdl,
+            pre / _JAWS_INPUT_JSON,
+            pipeline_input.cluster,
+            "Submitted pipeline JAWS job",
+        )
+
+    async def _submit_jaws_run(
+        self,
+        cli: AsyncClient,
+        job_id: str,
+        wdlpath: Path,
+        inputjsonpath: Path,
+        cluster: sites.Cluster,
+        log_msg: str,
+    ) -> str:
+        site = get_jaws_site(cluster)
+        perl = await cli.compute(Machine.perlmutter)
         try:
             res = await perl.run(_JAWS_COMMAND_TEMPLATE.format(
-                job_id=job.id,
-                wdlpath=pre / _JAWS_INPUT_WDL,
-                inputjsonpath=pre / _JAWS_INPUT_JSON,
+                job_id=job_id,
+                wdlpath=wdlpath,
+                inputjsonpath=inputjsonpath,
                 site=site,
                 conf_file=self._jawscfg,
             ))
@@ -799,12 +847,31 @@ class NERSCManager:
                 raise ValueError(f"JAWS returned no run_id in JSON {res}")
             run_id = j["run_id"]
             logging.getLogger(__name__).info(
-                "Submitted JAWS job",
-                extra={logfields.JOB_ID: job.id, logfields.JAWS_RUN_ID: run_id}
+                log_msg, extra={logfields.JOB_ID: job_id, logfields.JAWS_RUN_ID: run_id}
             )
             return str(run_id)
         except json.JSONDecodeError as e:
             raise ValueError(f"JAWS returned invalid JSON: {e}\n{res}") from e
+
+    async def _generate_and_load_pipeline_job_files_to_nersc(
+        self,
+        cli: AsyncClient,
+        job: pipe_models.AdminPipelineJob,
+        pipeline_def: PipelineDefinition,
+    ):
+        validated = pipeline_def.validate_input(job.pipeline_input.input)
+        file_locations = {
+            f.file: get_cache_path(self._nersc_perlmutter_file_cache_path, f.crc64nvme)
+            for f in validated.get_s3_files()
+        }
+        input_json = validated.get_input_json(file_locations)
+        pre = self._get_job_scratch(job.id)
+        perl = await cli.compute(Machine.perlmutter)
+        await self._upload_file_to_nersc(
+            perl,
+            pre / _JAWS_INPUT_JSON,
+            bio=io.BytesIO(json.dumps(input_json, indent=4).encode()),
+        )
 
     async def _generate_and_load_job_files_to_nersc(
         self, cli: AsyncClient, job: models.Job, concurrency: int

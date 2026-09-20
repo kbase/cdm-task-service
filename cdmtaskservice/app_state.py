@@ -230,8 +230,9 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         dest.register("kafka notifier", asyncio.wait_for(kafka_notifier.close(), 10))
         logr.info("Done")
         flowman = JobFlowManager(mongodao)
+        pipeline_registry = _create_pipeline_registry(logr)
         jaws_job_flows = await _register_nersc_job_flows(
-            logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
+            logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman, pipeline_registry
         )
         await _register_kbase_job_flow(
             logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
@@ -248,7 +249,6 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
         images = Images(mongodao, imginfo, refdata)
-        pipeline_registry = _create_pipeline_registry(logr)
         job_state = JobState(  # this also has a lot of required args, yech
             mongodao,
             s3cfg.get_internal_client(),
@@ -327,7 +327,8 @@ async def _register_nersc_job_flows(
     mongodao: MongoDAO,
     s3config: S3Config,
     kafka_notifier: KafkaNotifier,
-    coman: CoroutineWrangler
+    coman: CoroutineWrangler,
+    pipeline_registry: PipelineRegistry,
 ) -> JAWSFlowProvider:
     # This is only useful for testing with other processes that just want to pull job records
     # but not start or run jobs or only run KBase jobs. As such it's undocumented.
@@ -345,6 +346,7 @@ async def _register_nersc_job_flows(
         coman,
         cfg.service_group,
         cfg.service_root_url,
+        pipeline_registry,
     )
     dest.register("JAWS flow provider", jaws_job_flows.close())
     flowman.register_flow(NERSCJAWSRunner.CLUSTER, jaws_job_flows.get_nersc_job_flow)

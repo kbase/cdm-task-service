@@ -20,7 +20,7 @@ from cdmtaskservice.arg_checkers import (
     verify_aware_datetime
 )
 from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
-from cdmtaskservice.pipelines.models import AdminPipelineJob, PipelineJob
+from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 
 
@@ -356,7 +356,7 @@ class MongoDAO:
         # to ensure unique IDs
         await self._col_jobs.insert_one(jobd)
 
-    async def save_pipeline_job(self, job: AdminPipelineJob):
+    async def save_pipeline_job(self, job: pipe_models.AdminPipelineJob):
         """ Save a pipeline job. Job IDs are expected to be unique. """
         _not_falsy(job, "job")
         jobd = job.model_dump(exclude_none=True)
@@ -369,7 +369,7 @@ class MongoDAO:
 
     async def get_pipeline_job(
         self, job_id: str, as_admin: bool = False
-    ) -> PipelineJob | AdminPipelineJob:
+    ) -> pipe_models.PipelineJob | pipe_models.AdminPipelineJob:
         """
         Get a pipeline job by its ID.
 
@@ -382,7 +382,11 @@ class MongoDAO:
         if not doc:
             raise NoSuchJobError(f"No pipeline job with ID '{job_id}' exists")
         doc = self._clean_doc(doc)
-        return AdminPipelineJob(**doc) if as_admin else PipelineJob(**doc)
+        return (
+            pipe_models.AdminPipelineJob(**doc)
+            if as_admin
+            else pipe_models.PipelineJob(**doc)
+        )
 
     async def get_job(
         self, job_id: str, as_admin: bool = False

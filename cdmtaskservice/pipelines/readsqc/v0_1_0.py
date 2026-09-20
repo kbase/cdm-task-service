@@ -21,13 +21,13 @@ pipeline runs at; it is not requested per-job the way CTS-generated WDLs request
 
 import enum
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 import semver
 from pydantic import Field, model_validator
 
 from cdmtaskservice import models
-from cdmtaskservice.pipelines.definition import PipelineDefinition, PipelineInput, PipelineRun
+from cdmtaskservice.pipelines.definition import PipelineDefinition, PipelineInput
 
 _WORKFLOW = "rqcfilter"
 
@@ -43,7 +43,7 @@ _FILE_MD5S = {
 }
 
 
-_RQCFILTERDATA_PATH = Path("/cdm_task_service/_pipelines/RQCFilterData/2026_09_10/")
+_RQCFILTERDATA_PATH = Path("/refdata/cdm_task_service/_pipelines/RQCFilterData/2026_09_10/")
 
 
 _DESCRIPTION = (
@@ -132,26 +132,24 @@ class ReadsQCInput(PipelineInput):
             update["input_files2"] = [resolved[f.file] for f in self.input_files2]
         return self.model_copy(update=update)
 
+    def get_input_json(self, file_locations: dict[str, Path]) -> dict[str, Any]:
+        def loc(f: models.S3File) -> str:
+            if f.file not in file_locations:
+                raise ValueError(f"No file location provided for S3 file '{f.file}'")
+            return str(file_locations[f.file])
 
-def build(pipeline_input: ReadsQCInput, file_locations: dict[str, Path]) -> PipelineRun:
-    """ Build the JAWS input.json for a ReadsQC (rqcfilter) 0.1.0 run. """
-    def loc(f: models.S3File) -> str:
-        if f.file not in file_locations:
-            raise ValueError(f"No file location provided for S3 file '{f.file}'")
-        return str(file_locations[f.file])
-
-    input_json = {
-        f"{_WORKFLOW}.proj": pipeline_input.output_prefix,
-        f"{_WORKFLOW}.interleaved": _READ_MODE_TO_INTERLEAVED[pipeline_input.read_mode],
-        f"{_WORKFLOW}.shortRead": True,
-        f"{_WORKFLOW}.rqcfilterdata": str(_RQCFILTERDATA_PATH),
-    }
-    if pipeline_input.read_mode == ReadMode.PAIRED:
-        input_json[f"{_WORKFLOW}.input_fq1"] = [loc(f) for f in pipeline_input.input_files]
-        input_json[f"{_WORKFLOW}.input_fq2"] = [loc(f) for f in pipeline_input.input_files2]
-    else:
-        input_json[f"{_WORKFLOW}.input_files"] = [loc(f) for f in pipeline_input.input_files]
-    return PipelineRun(input_json=input_json)
+        input_json = {
+            f"{_WORKFLOW}.proj": self.output_prefix,
+            f"{_WORKFLOW}.interleaved": _READ_MODE_TO_INTERLEAVED[self.read_mode],
+            f"{_WORKFLOW}.shortRead": True,
+            f"{_WORKFLOW}.rqcfilterdata": str(_RQCFILTERDATA_PATH),
+        }
+        if self.read_mode == ReadMode.PAIRED:
+            input_json[f"{_WORKFLOW}.input_fq1"] = [loc(f) for f in self.input_files]
+            input_json[f"{_WORKFLOW}.input_fq2"] = [loc(f) for f in self.input_files2]
+        else:
+            input_json[f"{_WORKFLOW}.input_files"] = [loc(f) for f in self.input_files]
+        return input_json
 
 
 def init() -> PipelineDefinition:
@@ -164,6 +162,5 @@ def init() -> PipelineDefinition:
         nersc_path=_NERSC_WDL_PATH,
         main_wdl="rqcfilter.wdl",
         file_md5s=_FILE_MD5S,
-        _build_fn=build,
         doc_urls=_DOC_URLS,
     )
