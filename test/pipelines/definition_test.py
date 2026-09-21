@@ -60,6 +60,7 @@ def _def(**overrides) -> PipelineDefinition:
         nersc_path=Path("/foo/bar"),
         main_wdl="main.wdl",
         file_md5s={"main.wdl": "abc123", "imports/sub.wdl": "def456"},
+        output_keys={"main.wdl.out"},
     )
     kwargs.update(overrides)
     return PipelineDefinition(**kwargs)
@@ -76,6 +77,8 @@ def test_pipeline_definition():
     assert d.main_wdl == "main.wdl"
     assert d.file_md5s == {"main.wdl": "abc123", "imports/sub.wdl": "def456"}
     assert isinstance(d.file_md5s, types.MappingProxyType)
+    assert d.output_keys == {"main.wdl.out"}
+    assert isinstance(d.output_keys, frozenset)
     assert d.doc_urls == []
 
 
@@ -182,3 +185,13 @@ def test_pipeline_definition_fail_empty_md5s():
 def test_pipeline_definition_fail_main_wdl_not_in_md5s():
     with pytest.raises(ValueError, match="main_wdl 'main.wdl' must have an entry in file_md5s"):
         _def(file_md5s={"other.wdl": "abc123"})
+
+
+def test_pipeline_definition_fail_empty_output_keys():
+    with pytest.raises(ValueError, match="output_keys is required and may not be empty"):
+        _def(output_keys=set())
+
+
+def test_pipeline_definition_fail_output_keys_bad_value():
+    with pytest.raises(ValueError, match="output_keys must contain only non-empty strings"):
+        _def(output_keys={""})

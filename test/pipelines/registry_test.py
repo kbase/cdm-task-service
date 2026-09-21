@@ -32,6 +32,7 @@ def _fake_pipeline(name: str, version: str) -> PipelineDefinition:
         nersc_path=Path("/fake"),
         main_wdl="fake.wdl",
         file_md5s={"fake.wdl": "abc123"},
+        output_keys={"fake.out"},
     )
 
 

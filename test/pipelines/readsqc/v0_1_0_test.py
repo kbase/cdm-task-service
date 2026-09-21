@@ -29,6 +29,13 @@ def test_init():
     assert set(p.file_md5s) == {
         "rqcfilter.wdl", "shortReadsqc.wdl", "longReadsqc.wdl", "sra2fastq.wdl",
     }
+    assert p.output_keys == {
+        "rqcfilter.filtered_final",
+        "rqcfilter.filtered_stats_final",
+        "rqcfilter.filtered_stats2_final",
+        "rqcfilter.rqc_info",
+        "rqcfilter.stats",
+    }
     assert p.doc_urls == [
         "https://github.com/kbaseincubator/ReadsQC",
         "https://docs.microbiomedata.org/workflows/chapters/3_Metagenome_Reads_QC/",

@@ -17,9 +17,10 @@ import sys
 import traceback
 from typing import Callable
 
-from cdmtaskservice.jaws.remote import ( 
+from cdmtaskservice.jaws.remote import (
     parse_errors_json,
     parse_outputs_json,
+    parse_pipeline_outputs_json,
     OUTPUTS_JSON_FILE,
 )
 from cdmtaskservice.s3.remote import (
@@ -30,6 +31,24 @@ from cdmtaskservice.s3.remote import (
 # TODO TEST add tests for this file and its dependency functions
 
 
+def _checksum_entries(dest_to_path: dict[str, str], jdir: Path) -> list[dict]:
+    entries = []
+    # TODO PERF may want to parallelize this with a max process limit
+    # TODO PERF could also chunk large files and combine CRCs via awscrt.checksums.combine_crc64nvme
+    for dest, result_path in dest_to_path.items():
+        # Path./ discards jdir entirely if result_path is already absolute, which is the case
+        # for pipeline (Cromwell) output paths.
+        fpath = jdir / result_path
+        crc = crc64nvme_b64(fpath)
+        entries.append({
+            "crc64nvme": crc,
+            "s3path": dest,
+            "respath": result_path,
+            "size": fpath.stat().st_size,
+        })
+    return entries
+
+
 def calculate_checksums(jaws_output_dir: str, checksum_output_file: str):
     """
     Parse the JAWS output.json file and write CRC64/NVME checksums to a result file.
@@ -37,24 +56,51 @@ def calculate_checksums(jaws_output_dir: str, checksum_output_file: str):
     jdir = Path(jaws_output_dir)
     with open(jdir / OUTPUTS_JSON_FILE) as f:
         outs = parse_outputs_json(f)
-    res = {"files": [], "stdouts": [], "stderrs": []}
-    # TODO PERF may want to parallelize this with a max process limit
-    # TODO PERF could also chunk large files and combine CRCs via awscrt.checksums.combine_crc64nvme
-    for s3_path, result_path in outs.output_files.items():
-        fpath = jdir / result_path
-        crc = crc64nvme_b64(fpath)
-        res["files"].append({
-            "crc64nvme": crc,
-            "s3path": s3_path,
-            "respath": result_path,
-            "size": fpath.stat().st_size,
-        })
+    res = {
+        "files": _checksum_entries(outs.output_files, jdir),
+        "stdouts": [],
+        "stderrs": [],
+    }
     for so in outs.stdout:
         crc = crc64nvme_b64(jdir / so)
         res["stdouts"].append({"crc64nvme": crc, "respath": so})
     for se in outs.stderr:
         crc = crc64nvme_b64(jdir / se)
         res["stderrs"].append({"crc64nvme": crc, "respath": se})
+    with open(checksum_output_file, "w") as f:
+        json.dump(res, f, indent=4)
+
+
+def calculate_pipeline_checksums(
+    jaws_output_dir: str, output_keys_file: str, checksum_output_file: str
+):
+    """
+    Parse a pipeline WDL outputs.json, filtered by an allow-list of File-producing keys read
+    from output_keys_file, and write CRC64/NVME checksums to a result file in the same shape
+    calculate_checksums produces (with stdouts/stderrs always empty, since pipeline jobs have
+    no per-container concept of either).
+
+    S3 destinations are the basename of each output file's path - if two allow-listed keys
+    resolve to the same basename, one is dropped (logged as a warning) rather than uploaded,
+    a known simplification of the current one-flat-directory-per-pipeline-run S3 layout.
+    """
+    jdir = Path(jaws_output_dir)
+    with open(output_keys_file) as kf:
+        allowed_keys = json.load(kf)
+    with open(jdir / OUTPUTS_JSON_FILE) as f:
+        outfiles = parse_pipeline_outputs_json(f, allowed_keys)
+    dest_to_path = {}
+    for key, path in outfiles.items():
+        dest = os.path.basename(path)
+        if dest in dest_to_path and dest_to_path[dest] != path:
+            logging.getLogger(__name__).warning(
+                "Basename collision in pipeline outputs; dropping one output file: "
+                f"key={key} dropped_path={path} kept_path={dest_to_path[dest]} "
+                f"s3_basename={dest}"
+            )
+            continue
+        dest_to_path[dest] = path
+    res = {"files": _checksum_entries(dest_to_path, jdir), "stdouts": [], "stderrs": []}
     with open(checksum_output_file, "w") as f:
         json.dump(res, f, indent=4)
 
@@ -273,6 +319,17 @@ def main():
             calculate_checksums,
             [
                 os.environ["CTS_JAWS_OUTPUT_DIR"],
+                os.environ["CTS_CHECKSUM_FILE_LOCATION"],
+            ],
+            resfile,
+            None,  # expected to be run by the manager as a blocking task for now
+        )
+    elif mode == "pipeline_checksum":
+        _error_wrapper(
+            calculate_pipeline_checksums,
+            [
+                os.environ["CTS_JAWS_OUTPUT_DIR"],
+                os.environ["CTS_OUTPUT_KEYS_LOCATION"],
                 os.environ["CTS_CHECKSUM_FILE_LOCATION"],
             ],
             resfile,

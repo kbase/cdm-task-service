@@ -482,19 +482,21 @@ class NERSCJAWSRunner(JobFlow):
         jaws_info: dict[str, Any],
     ):
         # This is kind of similar to the method above, not sure if trying to merge is worth it
-        if _entity_pipeline(job).pipeline:
-            # TODO PIPELINES implement pipeline job output file upload
-            return
+        entity_type, pipeline = _entity_pipeline(job)
+        root = job.pipeline_input.output_dir if pipeline else job.job_input.output_dir
 
         async def presign(output_files: list[Path], crc64nvmes: list[str]) -> list[PresignedPost]:
-            root = job.job_input.output_dir
             # TODO RELIABILITY config / set expiration time
             paths = S3Paths([os.path.join(root, f) for f in output_files])
             return await self._s3ext.presign_post_urls(paths, crc64nvmes=crc64nvmes)
-        
+
         try:
             # TODO PERF config / set concurrency
-            job_id = await self._nman.upload_JAWS_job_files(
+            upload_fn = (
+                self._nman.upload_pipeline_JAWS_job_files if pipeline
+                else self._nman.upload_JAWS_job_files
+            )
+            job_id = await upload_fn(
                 job,
                 jaws_info["output_dir"],
                 presign,
@@ -502,36 +504,52 @@ class NERSCJAWSRunner(JobFlow):
                 insecure_ssl=self._s3insecure,
             )
             # See notes above about adding the NERSC job id to the job
-            await self._updates.update_job_state(job.id, submitted_nersc_upload(job_id))
+            await self._updates.update_job_state(
+                job.id, submitted_nersc_upload(job_id), pipeline=pipeline
+            )
         except Exception as e:
-            await self._updates.handle_exception(e, job.id, "starting file upload for")
+            await self._updates.handle_exception(
+                e, job.id, "starting file upload for", entity_type=entity_type
+            )
 
-    async def upload_complete(self, job: models.AdminJobDetails):
+    async def upload_complete(
+        self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob
+    ):
         """
-        Complete a job after the upload is complete. The job is expected to be in the 
+        Complete a job after the upload is complete. The job is expected to be in the
         upload submitted state.
         """
         if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the upload submitted state")
+        entity_type = _entity_pipeline(job).entity_type
         async def tfunc():
             return await self._nman.get_presigned_upload_result(job), None
         await self._get_transfer_result(  # check for errors
-            tfunc, job.id, "Upload", "getting upload results for",
+            tfunc, job.id, "Upload", "getting upload results for", entity_type=entity_type,
         )
         await self._coman.run_coroutine(self._upload_complete(job))
     
-    async def _upload_complete(self, job: models.AdminJobDetails):
+    async def _upload_complete(
+        self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob
+    ):
+        entity_type, pipeline = _entity_pipeline(job)
         try:
-            await self._mongo.save_exit_codes_for_standard_job(
-                job.id, [0] * job.job_input.num_containers
-            )
+            if pipeline:
+                root = job.pipeline_input.output_dir
+            else:
+                root = job.job_input.output_dir
+                await self._mongo.save_exit_codes_for_standard_job(
+                    job.id, [0] * job.job_input.num_containers
+                )
             checksums = await self._nman.get_uploaded_JAWS_files(job)
             if not checksums:
                 err = "The job produced no output files"
-                await self._updates.update_job_state(job.id, error(err, user_error=err))
+                await self._updates.update_job_state(
+                    job.id, error(err, user_error=err), pipeline=pipeline
+                )
                 return
             filechecksums = {
-                os.path.join(job.job_input.output_dir, f): crc for f, crc in checksums.items()
+                os.path.join(root, f): crc for f, crc in checksums.items()
             }
             # TODO PERF parsing the paths for the zillionth time
             # TODO PERF configure / set concurrency
@@ -545,9 +563,9 @@ class NERSCJAWSRunner(JobFlow):
                     )
                 outfiles.append(models.S3File(file=o.path, crc64nvme=o.crc64nvme))
             # TODO DISKSPACE will need to clean up job results @ NERSC
-            await self._updates.update_job_state(job.id, complete(outfiles))
+            await self._updates.update_job_state(job.id, complete(outfiles), pipeline=pipeline)
         except Exception as e:
-            await self._updates.handle_exception(e, job.id, "completing")
+            await self._updates.handle_exception(e, job.id, "completing", entity_type=entity_type)
 
     async def cancel_job(self, job: models.AdminJobDetails):
         """ Cancel a job. """
