@@ -168,6 +168,7 @@ echo "python exited with code $?"
 # runs on shared login nodes rather than dedicated compute nodes.
 _SBATCH_SCRIPT_TEMPLATE = f"""#!/usr/bin/env bash
 #SBATCH --qos={_XFER_QOS}
+#SBATCH --constraint=cron
 #SBATCH --licenses=SCRATCH
 #SBATCH --time={{time}}
 
