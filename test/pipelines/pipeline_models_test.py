@@ -10,12 +10,25 @@ def _job_input(**overrides) -> pipe_models.PipelineJobInput:
     kwargs = dict(
         cluster=sites.Cluster.PERLMUTTER_JAWS,
         input={"output_prefix": "proj-xyz"},
+        files={},
         pipeline="readsqc",
         version=semver.Version.parse("0.1.0"),
         output_dir="mybucket/out",
     )
     kwargs.update(overrides)
     return pipe_models.PipelineJobInput(**kwargs)
+
+
+def _job_input_preview(**overrides) -> pipe_models.PipelineJobInputPreview:
+    kwargs = dict(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
+        input={"output_prefix": "proj-xyz"},
+        pipeline="readsqc",
+        version=semver.Version.parse("0.1.0"),
+        output_dir="mybucket/out",
+    )
+    kwargs.update(overrides)
+    return pipe_models.PipelineJobInputPreview(**kwargs)
 
 
 def test_pipeline_job_input():
@@ -41,6 +54,7 @@ def test_pipeline_job_input_serializes_version_as_string():
     assert pji.model_dump() == {
         "cluster": sites.Cluster.PERLMUTTER_JAWS.value,
         "input": {"output_prefix": "proj-xyz"},
+        "files": {},
         "pipeline": "readsqc",
         "version": "0.1.0",
         "output_dir": "mybucket/out/",
@@ -68,7 +82,7 @@ def test_pipeline_job_preview():
         state=models.JobState.COMPLETE,
         transition_times=[],
         user="user1",
-        pipeline_input=_job_input(),
+        pipeline_input=_job_input_preview(),
     )
 
     assert pjp.id == "jobid"
@@ -76,7 +90,8 @@ def test_pipeline_job_preview():
     assert pjp.transition_times == []
     assert pjp.user == "user1"
     assert pjp.admin_meta == {}
-    assert pjp.pipeline_input == _job_input()
+    assert pjp.pipeline_input == _job_input_preview()
+    assert not hasattr(pjp.pipeline_input, "files")
     assert not hasattr(pjp, "outputs")
     assert not hasattr(pjp, "trans_history")
 

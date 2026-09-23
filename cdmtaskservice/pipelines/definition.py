@@ -19,7 +19,7 @@ from typing import Any, Self
 import semver
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-from cdmtaskservice import models
+from cdmtaskservice import models, pydantic_type_walker
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 
 
@@ -37,22 +37,72 @@ class PipelineInputValidationError(Exception):
         self.errors = errors
 
 
-class PipelineInput(BaseModel, abc.ABC):
+class PipelineInputParams(BaseModel):
     """
-    Base class for a pipeline version's typed job input. Each pipeline version defines a
-    concrete subclass describing exactly the inputs it needs.
+    Base class for a pipeline version's non-file input parameters. Each pipeline version defines
+    a concrete subclass describing exactly the parameters it needs. May not contain an
+    `models.S3File` anywhere in its structure, so that it's always safe to include in a job
+    preview - checked at pipeline registration time.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class PipelineInputFiles(BaseModel, abc.ABC):
+    """
+    Base class for a pipeline version's file references. Each pipeline version defines a
+    concrete subclass describing exactly the file references it needs. May contain
+    `models.S3File`(s) anywhere in its structure. Omitted from job previews.
     """
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     @abc.abstractmethod
     def get_s3_files(self) -> list[models.S3File]:
         """
+        Return every S3 file referenced anywhere in this instance. Order is insignificant but
+        must be stable.
+        """
+
+    @abc.abstractmethod
+    def set_s3_files(self, resolved: dict[str, models.S3File]) -> Self:
+        """
+        Return a new instance with every S3 file returned by get_s3_files replaced by its
+        counterpart in resolved, e.g. to fill in a checksum CTS resolved from S3. Does not
+        modify this instance.
+
+        resolved - a mapping of S3 path (the `file` field of models.S3File) to the resolved
+            file. Contains an entry for every file returned by get_s3_files.
+        """
+
+    @model_validator(mode="after")
+    def _check_no_duplicate_files(self) -> Self:
+        paths = [f.file for f in self.get_s3_files()]
+        dupes = {p for p in paths if paths.count(p) > 1}
+        if dupes:
+            raise ValueError(f"Duplicate files in input: {sorted(dupes)}")
+        return self
+
+
+class PipelineInput(BaseModel, abc.ABC):
+    """
+    Base class for a pipeline version's typed job input. Each pipeline version defines a
+    concrete subclass describing exactly the inputs it needs, declaring exactly two fields:
+
+    * `input` - a subclass of PipelineInputParams.
+    * `files` - a subclass of PipelineInputFiles.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input: PipelineInputParams
+    files: PipelineInputFiles
+
+    def get_s3_files(self) -> list[models.S3File]:
+        """
         Return every S3 file referenced anywhere in this input, so CTS can resolve their
         checksums and stage them at NERSC before the pipeline runs. Order is insignificant but
         must be stable enough to zip back up with the corresponding file locations.
         """
+        return self.files.get_s3_files()
 
-    @abc.abstractmethod
     def set_s3_files(self, resolved: dict[str, models.S3File]) -> Self:
         """
         Return a new instance of this input with every S3 file returned by get_s3_files
@@ -62,6 +112,7 @@ class PipelineInput(BaseModel, abc.ABC):
         resolved - a mapping of S3 path (the `file` field of models.S3File) to the resolved
             file. Contains an entry for every file returned by get_s3_files.
         """
+        return self.model_copy(update={"files": self.files.set_s3_files(resolved)})
 
     @abc.abstractmethod
     def get_input_json(self, file_locations: dict[str, Path]) -> dict[str, Any]:
@@ -76,14 +127,6 @@ class PipelineInput(BaseModel, abc.ABC):
         May raise ValueError, e.g. if file_locations is missing an entry for one of this input's
         S3 files.
         """
-
-    @model_validator(mode="after")
-    def _check_no_duplicate_files(self) -> Self:
-        paths = [f.file for f in self.get_s3_files()]
-        dupes = {p for p in paths if paths.count(p) > 1}
-        if dupes:
-            raise ValueError(f"Duplicate files in input: {sorted(dupes)}")
-        return self
 
 
 @dataclasses.dataclass(frozen=True)
@@ -144,6 +187,21 @@ class PipelineDefinition:
             raise ValueError("version must be a semver.Version instance")
         _require_string(self.description, "description")
         _not_falsy(self.input_model, "input_model")
+        if not (isinstance(self.input_model, type) and issubclass(self.input_model, PipelineInput)):
+            raise ValueError("input_model must be a subclass of PipelineInput")
+        input_field = self.input_model.model_fields["input"].annotation
+        if not (isinstance(input_field, type) and issubclass(input_field, PipelineInputParams)):
+            raise ValueError("input_model's 'input' field must be a subclass of PipelineInputParams")
+        files_field = self.input_model.model_fields["files"].annotation
+        if not (isinstance(files_field, type) and issubclass(files_field, PipelineInputFiles)):
+            raise ValueError("input_model's 'files' field must be a subclass of PipelineInputFiles")
+        try:
+            pydantic_type_walker.check_annotation(
+                input_field, "input", disallowed_types=(models.S3File,)
+            )
+        except pydantic_type_walker.DisallowedTypeError as e:
+            raise ValueError(f"input model may not contain S3 file references: {e.path}") from e
+        pydantic_type_walker.check_annotation(files_field, "files")
         _not_falsy(self.nersc_path, "nersc_path")
         _require_string(self.main_wdl, "main_wdl")
         if not self.file_md5s:
@@ -158,19 +216,27 @@ class PipelineDefinition:
         object.__setattr__(self, "output_keys", frozenset(self.output_keys))
 
     def validate_input(
-        self, pipeline_input: dict[str, Any] | PipelineInput
+        self,
+        pipeline_input: dict[str, Any] | PipelineInput,
+        files: dict[str, Any] | None = None,
     ) -> PipelineInput:
         """
         Validate untyped input against this pipeline version's input model.
 
         pipeline_input - the raw input to validate, e.g. a dict parsed from a request body. An
-            already-validated instance of input_model is also accepted and is used as-is.
+            already-validated instance of input_model is also accepted and is used as-is. If
+            files is provided, this is instead just the contents of the input model's `input`
+            field, and the two are reassembled into the full input prior to validation.
+        files - the contents of the input model's `files` field. If provided, pipeline_input
+            must not already be a full input dict or an input_model instance.
 
         Returns the validated input.
 
         Raises PipelineInputValidationError, with detail in the same shape as a Pydantic
         validation error, if pipeline_input does not conform to input_model.
         """
+        if files is not None:
+            pipeline_input = {"input": pipeline_input, "files": files}
         try:
             return self.input_model.model_validate(pipeline_input)
         except ValidationError as e:

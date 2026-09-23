@@ -82,6 +82,7 @@ _BASEPIPEJOB = pipe_models.AdminPipelineJob(
     pipeline_input=pipe_models.PipelineJobInput(
         cluster=sites.Cluster.PERLMUTTER_JAWS,
         input={"output_prefix": "proj-xyz"},
+        files={},
         pipeline="readsqc",
         version="0.1.0",
         output_dir="bucket/output",
