@@ -140,6 +140,37 @@ def test_pipeline_input_fail_duplicate_files():
         _FakeInputWithFiles(files=_FilesOnly(files=[f1, f1]))
 
 
+def test_pipeline_input_fail_too_many_files():
+    class _FilesOnly(PipelineInputFiles):
+        model_config = ConfigDict(extra="forbid", frozen=True)
+
+        files: list[models.S3File]
+
+        def get_s3_files(self):
+            return self.files
+
+        def set_s3_files(self, resolved):
+            return self.model_copy(update={"files": [resolved[f.file] for f in self.files]})
+
+    class _FakeInputWithFiles(PipelineInput):
+        input: _EmptyParams = _EmptyParams()
+        files: _FilesOnly
+
+        def get_input_json(self, file_locations):
+            return {}
+
+    files = [
+        models.S3File(file=f"mybucket/reads_{i}.fastq.gz")
+        for i in range(10001)
+    ]
+
+    with pytest.raises(
+        ValidationError,
+        match=f"Too many input files: 10001 > 10000",
+    ):
+        _FakeInputWithFiles(files=_FilesOnly(files=files))
+
+
 def test_pipeline_definition_validate_input_dict():
     d = _def(input_model=_FakeInputWithField)
 
