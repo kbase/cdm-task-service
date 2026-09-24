@@ -76,6 +76,22 @@ def test_pipeline_job_input_fail_extra_field():
         _job_input(foo="bar")
 
 
+def test_pipeline_job_input_get_pipeline_spec():
+    pji = _job_input()
+
+    assert pji.get_pipeline_spec() == pipe_models.PipelineSpec(
+        name="readsqc", version=semver.Version.parse("0.1.0")
+    )
+
+
+def test_pipeline_job_input_preview_get_pipeline_spec():
+    pjip = _job_input_preview()
+
+    assert pjip.get_pipeline_spec() == pipe_models.PipelineSpec(
+        name="readsqc", version=semver.Version.parse("0.1.0")
+    )
+
+
 def test_pipeline_job_preview():
     pjp = pipe_models.PipelineJobPreview(
         id="jobid",
