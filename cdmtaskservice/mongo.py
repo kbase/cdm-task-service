@@ -19,7 +19,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     verify_aware_datetime
 )
-from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
+from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError, NoSuchJobError
 from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 
@@ -1642,10 +1642,6 @@ class MongoDAO:
 
 class NoSuchImageError(Exception):
     """ The image does not exist in the system. """
-
-
-class NoSuchJobError(Exception):
-    """ The job does not exist in the system. """
 
 
 class NoSuchSubJobError(Exception):

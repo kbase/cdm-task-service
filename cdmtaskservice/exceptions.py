@@ -47,3 +47,7 @@ class UnsupportedOperationError(Exception):
 
 class JobRecoveryError(Exception):
     """ An error occurred during job recovery. """
+
+
+class NoSuchJobError(Exception):
+    """ The job does not exist in the system. """
