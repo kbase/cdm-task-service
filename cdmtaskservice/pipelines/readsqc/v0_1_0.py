@@ -88,7 +88,7 @@ _READ_MODE_TO_INTERLEAVED = {
 
 
 class ReadsQCParams(PipelineInputParams):
-    """ Non-file input parameters for the ReadsQC (rqcfilter) pipeline, version 0.1.0. """
+    """ Non-file input parameters for the ReadsQC (rqcfilter) pipeline. """
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     read_mode: ReadMode = Field(
@@ -108,7 +108,7 @@ class ReadsQCParams(PipelineInputParams):
 
 
 class ReadsQCFiles(PipelineInputFiles):
-    """ File inputs for the ReadsQC (rqcfilter) pipeline, version 0.1.0. """
+    """ File inputs for the ReadsQC (rqcfilter) pipeline. """
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     input_files: list[models.S3File] = Field(
@@ -141,7 +141,7 @@ class ReadsQCFiles(PipelineInputFiles):
 
 
 class ReadsQCInput(PipelineInput):
-    """ Input for the ReadsQC (rqcfilter) pipeline, version 0.1.0. """
+    """ Input for the ReadsQC (rqcfilter) pipeline. """
 
     input: ReadsQCParams
     files: ReadsQCFiles
