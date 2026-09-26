@@ -71,7 +71,7 @@ class FlowCleaner:
         _not_falsy(user, user)
         if job.cleaned:
             return
-        flow = await self._flowman.get_flow(job.job_input.cluster)
+        flow = await self._flowman.get_flow(job.get_cluster())
         await flow.clean_job(job, force=force)
         if job.state.is_terminal():
             # if force is True and the job isn't in the terminal state
@@ -92,9 +92,9 @@ class FlowCleaner:
         # Similar to the method above, but trying to merge them was a mess
         # May need to parallelize this, but YAGNI for now
         try:
-            if job.job_input.cluster not in await self._flowman.list_usable_clusters():
+            if job.get_cluster() not in await self._flowman.list_usable_clusters():
                 return
-            flow = await self._flowman.get_flow(job.job_input.cluster)
+            flow = await self._flowman.get_flow(job.get_cluster())
             await flow.clean_job(job)
             await self._mongo.set_job_clean(job.id)
             self._logr.info(f"Cleaned job '{job.id}'", extra={logfields.JOB_ID: job.id})

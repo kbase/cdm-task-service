@@ -114,13 +114,11 @@ async def _get_job_and_flow(
         job = await appstate.job_state.get_pipeline_job(
             job_id, user, as_admin=as_admin, admin_details=True
         )
-        cluster = job.pipeline_input.cluster
     elif pipe_models.is_pipeline_job_id(job_id):
         raise NoSuchJobError(f"No job with ID '{job_id}' exists")
     else:
         job = await appstate.job_state.get_job(job_id, user, as_admin=as_admin, admin_details=True)
-        cluster = job.job_input.cluster
-    flow = await appstate.jobflow_manager.get_flow(cluster)
+    flow = await appstate.jobflow_manager.get_flow(job.get_cluster())
     return job, flow
 
 

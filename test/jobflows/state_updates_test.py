@@ -5,8 +5,8 @@ import re
 from unittest.mock import ANY, create_autospec, patch
 
 from cdmtaskservice import logfields, models, sites, update_state
+from cdmtaskservice.models import EntityType
 from cdmtaskservice.jobflows.state_updates import (
-    EntityType,
     JobFlowStateUpdates,
     SubjobFlowStateUpdates,
     ParentJobUpdate,
