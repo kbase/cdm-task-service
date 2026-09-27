@@ -633,13 +633,15 @@ class NERSCJAWSRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
-    async def clean_job(self, job: models.AdminJobDetails, force: bool = False):
+    async def clean_job(
+        self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob, force: bool = False
+    ):
         """
         Clean up job files at the remote compute site.
-        
+
         If any files do not exist they are silently ignored.
-        
-        job - the job to clean up.
+
+        job - the job or pipeline job to clean up.
         force - perform the clean up even if the job isn't in a terminal state. This may cause
             undefined behavior.
         """
