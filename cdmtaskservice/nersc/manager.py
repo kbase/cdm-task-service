@@ -182,10 +182,10 @@ _SBATCH_SCRIPT_TEMPLATE = f"""#!/usr/bin/env bash
 # protected file in the path tree, which should never happen.
 # It'll still fail if it really can't delete the path.
 _REMOVE_PATH_TEMPLATE = """
-if [ ! -e "{{path}}" ]; then
+if [ ! -e "{path}" ]; then
     exit 0
 fi
-rm -rf -- "{{path}}"
+rm -rf -- "{path}"
 """
 
 
