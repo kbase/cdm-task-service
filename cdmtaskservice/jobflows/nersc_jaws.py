@@ -566,22 +566,25 @@ class NERSCJAWSRunner(JobFlow):
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "completing", entity_type=entity_type)
 
-    async def cancel_job(self, job: models.AdminJobDetails):
+    async def cancel_job(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
         """ Cancel a job. """
         _not_falsy(job, "job")
         # If we can't talk to mongo there's not much we can do
-        await self._updates.update_job_state(job.id, canceling())
+        await self._updates.update_job_state(job.id, canceling(), pipeline=job.is_pipeline())
         await self._coman.run_coroutine(self._cancel_job(job))
-        
-    async def _cancel_job(self, job: models.AdminJobDetails):
+
+    async def _cancel_job(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
         _not_falsy(job, "job")
         # Refresh: state may have changed since cancel_job was called. Exceptions propagate so
         # the job stays in CANCELING rather than landing in ERROR via handle_exception.
-        job = await self._mongo.get_job(job.id, as_admin=True)
+        job = await (
+            self._mongo.get_pipeline_job(job.id, as_admin=True) if job.is_pipeline()
+            else self._mongo.get_job(job.id, as_admin=True)
+        )
         if job.jaws_details and job.jaws_details.run_id:
             # assume only 1 run ID for now.
             await self._jaws.cancel(job.jaws_details.run_id[-1])
-        await self._updates.update_job_state(job.id, canceled())
+        await self._updates.update_job_state(job.id, canceled(), pipeline=job.is_pipeline())
 
     async def error_log_upload_complete(self, job: models.AdminJobDetails):
         """

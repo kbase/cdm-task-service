@@ -295,6 +295,23 @@ async def get_pipeline_job(
     return await job_state.get_pipeline_job(job_id, user)
 
 
+@ROUTER_PIPELINES.put(
+    "/jobs/{job_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Cancel a pipeline job",
+    description="Cancel a pipeline job.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def cancel_pipeline_job(
+    r: Request,
+    job_id: _ANN_PIPELINE_JOB_ID,
+    user: CTSUser = Depends(_AUTH),
+):
+    job, flow = await _get_job_and_flow(r, job_id, user)
+    await flow.cancel_job(job)
+
+
 @ROUTER_PIPELINES.get(
     "/jobs/{job_id}/runner_status",
     response_model=models.ExternalRunnerStatus,
@@ -390,6 +407,23 @@ async def get_pipeline_job_runner_details_admin(
         r, job_id, user, "get pipeline job runner status."
     )
     return await flow.get_job_external_runner_details(job)
+
+
+@ROUTER_ADMIN_PIPELINES.put(
+    "/jobs/{job_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Cancel any pipeline job",
+    description="Cancel any pipeline job.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def cancel_pipeline_job_admin(
+    r: Request,
+    job_id: _ANN_PIPELINE_JOB_ID,
+    user: CTSUser = Depends(_AUTH),
+):
+    job, flow = await _admin_get_job_and_flow(r, job_id, user, "cancel any pipeline job.")
+    await flow.cancel_job(job)
 
 
 @ROUTER_ADMIN_PIPELINES.delete(
