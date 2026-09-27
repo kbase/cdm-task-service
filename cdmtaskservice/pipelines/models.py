@@ -21,6 +21,9 @@ from cdmtaskservice import models, sites
 from cdmtaskservice.s3.paths import validate_path, S3PathSyntaxError
 
 
+FLD_PIPELINE_JOB_PIPELINE_INPUT = "pipeline_input"
+""" The field name of the pipeline input in a PipelineJob / PipelineJobPreview. """
+
 FLD_PIPELINE_JOB_INPUT_CLUSTER = "cluster"
 """ The field name of the cluster in a PipelineJobInput. """
 

@@ -141,9 +141,32 @@ class MongoDAO:
                 },
             ),
         ])
-        # add more as pipeline job querying is built.
+        pipelineclusterfield = (
+            f"{pipe_models.FLD_PIPELINE_JOB_PIPELINE_INPUT}."
+            + f"{pipe_models.FLD_PIPELINE_JOB_INPUT_CLUSTER}"
+        )
         await self._col_pipeline_jobs.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
+            # find & sort pipeline jobs by transition time (admin only)
+            IndexModel([(_FLD_UPDATE_TIME, DESCENDING)]),
+            # find pipeline jobs by current state and state transition time (admin only)
+            IndexModel([(models.FLD_COMMON_STATE, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
+            # find pipeline jobs by cluster and state transition time (admin only)
+            IndexModel([(pipelineclusterfield, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
+            # find pipeline jobs by user and state transition time
+            IndexModel([(models.FLD_JOB_USER, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
+            # find pipeline jobs by user, current state and state transition time
+            IndexModel([
+                (models.FLD_JOB_USER, ASCENDING),
+                (models.FLD_COMMON_STATE, ASCENDING),
+                (_FLD_UPDATE_TIME, DESCENDING)
+            ]),
+            # find pipeline jobs by user, cluster, and state transition time
+            IndexModel([
+                (models.FLD_JOB_USER, ASCENDING),
+                (pipelineclusterfield, ASCENDING),
+                (_FLD_UPDATE_TIME, DESCENDING)
+            ]),
             # Find pipeline jobs that need cleaning
             IndexModel(
                 [
@@ -159,7 +182,6 @@ class MongoDAO:
                 },
             ),
         ])
-        # TODO PIPELINES will need more indexes for listing
         statefield = f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_COMMON_STATE_TRANSITION_STATE}"
         retryfield = f"{models.FLD_COMMON_TRANS_TIMES}.{_FLD_RETRY_ATTEMPT}"
         await self._col_subjobs.create_indexes([
@@ -454,7 +476,7 @@ class MongoDAO:
     ) -> list[models.JobPreview]:
         """
         List jobs.
-        
+
         user - filter jobs by user.
         site - filter jobs by the compute site.
         state - filter jobs by the job's current state.
@@ -463,6 +485,69 @@ class MongoDAO:
             exclusive.
         limit - the maximum number of jobs to return.
         """
+        return await self._list_jobs(
+            self._col_jobs,
+            models.JobPreview,
+            models.FLD_JOB_JOB_INPUT,
+            models.FLD_JOB_INPUT_CLUSTER,
+            [models.FLD_JOB_INPUT_INPUT_FILES, models.FLD_JOB_INPUT_SCRIPT],
+            user=user,
+            site=site,
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+
+    async def list_pipeline_jobs(
+        self,
+        user: str | None = None,
+        site: sites.Cluster | None = None,
+        state: models.JobState | None = None,
+        after: datetime.datetime | None = None,
+        before: datetime.datetime | None = None,
+        limit: int = 1000
+    ) -> list[pipe_models.PipelineJobPreview]:
+        """
+        List pipeline jobs.
+
+        user - filter jobs by user.
+        site - filter jobs by the compute site.
+        state - filter jobs by the job's current state.
+        after - filter jobs to jobs that entered the current state after the given time, inclusive.
+        before - filter jobs to jobs that entered the current state before the given time,
+            exclusive.
+        limit - the maximum number of jobs to return.
+        """
+        return await self._list_jobs(
+            self._col_pipeline_jobs,
+            pipe_models.PipelineJobPreview,
+            pipe_models.FLD_PIPELINE_JOB_PIPELINE_INPUT,
+            pipe_models.FLD_PIPELINE_JOB_INPUT_CLUSTER,
+            [pipe_models.FLD_PIPELINE_JOB_INPUT_FILES],
+            user=user,
+            site=site,
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+
+    async def _list_jobs(
+        self,
+        collection,
+        model_cls,
+        input_field: str,
+        cluster_field: str,
+        exclude_fields: list[str],
+        *,
+        user: str | None,
+        site: sites.Cluster | None,
+        state: models.JobState | None,
+        after: datetime.datetime | None,
+        before: datetime.datetime | None,
+        limit: int,
+    ) -> list:
         timequery = {}
         if after:
             timequery["$gte"] = verify_aware_datetime(after, "after")
@@ -472,27 +557,25 @@ class MongoDAO:
         if user:
             query[models.FLD_JOB_USER] = user
         if site:
-            query[f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_CLUSTER}"] = site.value
+            query[f"{input_field}.{cluster_field}"] = site.value
         if state:
             query[models.FLD_COMMON_STATE] = state.value
         if timequery:
             query[_FLD_UPDATE_TIME] = timequery
         # drop the potentially large fields
-        project = {
-            models.FLD_COMMON_OUTPUTS: 0,
-            f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_INPUT_FILES}": 0,
-            f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_SCRIPT}": 0,
-        }
+        project = {models.FLD_COMMON_OUTPUTS: 0}
+        for exclude_field in exclude_fields:
+            project[f"{input_field}.{exclude_field}"] = 0
         sort = [(_FLD_UPDATE_TIME, DESCENDING)]
         jobs = []
-        async for j in self._col_jobs.find(
+        async for j in collection.find(
             query, project
             ).sort(sort
             ).limit(_check_num(limit, "limit")
         ):
-            jobs.append(models.JobPreview(**self._clean_doc(j)))
+            jobs.append(model_cls(**self._clean_doc(j)))
         return jobs
-    
+
     async def set_job_clean(self, job_id: str):
         """ Set a job's cleaned state to true. """
         await self._set_clean(self._col_jobs, job_id, "job")
