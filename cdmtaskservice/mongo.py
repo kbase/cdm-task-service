@@ -450,7 +450,16 @@ class MongoDAO:
         """
         Get minimal information about a job's status by the job's ID.
         """
-        doc = await self._col_jobs.find_one(
+        return await self._get_job_status(self._col_jobs, job_id, "job")
+
+    async def get_pipeline_job_status(self, job_id: str) -> models.JobStatus:
+        """
+        Get minimal information about a pipeline job's status by the job's ID.
+        """
+        return await self._get_job_status(self._col_pipeline_jobs, job_id, "pipeline job")
+
+    async def _get_job_status(self, collection, job_id: str, noun: str) -> models.JobStatus:
+        doc = await collection.find_one(
             {models.FLD_COMMON_ID: _require_string(job_id, "job_id")},
             {
                 _FLD_MONGO_ID: 0,
@@ -462,7 +471,7 @@ class MongoDAO:
             },
         )
         if not doc:
-            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+            raise NoSuchJobError(f"No {noun} with ID '{job_id}' exists")
         return models.JobStatus(**doc)
 
     async def list_jobs(

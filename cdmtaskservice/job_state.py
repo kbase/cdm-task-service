@@ -428,12 +428,34 @@ class JobState:
         """
         Get minimal information about a job's status based on the job's ID.
         If the provided user doesn't match the job's owner, an error is thrown.
-        
+
         job_id - the job ID.
         user - the user requesting the job.
         """
+        return await self._get_any_job_status(self._mongo.get_job_status, job_id, user)
+
+    async def get_pipeline_job_status(
+        self,
+        job_id: str,
+        user: CTSUser,
+    ) -> models.JobStatus:
+        """
+        Get minimal information about a pipeline job's status based on the job's ID.
+        If the provided user doesn't match the job's owner, an error is thrown.
+
+        job_id - the job ID.
+        user - the user requesting the job.
+        """
+        return await self._get_any_job_status(self._mongo.get_pipeline_job_status, job_id, user)
+
+    async def _get_any_job_status(
+        self,
+        fetch: Callable[[str], Awaitable[models.JobStatus]],
+        job_id: str,
+        user: CTSUser,
+    ) -> models.JobStatus:
         _not_falsy(user, "user")
-        job = await self._mongo.get_job_status(_require_string(job_id, "job_id"))
+        job = await fetch(_require_string(job_id, "job_id"))
         if job.user != user.user:
             # reveals the job ID exists in the system but I don't see a problem with that
             raise UnauthorizedError(f"User {user.user} may not access job {job_id}")
