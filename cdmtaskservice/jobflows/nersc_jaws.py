@@ -213,8 +213,8 @@ class NERSCJAWSRunner(JobFlow):
 
     async def get_job_external_runner_details(
         self,
-        job: models.AdminJobDetails,
-        container_number: int = None
+        job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
+        container_number: int | None = None
     ) -> dict[str, Any]:
         """
         Get details from the external job runner (JAWS in this case) about the job.
@@ -235,7 +235,7 @@ class NERSCJAWSRunner(JobFlow):
 
     async def get_job_external_runner_status(
         self,
-        job: models.AdminJobDetails,
+        job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
     ) -> models.ExternalRunnerStatus:
         """
         Get the abstracted status of the job on JAWS.

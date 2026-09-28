@@ -9,6 +9,7 @@ from typing import Annotated, Any
 
 from cdmtaskservice import app_state, models, sites
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
+from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.pipelines.definition import PipelineDefinition
 from cdmtaskservice.routes_shared import (
@@ -21,6 +22,9 @@ from cdmtaskservice.routes_shared import (
     ANN_JOB_LIMIT as _ANN_JOB_LIMIT,
     ANN_JOB_ADMIN_USER as _ANN_JOB_ADMIN_USER,
     ensure_valid_kbase_user as _ensure_valid_kbase_user,
+    get_job_and_flow as _get_job_and_flow_generic,
+    admin_get_job_and_flow as _admin_get_job_and_flow_generic,
+    JobIDType as _JobIDType,
 )
 from cdmtaskservice.user import CTSUser
 
@@ -31,6 +35,24 @@ ROUTER_ADMIN_PIPELINES = APIRouter(
 )
 
 _AUTH = KBaseHTTPBearer()
+
+
+async def _get_job_and_flow(
+    r: Request, job_id: str, user: CTSUser
+) -> tuple[pipe_models.AdminPipelineJob, JobFlow]:
+    """ Fetch a pipeline job and its associated job flow. """
+    return await _get_job_and_flow_generic(r, job_id, user, job_id_type=_JobIDType.PIPELINE)
+
+
+async def _admin_get_job_and_flow(
+    r: Request, job_id: str, user: CTSUser, action: str
+) -> tuple[pipe_models.AdminPipelineJob, JobFlow]:
+    """
+    Verify the user is a full admin, then fetch a pipeline job and its associated job flow.
+    """
+    return await _admin_get_job_and_flow_generic(
+        r, job_id, user, action, job_id_type=_JobIDType.PIPELINE
+    )
 
 
 class PipelineDefinitionInfo(BaseModel):
@@ -273,6 +295,27 @@ async def get_pipeline_job(
     return await job_state.get_pipeline_job(job_id, user)
 
 
+@ROUTER_PIPELINES.get(
+    "/jobs/{job_id}/runner_status",
+    response_model=models.ExternalRunnerStatus,
+    summary="Get a pipeline job's external runner status",
+    description="Get the status of the pipeline job as reported by the external job runner, "
+        + "rather than the service's own state tracking.\n\n"
+        + "**This endpoint is rarely needed.** The standard job status endpoint is faster, "
+        + "cheaper, and sufficient for normal polling. Call this endpoint only when you suspect "
+        + "the service's job state has desynced from the external runner — for example, "
+        + "if a job appears stuck in the service but you want to verify what the runner reports."
+        + "\n\nThis is an experimental API and is subject to change without notice."
+)
+async def get_pipeline_job_runner_status(
+    r: Request,
+    job_id: _ANN_PIPELINE_JOB_ID,
+    user: CTSUser = Depends(_AUTH),
+) -> models.ExternalRunnerStatus:
+    job, flow = await _get_job_and_flow(r, job_id, user)
+    return await flow.get_job_external_runner_status(job)
+
+
 @ROUTER_ADMIN_PIPELINES.get(
     "/jobs",
     response_model=ListPipelineJobsResponse,
@@ -325,6 +368,28 @@ async def get_pipeline_job_admin(
     )
     job_state = app_state.get_app_state(r).job_state
     return await job_state.get_pipeline_job(job_id, user, as_admin=True)
+
+
+@ROUTER_ADMIN_PIPELINES.get(
+    "/jobs/{job_id}/runner_status",
+    response_model=dict[str, Any],
+    summary="Get a pipeline job's external status",
+    description="Get the status of a pipeline job in an external job runner such as JAWS. "
+        + "This endpoint should be used for informational purposes only and the data structure "
+        + "may change at any time - changes are not treated as backwards incompatibilities. "
+        + "If the job has not yet been submitted to an external runner, "
+        + "an empty dictionary is returned.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_pipeline_job_runner_details_admin(
+    r: Request,
+    job_id: _ANN_PIPELINE_JOB_ID,
+    user: CTSUser = Depends(_AUTH),
+) -> dict[str, Any]:
+    job, flow = await _admin_get_job_and_flow(
+        r, job_id, user, "get pipeline job runner status."
+    )
+    return await flow.get_job_external_runner_details(job)
 
 
 @ROUTER_ADMIN_PIPELINES.delete(

@@ -33,7 +33,6 @@ from cdmtaskservice.callback_url_paths import (
 )
 from cdmtaskservice.exceptions import (
     IllegalParameterError,
-    NoSuchJobError,
     UnauthorizedError,
 )
 from cdmtaskservice.git_commit import GIT_COMMIT
@@ -50,6 +49,9 @@ from cdmtaskservice.routes_shared import (
     ANN_JOB_ADMIN_USER as _ANN_JOB_ADMIN_USER,
     ensure_valid_kbase_user as _ensure_valid_kbase_user,
     ensure_admin_or_executor as _ensure_admin_or_executor,
+    get_job_and_flow as _get_job_and_flow,
+    admin_get_job_and_flow as _admin_get_job_and_flow,
+    JobIDType as _JobIDType,
 )
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
@@ -91,53 +93,6 @@ def _parse_allowed_sites(allowed_sites: str | None) -> set[sites.SubmittableClus
         except ValueError:
             raise IllegalParameterError(f"Invalid site '{s}' in allowed_sites")
     return parsed or None
-
-
-async def _get_job_and_flow(
-    r: Request,
-    job_id: str,
-    user: CTSUser,
-    *,
-    as_admin: bool = False,
-    allow_pipeline_jobs: bool = False,
-) -> tuple[models.AdminJobDetails | pipe_models.AdminPipelineJob, JobFlow]:
-    """
-    Fetch a job with admin-level details and its associated flow. The returned job is an
-    AdminJobDetails instance and MUST NOT be returned directly to non-admin users.
-
-    allow_pipeline_jobs - whether job_id may refer to a pipeline job rather than only a standard
-        job. If False and job_id refers to a pipeline job, NoSuchJobError is raised. Routes
-        exclusively for pipeline jobs live in pipelines/routes.py.
-    """
-    appstate = app_state.get_app_state(r)
-    if allow_pipeline_jobs and pipe_models.is_pipeline_job_id(job_id):
-        job = await appstate.job_state.get_pipeline_job(
-            job_id, user, as_admin=as_admin, admin_details=True
-        )
-    elif pipe_models.is_pipeline_job_id(job_id):
-        raise NoSuchJobError(f"No job with ID '{job_id}' exists")
-    else:
-        job = await appstate.job_state.get_job(job_id, user, as_admin=as_admin, admin_details=True)
-    flow = await appstate.jobflow_manager.get_flow(job.get_cluster())
-    return job, flow
-
-
-async def _admin_get_job_and_flow(
-    r: Request, job_id: str, user: CTSUser, action: str, *, allow_pipeline_jobs: bool = False
-) -> tuple[models.AdminJobDetails | pipe_models.AdminPipelineJob, JobFlow]:
-    """
-    Verify the user is a full admin, then fetch the job with admin-level details and its
-    associated flow. The returned job is an AdminJobDetails instance and MUST NOT be returned
-    directly to non-admin users.
-
-    action - the action being performed, appended to "Only service administrators can ".
-    allow_pipeline_jobs - whether job_id may refer to a pipeline job rather than only a standard
-        job. If False and job_id refers to a pipeline job, NoSuchJobError is raised.
-    """
-    _ensure_admin(user, f"Only service administrators can {action}")
-    return await _get_job_and_flow(
-        r, job_id, user, as_admin=True, allow_pipeline_jobs=allow_pipeline_jobs
-    )
 
 
 class Root(BaseModel):
@@ -1252,7 +1207,7 @@ async def download_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    job, flow = await _callback_handling(r, "Download", job_id, allow_pipeline_jobs=True)
+    job, flow = await _callback_handling(r, "Download", job_id, job_id_type=_JobIDType.EITHER)
     await flow.download_complete(job)
 
 
@@ -1291,7 +1246,7 @@ async def job_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    job, flow = await _callback_handling(r, "Remote job", job_id, allow_pipeline_jobs=True)
+    job, flow = await _callback_handling(r, "Remote job", job_id, job_id_type=_JobIDType.EITHER)
     await flow.job_complete(job)
 
 
@@ -1307,7 +1262,7 @@ async def upload_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    job, flow = await _callback_handling(r, "Upload", job_id, allow_pipeline_jobs=True)
+    job, flow = await _callback_handling(r, "Upload", job_id, job_id_type=_JobIDType.EITHER)
     await flow.upload_complete(job)
 
 
@@ -1324,20 +1279,20 @@ async def error_log_upload_complete(
     job_id: _ANN_JOB_ID
 ):
     # Not yet implemented for pipeline jobs.
-    job, flow = await _callback_handling(r, "Error log upload", job_id, allow_pipeline_jobs=False)
+    job, flow = await _callback_handling(
+        r, "Error log upload", job_id, job_id_type=_JobIDType.STANDARD
+    )
     await flow.error_log_upload_complete(job)
 
 
 async def _callback_handling(
-    r: Request, operation: str, job_id: str, *, allow_pipeline_jobs: bool
+    r: Request, operation: str, job_id: str, *, job_id_type: _JobIDType
 ) -> tuple[models.AdminJobDetails | pipe_models.AdminPipelineJob, JobFlow]:
     logging.getLogger(__name__).info(
         f"{operation} reported as complete for job {job_id}",
         extra={logfields.JOB_ID: job_id},
     )
-    return await _get_job_and_flow(
-        r, job_id, SERVICE_USER, as_admin=True, allow_pipeline_jobs=allow_pipeline_jobs
-    )
+    return await _get_job_and_flow(r, job_id, SERVICE_USER, job_id_type=job_id_type, as_admin=True)
 
 
 @ROUTER_EXTERNAL_EXEC.put(
