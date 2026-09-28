@@ -34,9 +34,10 @@ from cdmtaskservice.exceptions import (
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
-from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates, EntityType
+from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates
 from cdmtaskservice import logfields
 from cdmtaskservice import models
+from cdmtaskservice.models import EntityType
 from cdmtaskservice.mongo import (
     MongoDAO,
     JobUpdateConflictError,
@@ -247,7 +248,7 @@ class KBaseRunner(JobFlow):
         to HTC, an empty dict is returned.
         """
         # allow getting details from earlier runs? Seems unnecessary
-        if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
+        if _not_falsy(job, "job").get_cluster() != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
         _check_num(container_number, "container_number", minimum=0)
         if container_number >= job.job_input.num_containers:
@@ -272,7 +273,7 @@ class KBaseRunner(JobFlow):
         to HTCondor, all containers are reported as NONE.
         """
         _not_falsy(job, "job")
-        if job.job_input.cluster != self.CLUSTER:
+        if job.get_cluster() != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
         if not job.htcondor_details or not job.htcondor_details.cluster_id:
             n = job.job_input.num_containers

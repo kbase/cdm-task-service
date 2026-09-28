@@ -456,7 +456,7 @@ class JobState:
         exited.
         """
         job = await self.get_job(job_id, user, as_admin)
-        containers_self_managed = sites.CLUSTER_TO_EXECUTION_TYPE[job.job_input.cluster]
+        containers_self_managed = sites.CLUSTER_TO_EXECUTION_TYPE[job.get_cluster()]
         if containers_self_managed:
             return await self._mongo.get_exit_codes_for_subjobs(job.id)
         ecs = await self._mongo.get_exit_codes_for_standard_job(job.id)
@@ -492,7 +492,7 @@ class JobState:
                 f"Container number must be < {job.job_input.num_containers} for job {job_id}"
             )
 
-        if sites.CLUSTER_TO_EXECUTION_TYPE[job.job_input.cluster]:
+        if sites.CLUSTER_TO_EXECUTION_TYPE[job.get_cluster()]:
             subjob = await self._mongo.get_subjob(job_id, container_num)
             # Note that if log path is present, checked above, that means no containers are
             # still running. Logs are only uploaded for containers with a non-zero exit code;

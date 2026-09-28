@@ -827,7 +827,7 @@ class NERSCManager:
         file_download_concurrency - the number of files at one time to download to NERSC.
         """
         _check_num(file_download_concurrency, "file_download_concurrency")
-        cluster = _not_falsy(job, "job").job_input.cluster
+        cluster = _not_falsy(job, "job").get_cluster()
         cli = self._client_provider()
         await self._generate_and_load_job_files_to_nersc(cli, job, file_download_concurrency)
         pre = self._get_job_scratch(job.id)
@@ -856,7 +856,7 @@ class NERSCManager:
             job.id,
             pipeline_def.nersc_path / pipeline_def.main_wdl,
             pre / _JAWS_INPUT_JSON,
-            pipeline_input.cluster,
+            job.get_cluster(),
             "Submitted pipeline JAWS job",
         )
 

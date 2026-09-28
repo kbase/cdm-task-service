@@ -133,6 +133,18 @@ class PipelineJobPreview(models.JobStatus, models.InternalJobCommonPreviewFields
     # This is an outgoing data structure only so we don't add validators
     pipeline_input: PipelineJobInputPreview
 
+    def get_entity_type(self) -> models.EntityType:
+        """ Get the entity type for this job. """
+        return models.EntityType.PIPELINE_JOB
+
+    def is_pipeline(self) -> bool:
+        """ Return True if this job is a pipeline job. """
+        return True
+
+    def get_cluster(self) -> sites.Cluster:
+        """ Get the cluster on which this job runs. """
+        return self.pipeline_input.cluster
+
 
 class PipelineJob(PipelineJobPreview, models.InternalJobNonPreviewFields):
     """

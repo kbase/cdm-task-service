@@ -5,27 +5,19 @@ Helper class for performing job and refdata state updates for job flows.
 from collections.abc import Callable
 import datetime
 from dataclasses import dataclass
-import enum
 import logging
 import traceback
 import uuid
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice import models
+from cdmtaskservice.models import EntityType
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice import logfields
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice import sites
 from cdmtaskservice import timestamp
 from cdmtaskservice.update_state import refdata_error, error, JobUpdate, RefdataUpdate
-
-
-class EntityType(enum.Enum):
-    """ The kind of entity a state update applies to. """
-
-    JOB = "job"
-    PIPELINE_JOB = "pipeline_job"
-    REFDATA = "refdata"
 
 
 @dataclass

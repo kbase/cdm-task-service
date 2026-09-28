@@ -914,6 +914,14 @@ class JobState(str, Enum):
         return self in self.active_states()
 
 
+class EntityType(Enum):
+    """ The kind of entity - job, pipeline job, or reference data - being operated on. """
+
+    JOB = "job"
+    PIPELINE_JOB = "pipeline_job"
+    REFDATA = "refdata"
+
+
 class ExternalRunnerState(str, Enum):
     """ The state of a job or container on an external compute resource. """
     NONE = "none"
@@ -1137,6 +1145,18 @@ class JobPreview(JobStatus, InternalJobCommonPreviewFields):
         data for this job.
         """
         return self.job_input.params.refdata_mount_point or self.image.default_refdata_mount_point
+
+    def get_entity_type(self) -> EntityType:
+        """ Get the entity type for this job. """
+        return EntityType.JOB
+
+    def is_pipeline(self) -> bool:
+        """ Return True if this job is a pipeline job. """
+        return False
+
+    def get_cluster(self) -> sites.Cluster:
+        """ Get the cluster on which this job runs. """
+        return self.job_input.cluster
 
 
 class InternalJobNonPreviewFields(BaseModel):
@@ -1422,6 +1442,10 @@ class ReferenceDataStatus(BaseModel):
         description="A description of the error that occurred."
     )] = None
 
+    def get_cluster(self) -> sites.Cluster:
+        """ Get the cluster to which this status applies. """
+        return self.cluster
+
 
 class AdminReferenceDataStatus(ReferenceDataStatus):
     """
@@ -1468,7 +1492,7 @@ class _ReferenceDataRoot(S3File, RegistrationInfo):
     def get_status_for_cluster(self, cluster: sites.Cluster) -> ReferenceDataStatus:
         """
         Get the status of a cluster for this reference data.
-        """ 
+        """
         _not_falsy(cluster, "cluster")
         for s in self.statuses:
             if s.cluster == cluster:
@@ -1476,6 +1500,14 @@ class _ReferenceDataRoot(S3File, RegistrationInfo):
         raise NoRefdataClusterStatusError(
             f"No status for cluster {cluster.value} for reference data {self.id}"
         )
+
+    def get_entity_type(self) -> EntityType:
+        """ Get the entity type for this reference data. """
+        return EntityType.REFDATA
+
+    def is_pipeline(self) -> bool:
+        """ Return True if this entity is a pipeline job. Always False for reference data. """
+        return False
 
 
 class ReferenceData(_ReferenceDataRoot):

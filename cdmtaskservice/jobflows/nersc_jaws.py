@@ -5,7 +5,7 @@ Manages running jobs at NERSC using the JAWS system.
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Awaitable, NamedTuple
+from typing import Any, Callable, Awaitable
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.callback_url_paths import (
@@ -26,9 +26,10 @@ from cdmtaskservice.exceptions import (
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
-from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates, EntityType
+from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
 from cdmtaskservice import logfields
 from cdmtaskservice import models
+from cdmtaskservice.models import EntityType
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -77,18 +78,6 @@ _JAWS_RESULT_TO_EXTERNAL = {
 #                  error state while it's down, and resuming jobs when it's back up
 
 # TODO CODE when a job is passed in, make sure the cluster matches.
-
-
-class _EntityPipeline(NamedTuple):
-    entity_type: EntityType
-    pipeline: bool
-
-
-def _entity_pipeline(
-    job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
-) -> _EntityPipeline:
-    pipeline = isinstance(job, pipe_models.AdminPipelineJob)
-    return _EntityPipeline(EntityType.PIPELINE_JOB if pipeline else EntityType.JOB, pipeline)
 
 
 class NERSCJAWSRunner(JobFlow):
@@ -237,7 +226,7 @@ class NERSCJAWSRunner(JobFlow):
         """
         # Could get the jaws logs and return container specific info in the future
         # allow getting details from earlier runs? Seems unnecessary
-        if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
+        if _not_falsy(job, "job").get_cluster() != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
         if not job.jaws_details or not job.jaws_details.run_id:
             return {}  # job not submitted yet
@@ -256,7 +245,7 @@ class NERSCJAWSRunner(JobFlow):
         state is derived from the JAWS result; otherwise it is derived from the JAWS status.
         """
         _not_falsy(job, "job")
-        if job.job_input.cluster != self.CLUSTER:
+        if job.get_cluster() != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
         if not job.jaws_details or not job.jaws_details.run_id:
             return models.ExternalRunnerStatus(
@@ -289,7 +278,8 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.CREATED:
             raise InvalidJobStateError("Job must be in the created state")
-        entity_type, pipeline = _entity_pipeline(job)
+        entity_type = job.get_entity_type()
+        pipeline = job.is_pipeline()
         # Could check that the s3 and job paths / etags match... YAGNI
         # TODO PERF this validates the file paths yet again. Maybe the way to go is just have
         #           a validate method on S3Paths which can be called or not as needed, with
@@ -328,7 +318,8 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the download submitted state")
-        entity_type, pipeline = _entity_pipeline(job)
+        entity_type = job.get_entity_type()
+        pipeline = job.is_pipeline()
         async def tfunc():
             return await self._nman.get_s3_download_result(job), None
         await self._get_transfer_result(  # check for errors
@@ -340,7 +331,8 @@ class NERSCJAWSRunner(JobFlow):
     async def _submit_jaws_job(
         self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob
     ):
-        entity_type, pipeline = _entity_pipeline(job)
+        entity_type = job.get_entity_type()
+        pipeline = job.is_pipeline()
         jaws_job_id = None
         try:
             # TODO PERF configure file download concurrency
@@ -393,7 +385,7 @@ class NERSCJAWSRunner(JobFlow):
         job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
         jaws_info: dict[str, Any],
     ):
-        pipeline = _entity_pipeline(job).pipeline
+        pipeline = job.is_pipeline()
         if not jaws_client.is_done(jaws_info):
             raise InvalidJobStateError("JAWS run is incomplete")
         res = jaws_client.result(jaws_info)
@@ -487,7 +479,8 @@ class NERSCJAWSRunner(JobFlow):
         jaws_info: dict[str, Any],
     ):
         # This is kind of similar to the method above, not sure if trying to merge is worth it
-        entity_type, pipeline = _entity_pipeline(job)
+        entity_type = job.get_entity_type()
+        pipeline = job.is_pipeline()
         root = job.pipeline_input.output_dir if pipeline else job.job_input.output_dir
 
         async def presign(output_files: list[Path], crc64nvmes: list[str]) -> list[PresignedPost]:
@@ -526,7 +519,7 @@ class NERSCJAWSRunner(JobFlow):
         """
         if _not_falsy(job, "job").state != models.JobState.UPLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the upload submitted state")
-        entity_type = _entity_pipeline(job).entity_type
+        entity_type = job.get_entity_type()
         async def tfunc():
             return await self._nman.get_presigned_upload_result(job), None
         await self._get_transfer_result(  # check for errors
@@ -537,7 +530,8 @@ class NERSCJAWSRunner(JobFlow):
     async def _upload_complete(
         self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob
     ):
-        entity_type, pipeline = _entity_pipeline(job)
+        entity_type = job.get_entity_type()
+        pipeline = job.is_pipeline()
         try:
             if pipeline:
                 root = job.pipeline_input.output_dir
@@ -652,7 +646,7 @@ class NERSCJAWSRunner(JobFlow):
         # might need to have some sort of flowmanager wrapper class that checks these
         # sort of global issues and ensures that Job is not modified before passing it to the
         # flow
-        if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
+        if _not_falsy(job, "job").get_cluster() != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
         if not force and not job.state.is_terminal():
             raise IllegalParameterError("Job is not in a terminal state and cannot be cleaned")
@@ -712,7 +706,8 @@ class NERSCJAWSRunner(JobFlow):
             )
         except Exception as e:
             await self._updates.handle_exception(
-                e, refdata.id, "starting file download for", entity_type=EntityType.REFDATA
+                e, refdata.id, "starting file download for",
+                entity_type=EntityType.REFDATA,
             )
 
     async def refdata_complete(self, refdata_id: str):
