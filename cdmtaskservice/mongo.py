@@ -427,7 +427,8 @@ class MongoDAO:
         # drop the potentially large fields
         project = {
             models.FLD_COMMON_OUTPUTS: 0,
-            f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_INPUT_FILES}": 0
+            f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_INPUT_FILES}": 0,
+            f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_SCRIPT}": 0,
         }
         sort = [(_FLD_UPDATE_TIME, DESCENDING)]
         jobs = []
