@@ -26,6 +26,14 @@ FLD_PIPELINE_JOB_INPUT_CLUSTER = "cluster"
 FLD_PIPELINE_JOB_INPUT_INPUT = "input"
 """ The field name of the pipeline input in a PipelineJobInput. """
 
+PIPELINE_JOB_ID_PREFIX = "pipeline-"
+""" The prefix used for pipeline job IDs, distinguishing them from standard job IDs. """
+
+
+def is_pipeline_job_id(job_id: str) -> bool:
+    """ Check whether a job ID refers to a pipeline job rather than a standard job. """
+    return job_id.startswith(PIPELINE_JOB_ID_PREFIX)
+
 
 SemverVersion = Annotated[
     semver.Version,

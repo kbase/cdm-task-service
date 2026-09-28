@@ -24,6 +24,7 @@ from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.nersc.paths import NERSCPaths
 from cdmtaskservice.nersc.status import NERSCStatus
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
+from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice import sites
 
 
@@ -76,6 +77,7 @@ class JAWSFlowProvider:
         coman: CoroutineWrangler,
         service_group: str,
         service_root_url: str,
+        pipeline_registry: PipelineRegistry,
     ):
         """
         WARNING: this class is not thread safe.
@@ -97,6 +99,7 @@ class JAWSFlowProvider:
             This is used to separate files at NERSC so files from different S3 instances
             (say production and development) don't collide.
         service_root_url - the URL of the service root, used for constructing service callbacks.
+        pipeline_registry - the registry of available pipelines.
         """
         jfp = cls()
         # set up input variables
@@ -111,6 +114,7 @@ class JAWSFlowProvider:
         jfp._coman = _not_falsy(coman, "coman")
         jfp._service_group = _require_string(service_group, "service_group")
         jfp._service_root_url = _require_string(service_root_url, "service_root_url")
+        jfp._pipeline_registry = _not_falsy(pipeline_registry, "pipeline_registry")
 
         # setup other variables
         jfp._logr = logging.getLogger(__name__)
@@ -270,6 +274,7 @@ class JAWSFlowProvider:
                 sfapi_client.get_client,
                 self._nersc_paths,
                 self._jaws_config,
+                self._pipeline_registry,
                 service_group=self._service_group,
             )
             self._logr.info("Done")

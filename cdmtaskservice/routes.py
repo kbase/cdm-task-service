@@ -36,6 +36,7 @@ from cdmtaskservice.exceptions import IllegalParameterError, UnauthorizedError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.jobflows.flowmanager import JobFlow
+from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSUser, CTSRole, SERVICE_USER
@@ -90,24 +91,32 @@ def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
 
 async def _get_job_and_flow(
     r: Request, job_id: str, user: CTSUser, *, as_admin: bool = False
-) -> tuple[models.AdminJobDetails, JobFlow]:
+) -> tuple[models.AdminJobDetails | pipe_models.AdminPipelineJob, JobFlow]:
     """
-    Fetch a job with admin-level details and its associated flow. The returned job is an
-    AdminJobDetails instance and MUST NOT be returned directly to non-admin users.
+    Fetch a job or pipeline job with admin-level details and its associated flow. The returned
+    job is an AdminJobDetails or AdminPipelineJob instance and MUST NOT be returned directly to
+    non-admin users.
     """
     appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, as_admin=as_admin, admin_details=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
+    if pipe_models.is_pipeline_job_id(job_id):
+        job = await appstate.job_state.get_pipeline_job(
+            job_id, user, as_admin=as_admin, admin_details=True
+        )
+        cluster = job.pipeline_input.cluster
+    else:
+        job = await appstate.job_state.get_job(job_id, user, as_admin=as_admin, admin_details=True)
+        cluster = job.job_input.cluster
+    flow = await appstate.jobflow_manager.get_flow(cluster)
     return job, flow
 
 
 async def _admin_get_job_and_flow(
     r: Request, job_id: str, user: CTSUser, action: str
-) -> tuple[models.AdminJobDetails, JobFlow]:
+) -> tuple[models.AdminJobDetails | pipe_models.AdminPipelineJob, JobFlow]:
     """
     Verify the user is a full admin, then fetch the job with admin-level details and its
-    associated flow. The returned job is an AdminJobDetails instance and MUST NOT be returned
-    directly to non-admin users.
+    associated flow. The returned job is an AdminJobDetails or AdminPipelineJob instance and
+    MUST NOT be returned directly to non-admin users.
 
     action - the action being performed, appended to "Only service administrators can ".
     """
@@ -1336,7 +1345,7 @@ async def error_log_upload_complete(
 
 async def _callback_handling(
     r: Request, operation: str, job_id: str
-) -> (JobFlow, models.AdminJobDetails):
+) -> tuple[models.AdminJobDetails | pipe_models.AdminPipelineJob, JobFlow]:
     logging.getLogger(__name__).info(
         f"{operation} reported as complete for job {job_id}",
         extra={logfields.JOB_ID: job_id},

@@ -19,9 +19,8 @@ class _FakeInput(PipelineInput):
     def set_s3_files(self, resolved):
         return self
 
-
-def _fake_build(pipeline_input, file_locations):
-    raise NotImplementedError()
+    def get_input_json(self, file_locations):
+        raise NotImplementedError()
 
 
 def _fake_pipeline(name: str, version: str) -> PipelineDefinition:
@@ -33,7 +32,6 @@ def _fake_pipeline(name: str, version: str) -> PipelineDefinition:
         nersc_path=Path("/fake"),
         main_wdl="fake.wdl",
         file_md5s={"fake.wdl": "abc123"},
-        _build_fn=_fake_build,
     )
 
 

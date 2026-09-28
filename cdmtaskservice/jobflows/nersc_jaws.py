@@ -5,7 +5,7 @@ Manages running jobs at NERSC using the JAWS system.
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Any, Callable, Awaitable, NamedTuple
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.callback_url_paths import (
@@ -32,7 +32,7 @@ from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
-from cdmtaskservice.pipelines.models import AdminPipelineJob
+from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice import sites
@@ -77,6 +77,18 @@ _JAWS_RESULT_TO_EXTERNAL = {
 #                  error state while it's down, and resuming jobs when it's back up
 
 # TODO CODE when a job is passed in, make sure the cluster matches.
+
+
+class _EntityPipeline(NamedTuple):
+    entity_type: EntityType
+    pipeline: bool
+
+
+def _entity_pipeline(
+    job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
+) -> _EntityPipeline:
+    pipeline = isinstance(job, pipe_models.AdminPipelineJob)
+    return _EntityPipeline(EntityType.PIPELINE_JOB if pipeline else EntityType.JOB, pipeline)
 
 
 class NERSCJAWSRunner(JobFlow):
@@ -130,9 +142,8 @@ class NERSCJAWSRunner(JobFlow):
         entity_id: str,
         op: str,
         err_type: str,
-        refdata: bool = False
+        entity_type: EntityType = EntityType.JOB,
     ) -> Any:
-        entity_type = EntityType.REFDATA if refdata else EntityType.JOB
         # can't check that the NERSC task is complete first because the task
         # won't complete until the callback request returns, which won't happen
         # if we wait for the task to complete. IOW, deadlock
@@ -142,13 +153,18 @@ class NERSCJAWSRunner(JobFlow):
             await self._updates.handle_exception(e, entity_id, err_type, entity_type=entity_type)
             raise
         if res.state == TransferState.INCOMPLETE:
-            errcls = InvalidReferenceDataStateError if refdata else InvalidJobStateError
+            errcls = (
+                InvalidReferenceDataStateError
+                if entity_type == EntityType.REFDATA
+                else InvalidJobStateError
+            )
             raise errcls(f"{op} task is not complete")
         elif res.state == TransferState.FAIL:
             self._logr.error(
-                f"{op} failed for {'refdata' if refdata else 'job'}.",
+                f"{op} failed for {entity_type.value}.",
                 extra={
-                    logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id,
+                    logfields.REFDATA_ID if entity_type == EntityType.REFDATA
+                        else logfields.JOB_ID: entity_id,
                     logfields.REMOTE_ERROR: res.message,
                     logfields.REMOTE_TRACEBACK: res.traceback
                 }
@@ -258,36 +274,22 @@ class NERSCJAWSRunner(JobFlow):
             states=[state],
         )
 
-    async def start_job(self, job: models.Job, objmeta: list[S3ObjectMeta]):
+    async def start_job(
+        self,
+        job: models.Job | pipe_models.AdminPipelineJob,
+        objmeta: list[S3ObjectMeta],
+    ):
         """
-        Start running a job. It is expected that the Job has been persisted to the data
+        Start running a job. It is expected that the job has been persisted to the data
         storage system and is in the created state.
 
-        job - the job
+        job - the job or pipeline job.
         objmeta - the S3 object metadata for the files in the job. CRC64/NVME checksums
             are required for all objects.
         """
         if _not_falsy(job, "job").state != models.JobState.CREATED:
             raise InvalidJobStateError("Job must be in the created state")
-        await self._start_download(job.id, objmeta)
-
-    async def start_pipeline_job(self, job: AdminPipelineJob, objmeta: list[S3ObjectMeta]):
-        """
-        Start running a pipeline job. It is expected that the job has been persisted to the
-        data storage system and is in the created state.
-
-        job - the pipeline job.
-        objmeta - the S3 object metadata for the files in the job. CRC64/NVME checksums
-            are required for all objects.
-        """
-        if _not_falsy(job, "job").state != models.JobState.CREATED:
-            raise InvalidJobStateError("Job must be in the created state")
-        await self._start_download(job.id, objmeta, pipeline=True)
-
-    async def _start_download(
-        self, job_id: str, objmeta: list[S3ObjectMeta], pipeline: bool = False
-    ):
-        entity_type = EntityType.PIPELINE_JOB if pipeline else EntityType.JOB
+        entity_type, pipeline = _entity_pipeline(job)
         # Could check that the s3 and job paths / etags match... YAGNI
         # TODO PERF this validates the file paths yet again. Maybe the way to go is just have
         #           a validate method on S3Paths which can be called or not as needed, with
@@ -296,46 +298,55 @@ class NERSCJAWSRunner(JobFlow):
         try:
             # TODO RELIABILITY config / set expiration time
             presigned = await self._s3ext.presign_get_urls(paths)
-            callback_url = get_download_complete_callback(self._callback_root, job_id)
+            callback_url = get_download_complete_callback(self._callback_root, job.id)
             # TODO PERF config / set concurrency
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
             nersc_job_id = await self._nman.download_s3_files(
-                job_id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
+                job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
             )
             # Hmm. really this should go through job state but that seems pointless right now.
             # May need to refactor this and the mongo method later to be more generic to
             # remote cluster and have job_state handle choosing the correct mongo method & params
             # to run
             await self._updates.update_job_state(
-                job_id, submitted_nersc_download(nersc_job_id), pipeline=pipeline
+                job.id, submitted_nersc_download(nersc_job_id), pipeline=pipeline
             )
         except Exception as e:
             await self._updates.handle_exception(
-                e, job_id, "starting file download for", entity_type=entity_type
+                e, job.id, "starting file download for", entity_type=entity_type
             )
 
-    async def download_complete(self, job: models.AdminJobDetails):
+    async def download_complete(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
         """
-        Continue a job after the download is complete. The job is expected to be in the 
+        Continue a job after the download is complete. The job is expected to be in the
         download submitted state.
         """
         if _not_falsy(job, "job").state != models.JobState.DOWNLOAD_SUBMITTED:
             raise InvalidJobStateError("Job must be in the download submitted state")
+        entity_type, pipeline = _entity_pipeline(job)
         async def tfunc():
             return await self._nman.get_s3_download_result(job), None
         await self._get_transfer_result(  # check for errors
-            tfunc, job.id, "Download", "getting download results for",
+            tfunc, job.id, "Download", "getting download results for", entity_type=entity_type,
         )
-        await self._updates.update_job_state(job.id, submitting_job())
+        await self._updates.update_job_state(job.id, submitting_job(), pipeline=pipeline)
         await self._coman.run_coroutine(self._submit_jaws_job(job))
-    
-    async def _submit_jaws_job(self, job: models.AdminJobDetails):
+
+    async def _submit_jaws_job(
+        self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob
+    ):
+        entity_type, pipeline = _entity_pipeline(job)
         jaws_job_id = None
         try:
             # TODO PERF configure file download concurrency
-            jaws_job_id = await self._nman.run_JAWS(job)
+            jaws_job_id = (
+                await self._nman.run_pipeline_JAWS(job) if pipeline
+                else await self._nman.run_JAWS(job)
+            )
             # See notes above about adding the NERSC job id to the job
-            await self._updates.update_job_state(job.id, submitted_jaws_job(jaws_job_id))
+            await self._updates.update_job_state(
+                job.id, submitted_jaws_job(jaws_job_id), pipeline=pipeline
+            )
         except Exception as e:
             if jaws_job_id:
                 try:
@@ -344,7 +355,9 @@ class NERSCJAWSRunner(JobFlow):
                     self._logr.exception(
                         "Error canceling JAWS job after exception in start routine"
                     )
-            await self._updates.handle_exception(e, job.id, "starting JAWS job for")
+            await self._updates.handle_exception(
+                e, job.id, "starting JAWS job for", entity_type=entity_type
+            )
             return
         # after this, don't want to cancel JAWS job if a failure happens
         try:
@@ -354,9 +367,11 @@ class NERSCJAWSRunner(JobFlow):
             jaws_info = await poll_jaws(self._jaws, job.id, jaws_job_id)
             await self._job_complete(job, jaws_info)
         except Exception as e:
-            await self._updates.handle_exception(e, job.id, "monitoring JAWS job for")
+            await self._updates.handle_exception(
+                e, job.id, "monitoring JAWS job for", entity_type=entity_type
+            )
 
-    async def job_complete(self, job: models.AdminJobDetails):
+    async def job_complete(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
         """
         Continue a job after the remote job run is complete. The job is expected to be in the
         job submitted state.
@@ -367,50 +382,77 @@ class NERSCJAWSRunner(JobFlow):
         # TODO RETRIES this line might need changes
         jaws_info = await self._jaws.status(job.jaws_details.run_id[-1])
         await self._job_complete(job, jaws_info)
-    
-    async def _job_complete(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
+
+    async def _job_complete(
+        self,
+        job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
+        jaws_info: dict[str, Any],
+    ):
+        pipeline = _entity_pipeline(job).pipeline
         if not jaws_client.is_done(jaws_info):
             raise InvalidJobStateError("JAWS run is incomplete")
         res = jaws_client.result(jaws_info)
         if res == jaws_client.JAWSResult.SUCCESS:
-            await self._updates.update_job_state(
-                job.id, submitting_upload()
-            )
+            await self._updates.update_job_state(job.id, submitting_upload(), pipeline=pipeline)
             await self._coman.run_coroutine(self._upload_files(job, jaws_info))
         elif res == jaws_client.JAWSResult.FAILED:
-            await self._updates.update_job_state(
-                job.id, submitting_error_processing()
-            )
-            await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
+            if pipeline:
+                # Pipeline jobs don't yet support collecting container logs on failure, so go
+                # straight to the error state rather than the upload-logs flow used by
+                # regular jobs.
+                # TODO PIPELINES improve error handleing, upload logs etc.
+                # Not quite sure what's going to be helpful to upload for a regular user
+                await self._updates.update_job_state(
+                    job.id,
+                    error(
+                        "JAWS reported a result of FAILED for the pipeline job",
+                        user_error="An unexpected error occurred",
+                    ),
+                    pipeline=True,
+                )
+            else:
+                await self._updates.update_job_state(job.id, submitting_error_processing())
+                await self._coman.run_coroutine(self._upload_container_logs(job, jaws_info))
         elif res == jaws_client.JAWSResult.CANCELED:
             # TODO CANCEL in some cases canceled JAWS jobs will have a result of null instead of
             #             canceled. In most cases the CTS job will have already reached the
             #             canceled state and so the SYSTEM_ERROR block below will just log an
             #             error, but it's possible the job could go to an errored state.
-            #             See 
+            #             See
             # https://code.jgi.doe.gov/dsi/advanced-analysis/jaws/jaws-support/-/issues/320
             #             If that gets fixed, great. If not, check the JAWS job log to see if it
             #             was canceled.
             # if we can't talk to mongo there's not much we can do here
             # Could add retries in the mongo wrapper
             # refresh job state as it might have changed
-            job = await self._mongo.get_job_status(job.id)
+            job = await (
+                self._mongo.get_pipeline_job(job.id) if pipeline
+                else self._mongo.get_job_status(job.id)
+            )
             if not job.state.is_canceling():
-                await self._updates.update_job_state(job.id, error(
-                    "JAWS reported the job as canceled",
-                    user_error="The job was unexpectedly canceled",
-                ))
+                await self._updates.update_job_state(
+                    job.id,
+                    error(
+                        "JAWS reported the job as canceled",
+                        user_error="The job was unexpectedly canceled",
+                    ),
+                    pipeline=pipeline,
+                )
             # otherwise do nothing, let the canceling routine handle things
         elif res == jaws_client.JAWSResult.SYSTEM_ERROR:
             # there's no way to force a jaws system error that I'm aware of, will need to
             # test via unit tests
-            await self._updates.update_job_state(job.id, error(
-                "JAWS failed to run the job - check the JAWS job logs",
-                user_error="An unexpected error occurred",
-            ))
+            await self._updates.update_job_state(
+                job.id,
+                error(
+                    "JAWS failed to run the job - check the JAWS job logs",
+                    user_error="An unexpected error occurred",
+                ),
+                pipeline=pipeline,
+            )
         else:  # should never happen
             raise ValueError(f"unexpected JAWS result: {res}")
-    
+
     async def _upload_container_logs(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
         # we're assuming here that the errors.json file @ NERSC has the std* files
         # if not this will break badly, but it also means (I think) that JAWS is broken badly
@@ -434,9 +476,16 @@ class NERSCJAWSRunner(JobFlow):
         except Exception as e:
             await self._updates.handle_exception(e, job.id, "starting error processing for")
     
-    async def _upload_files(self, job: models.AdminJobDetails, jaws_info: dict[str, Any]):
+    async def _upload_files(
+        self,
+        job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
+        jaws_info: dict[str, Any],
+    ):
         # This is kind of similar to the method above, not sure if trying to merge is worth it
-        
+        if _entity_pipeline(job).pipeline:
+            # TODO PIPELINES implement pipeline job output file upload
+            return
+
         async def presign(output_files: list[Path], crc64nvmes: list[str]) -> list[PresignedPost]:
             root = job.job_input.output_dir
             # TODO RELIABILITY config / set expiration time
@@ -658,7 +707,10 @@ class NERSCJAWSRunner(JobFlow):
         async def tfunc():
             return await self._nman.get_s3_refdata_download_result(refdata), None
         await self._get_transfer_result(  # check for errors
-            tfunc, refdata.id, "Download", "getting download results for", refdata=True
+            tfunc,
+            refdata.id,
+            "Download", "getting download results for",
+            entity_type=EntityType.REFDATA,
         )
         # TODO DISKSPACE will need to clean up refdata manifests & d/l result json files
         await self._updates.update_refdata_state(refdata.id, refdata_complete())

@@ -7,7 +7,7 @@ import logging
 import math
 from pathlib import Path
 import uuid
-from typing import AsyncIterator, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from cdmtaskservice import logfields
 from cdmtaskservice import models
@@ -30,11 +30,7 @@ from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 from cdmtaskservice.mongo import MongoDAO, IllegalAdminMetaError
 from cdmtaskservice.pipelines.definition import PipelineInput, PipelineInputValidationError
-from cdmtaskservice.pipelines.models import (
-    AdminPipelineJob,
-    FLD_PIPELINE_JOB_INPUT_INPUT,
-    PipelineJobInput,
-)
+from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, S3PathInaccessibleError
@@ -167,7 +163,9 @@ class JobState:
             await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
 
-    async def _check_output_path(self, job_input: models.JobInput | PipelineJobInput):
+    async def _check_output_path(
+        self, job_input: models.JobInput | pipe_models.PipelineJobInput
+    ):
         out = job_input.output_dir  # model enforces a path, not bucket
         if out.startswith(self._logpath):
             raise S3PathInaccessibleError(f"Jobs may not write to the log path {self._logpath}")
@@ -300,7 +298,7 @@ class JobState:
         )
 
     async def submit_pipeline_job(
-        self, pipeline_job_input: PipelineJobInput, user: CTSUser
+        self, pipeline_job_input: pipe_models.PipelineJobInput, user: CTSUser
     ) -> str:
         """
         Submit a pipeline job.
@@ -320,11 +318,13 @@ class JobState:
             # that data nested under PipelineJobInput's `input` field, so adjust to match the
             # actual request shape.
             for error in e.errors:
-                error["loc"] = (FLD_PIPELINE_JOB_INPUT_INPUT,) + tuple(error["loc"])
+                error["loc"] = (
+                    (pipe_models.FLD_PIPELINE_JOB_INPUT_INPUT,) + tuple(error["loc"])
+                )
             raise
         validated_input, meta = await self._check_and_verify_pipeline_files(validated_input)
         await self._check_output_path(pipeline_job_input)
-        job_id = f"pipeline-{self._uuid_fn()}"
+        job_id = f"{pipe_models.PIPELINE_JOB_ID_PREFIX}{self._uuid_fn()}"
         if not self._test_mode:
             # check the flow is available before we make any changes
             flow = await self._flowman.get_flow(pipeline_job_input.cluster)
@@ -333,7 +333,7 @@ class JobState:
             update={"input": validated_input.model_dump(mode="json")}
         )
         update_time = self._timestamp_fn()
-        job = AdminPipelineJob(
+        job = pipe_models.AdminPipelineJob(
             id=job_id,
             pipeline_input=pji,
             user=user.user,
@@ -348,7 +348,7 @@ class JobState:
         await self._mongo.save_pipeline_job(job)
         # TODO PIPELINES add kafka updte when needed
         if not self._test_mode:
-            await self._coman.run_coroutine(flow.start_pipeline_job(job, meta))
+            await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
 
     async def _check_and_verify_pipeline_files(
@@ -376,7 +376,7 @@ class JobState:
         """
         Get a job based on its ID. If the provided user doesn't match the job's owner,
         an error is thrown.
-        
+
         job_id - the job ID
         user - the user requesting the job.
         as_admin - True if the user should always have access to the job and should access
@@ -384,10 +384,40 @@ class JobState:
         admin_details - True if the user should access additional job details, but not have
             special access to the job.
         """
-        _not_falsy(user, "user")
-        job = await self._mongo.get_job(
-            _require_string(job_id, "job_id"), as_admin=as_admin or admin_details
+        return await self._get_any_job(self._mongo.get_job, job_id, user, as_admin, admin_details)
+
+    async def get_pipeline_job(
+        self,
+        job_id: str,
+        user: CTSUser,
+        as_admin: bool = False,
+        admin_details: bool = False,
+    ) -> pipe_models.PipelineJob | pipe_models.AdminPipelineJob:
+        """
+        Get a pipeline job based on its ID. If the provided user doesn't match the job's owner,
+        an error is thrown.
+
+        job_id - the job ID
+        user - the user requesting the job.
+        as_admin - True if the user should always have access to the job and should access
+            additional job details.
+        admin_details - True if the user should access additional job details, but not have
+            special access to the job.
+        """
+        return await self._get_any_job(
+            self._mongo.get_pipeline_job, job_id, user, as_admin, admin_details
         )
+
+    async def _get_any_job(
+        self,
+        fetch: Callable[..., Awaitable[Any]],
+        job_id: str,
+        user: CTSUser,
+        as_admin: bool,
+        admin_details: bool,
+    ) -> Any:
+        _not_falsy(user, "user")
+        job = await fetch(_require_string(job_id, "job_id"), as_admin=as_admin or admin_details)
         if not as_admin and job.user != user.user:
             # reveals the job ID exists in the system but I don't see a problem with that
             raise UnauthorizedError(f"User {user.user} may not access job {job_id}")

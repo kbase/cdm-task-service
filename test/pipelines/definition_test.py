@@ -10,7 +10,6 @@ from cdmtaskservice.pipelines.definition import (
     PipelineDefinition,
     PipelineInputValidationError,
     PipelineInput,
-    PipelineRun,
 )
 
 
@@ -22,6 +21,9 @@ class _FakeInput(PipelineInput):
     def set_s3_files(self, resolved):
         return self
 
+    def get_input_json(self, file_locations):
+        return {"foo": "bar"}
+
 
 class _FakeInputWithField(PipelineInput):
     value: int
@@ -31,6 +33,9 @@ class _FakeInputWithField(PipelineInput):
 
     def set_s3_files(self, resolved):
         return self
+
+    def get_input_json(self, file_locations):
+        return {"value": self.value}
 
 
 class _FakeInputWithFiles(PipelineInput):
@@ -42,9 +47,8 @@ class _FakeInputWithFiles(PipelineInput):
     def set_s3_files(self, resolved):
         return self.model_copy(update={"files": [resolved[f.file] for f in self.files]})
 
-
-def _build(pipeline_input, file_locations):
-    return PipelineRun(input_json={"foo": "bar"})
+    def get_input_json(self, file_locations):
+        return {}
 
 
 def _def(**overrides) -> PipelineDefinition:
@@ -56,7 +60,6 @@ def _def(**overrides) -> PipelineDefinition:
         nersc_path=Path("/foo/bar"),
         main_wdl="main.wdl",
         file_md5s={"main.wdl": "abc123", "imports/sub.wdl": "def456"},
-        _build_fn=_build,
     )
     kwargs.update(overrides)
     return PipelineDefinition(**kwargs)
@@ -73,7 +76,6 @@ def test_pipeline_definition():
     assert d.main_wdl == "main.wdl"
     assert d.file_md5s == {"main.wdl": "abc123", "imports/sub.wdl": "def456"}
     assert isinstance(d.file_md5s, types.MappingProxyType)
-    assert d._build_fn is _build
     assert d.doc_urls == []
 
 
@@ -85,11 +87,11 @@ def test_pipeline_definition_doc_urls():
 
 def test_pipeline_definition_build():
     d = _def()
+    inp = _FakeInput()
 
-    run = d.build(_FakeInput(), {})
+    run = d.validate_input(inp).get_input_json({})
 
-    assert run == PipelineRun(input_json={"foo": "bar"}, pipeline_def=d)
-    assert run.pipeline_def is d
+    assert run == {"foo": "bar"}
 
 
 def test_pipeline_input_fail_duplicate_files():
@@ -129,37 +131,12 @@ def test_pipeline_definition_validate_input_fail():
     assert e.value.errors[0]["loc"] == ("value",)
 
 
-def test_pipeline_definition_build_validates_input():
-    calls = []
+def test_pipeline_definition_validate_input_then_build():
+    d = _def(input_model=_FakeInputWithField)
 
-    def build(pipeline_input, file_locations):
-        calls.append(pipeline_input)
-        return PipelineRun(input_json={"value": pipeline_input.value})
+    run = d.validate_input({"value": 5}).get_input_json({})
 
-    d = _def(input_model=_FakeInputWithField, _build_fn=build)
-
-    run = d.build({"value": 5}, {})
-
-    assert run == PipelineRun(input_json={"value": 5}, pipeline_def=d)
-    assert calls == [_FakeInputWithField(value=5)]
-
-
-def test_pipeline_definition_build_fail_invalid_input():
-    calls = []
-
-    def build(pipeline_input, file_locations):
-        calls.append(pipeline_input)
-        return PipelineRun(input_json={})
-
-    d = _def(input_model=_FakeInputWithField, _build_fn=build)
-
-    with pytest.raises(PipelineInputValidationError) as e:
-        d.build({}, {})
-
-    assert len(e.value.errors) == 1
-    assert e.value.errors[0]["type"] == "missing"
-    assert e.value.errors[0]["loc"] == ("value",)
-    assert calls == []
+    assert run == {"value": 5}
 
 
 def test_pipeline_definition_fail_no_name():
@@ -205,8 +182,3 @@ def test_pipeline_definition_fail_empty_md5s():
 def test_pipeline_definition_fail_main_wdl_not_in_md5s():
     with pytest.raises(ValueError, match="main_wdl 'main.wdl' must have an entry in file_md5s"):
         _def(file_md5s={"other.wdl": "abc123"})
-
-
-def test_pipeline_definition_fail_no_build_fn():
-    with pytest.raises(ValueError, match="build_fn is required"):
-        _def(_build_fn=None)
