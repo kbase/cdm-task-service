@@ -8,10 +8,19 @@ from pydantic import BaseModel, Field
 from typing import Annotated, Any
 
 from cdmtaskservice import app_state, sites
-from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.pipelines.definition import PipelineDefinition
+from cdmtaskservice.routes_shared import (
+    ensure_admin as _ensure_admin,
+    ANN_JOB_SITE as _ANN_JOB_SITE,
+    ANN_JOB_STATE as _ANN_JOB_STATE,
+    ANN_JOB_AFTER as _ANN_JOB_AFTER,
+    ANN_JOB_BEFORE as _ANN_JOB_BEFORE,
+    ANN_JOB_LIMIT as _ANN_JOB_LIMIT,
+    ANN_JOB_ADMIN_USER as _ANN_JOB_ADMIN_USER,
+    ensure_valid_kbase_user as _ensure_valid_kbase_user,
+)
 from cdmtaskservice.user import CTSUser
 
 ROUTER_PIPELINES = APIRouter(tags=["Pipelines - Experimental"], prefix="/pipelines")
@@ -21,11 +30,6 @@ ROUTER_ADMIN_PIPELINES = APIRouter(
 )
 
 _AUTH = KBaseHTTPBearer()
-
-
-def _ensure_admin(user: CTSUser, err_msg: str):
-    if not user.is_full_admin():
-        raise UnauthorizedError(err_msg)
 
 
 class PipelineDefinitionInfo(BaseModel):
@@ -149,6 +153,39 @@ async def get_pipeline_definition_version(
     return _to_definition_info(registry.get(name, version))
 
 
+class ListPipelineJobsResponse(BaseModel):
+    """ The response to a successful pipeline job listing request. """
+    jobs: Annotated[list[pipe_models.PipelineJobPreview], Field(description="The pipeline jobs")]
+
+
+@ROUTER_PIPELINES.get(
+    "/jobs",
+    response_model=ListPipelineJobsResponse,
+    response_model_exclude_none=True,
+    summary="List pipeline jobs",
+    description="List pipeline jobs for the current user.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def list_pipeline_jobs(
+    r: Request,
+    cluster: _ANN_JOB_SITE = None,
+    state: _ANN_JOB_STATE = None,
+    after: _ANN_JOB_AFTER = None,
+    before: _ANN_JOB_BEFORE = None,
+    limit: _ANN_JOB_LIMIT = 1000,
+    user: CTSUser = Depends(_AUTH),
+) -> ListPipelineJobsResponse:
+    job_state = app_state.get_app_state(r).job_state
+    return ListPipelineJobsResponse(jobs=await job_state.list_pipeline_jobs(
+        user=user.user,
+        site=cluster,
+        state=state,
+        after=after,
+        before=before,
+        limit=limit,
+    ))
+
+
 class SubmitPipelineJobResponse(BaseModel):
     """ The response to a successful pipeline job submission request. """
     job_id: Annotated[str, Field(description="An opaque job ID.")]
@@ -189,6 +226,37 @@ async def submit_pipeline_job(
     del pipeline_job_input
     job_id = await job_state.submit_pipeline_job(job_input, user)
     return SubmitPipelineJobResponse(job_id=job_id)
+
+
+@ROUTER_ADMIN_PIPELINES.get(
+    "/jobs",
+    response_model=ListPipelineJobsResponse,
+    response_model_exclude_none=True,
+    summary="List pipeline jobs as an admin",
+    description="List pipeline jobs for a provided user or all users.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def list_pipeline_jobs_admin(
+    r: Request,
+    user: _ANN_JOB_ADMIN_USER = None,
+    cluster: _ANN_JOB_SITE = None,
+    state: _ANN_JOB_STATE = None,
+    after: _ANN_JOB_AFTER = None,
+    before: _ANN_JOB_BEFORE = None,
+    limit: _ANN_JOB_LIMIT = 1000,
+    methoduser: CTSUser = Depends(_AUTH),
+) -> ListPipelineJobsResponse:
+    _ensure_admin(methoduser, "Only service administrators can list other users' pipeline jobs.")
+    await _ensure_valid_kbase_user(r, user)
+    job_state = app_state.get_app_state(r).job_state
+    return ListPipelineJobsResponse(jobs=await job_state.list_pipeline_jobs(
+        user=user,
+        site=cluster,
+        state=state,
+        after=after,
+        before=before,
+        limit=limit,
+    ))
 
 
 # These are pretty similar to their standard job equivalents but the actual code is so small

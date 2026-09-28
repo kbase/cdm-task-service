@@ -553,7 +553,7 @@ class JobState:
     ) -> list[models.JobPreview]:
         """
         List jobs in the system.
-        
+
         user - filter the jobs by a specific user.
         site - filter jobs by the compute site.
         state - filter the jobs by the given state.
@@ -562,11 +562,63 @@ class JobState:
             exclusive.
         limit - the maximum number of jobs to return between 1 and 1000.
         """
+        return await self._list_any_jobs(
+            self._mongo.list_jobs,
+            user=user,
+            site=site,
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+
+    async def list_pipeline_jobs(
+        self,
+        # can't be a KBaseUser since it may be provided by an admin as a parameter
+        user: str | None = None,
+        site: sites.Cluster | None = None,
+        state: models.JobState | None = None,
+        after: datetime.datetime | None = None,
+        before: datetime.datetime | None = None,
+        limit: int = 1000
+    ) -> list[pipe_models.PipelineJobPreview]:
+        """
+        List pipeline jobs in the system.
+
+        user - filter the jobs by a specific user.
+        site - filter jobs by the compute site.
+        state - filter the jobs by the given state.
+        after - filter jobs to jobs that entered the current state after the given time, inclusive.
+        before - filter jobs to jobs that entered the current state before the given time,
+            exclusive.
+        limit - the maximum number of jobs to return between 1 and 1000.
+        """
+        return await self._list_any_jobs(
+            self._mongo.list_pipeline_jobs,
+            user=user,
+            site=site,
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+
+    async def _list_any_jobs(
+        self,
+        fetch: Callable[..., Awaitable[Any]],
+        *,
+        user: str | None,
+        site: sites.Cluster | None,
+        state: models.JobState | None,
+        after: datetime.datetime | None,
+        before: datetime.datetime | None,
+        limit: int,
+    ) -> Any:
         # mostly a pass through method
         limit = 1000 if limit is None else limit
         if limit < 1 or limit > 1000:
             raise IllegalParameterError("Limit must be between 1 and 1000 inclusive")
-        return await self._mongo.list_jobs(
+        return await fetch(
             user=user,
             site=site,
             state=state,

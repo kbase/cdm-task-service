@@ -15,9 +15,8 @@ from fastapi import (
     Query,
 )
 from fastapi.responses import FileResponse, StreamingResponse
-from kbase.auth import InvalidUserError
 from pathlib import Path
-from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Annotated, Any
 
 from cdmtaskservice import app_state
@@ -41,6 +40,16 @@ from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.jobflows.flowmanager import JobFlow
 from cdmtaskservice.pipelines import models as pipe_models
+from cdmtaskservice.routes_shared import (
+    ensure_admin as _ensure_admin,
+    ANN_JOB_SITE as _ANN_JOB_SITE,
+    ANN_JOB_STATE as _ANN_JOB_STATE,
+    ANN_JOB_AFTER as _ANN_JOB_AFTER,
+    ANN_JOB_BEFORE as _ANN_JOB_BEFORE,
+    ANN_JOB_LIMIT as _ANN_JOB_LIMIT,
+    ANN_JOB_ADMIN_USER as _ANN_JOB_ADMIN_USER,
+    ensure_valid_kbase_user as _ensure_valid_kbase_user,
+)
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSUser, CTSRole, SERVICE_USER
@@ -58,11 +67,6 @@ ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 ROUTER_EXTERNAL_EXEC = APIRouter(tags=["External Execution"])
 
 _AUTH = KBaseHTTPBearer()
-
-
-def _ensure_admin(user: CTSUser, err_msg: str):
-    if not user.is_full_admin():
-        raise UnauthorizedError(err_msg)
 
 
 def _ensure_executor(user: CTSUser, err_msg: str):
@@ -272,30 +276,6 @@ async def get_sites(r: Request) -> Sites:
 class ListJobsResponse(BaseModel):
     """ The response to a successful job listing request. """
     jobs: Annotated[list[models.JobPreview], Field(description="The jobs")]
-
-
-_ANN_JOB_SITE = Annotated[sites.Cluster | None, Query(
-    description="Filter jobs by the site where the job ran."
-)]
-_ANN_JOB_STATE = Annotated[models.JobState | None, Query(
-    description="Filter jobs by the state of the job."
-)]
-_ANN_JOB_AFTER = Annotated[AwareDatetime | None, Query(
-    openapi_examples={"isodate": {"value": "2024-10-24T22:35:40Z"}},
-    description="Filter jobs where the last update time is newer than the provided date, "
-        + "inclusive",
-)]
-_ANN_JOB_BEFORE = Annotated[AwareDatetime | None, Query(
-    openapi_examples={"isodate": {"value": "2024-10-24T22:35:59.999Z"}},
-    description="Filter jobs where the last update time is older than the provided date, "
-        + "exclusive",
-)]
-_ANN_JOB_LIMIT = Annotated[int | None, Query(
-    openapi_examples={"max value": {"value": 1000}},
-    description="The maximum number of jobs to return",
-    ge=1,
-    le=1000,
-)]
 
 
 @ROUTER_JOBS.get(
@@ -787,13 +767,7 @@ async def create_refdata(
 )
 async def list_jobs_admin(
     r: Request,
-    user: Annotated[str, Query(
-        openapi_examples={"kbasehelp user": {"value": "kbasehelp"}},
-        description="Filter jobs by the owner of the job.",
-        min_length=1,
-        max_length=100,
-        pattern=r"^[a-z][a-z\d_]*$",
-    )] = None,
+    user: _ANN_JOB_ADMIN_USER = None,
     cluster: _ANN_JOB_SITE = None,
     state: _ANN_JOB_STATE = None,
     after: _ANN_JOB_AFTER = None,
@@ -802,9 +776,7 @@ async def list_jobs_admin(
     methoduser: CTSUser=Depends(_AUTH),
 ) -> ListJobsResponse:
     _ensure_admin(methoduser, "Only service administrators can list other users' jobs.")
-    auth = app_state.get_app_state(r).auth
-    if user and not await auth.is_valid_kbase_user(user, app_state.get_request_token(r)):
-        raise InvalidUserError(f"No such user: {user}")
+    await _ensure_valid_kbase_user(r, user)
     job_state = app_state.get_app_state(r).job_state
     return ListJobsResponse(jobs=await job_state.list_jobs(
         user=user,
