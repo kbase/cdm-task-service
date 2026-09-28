@@ -665,7 +665,7 @@ class JobInput(JobInputPreview):
         examples=["mybucket/foo/script.sh"],
         description="A user-provided script, either as a file path string or a data "
             + "structure including the file path and optionally a CRC64/NVME checksum. "
-            + "The file path always start with the bucket. "
+            + "The file path always starts with the bucket. "
             + "The script is expected to have a CRC64/NVME checksum available, even "
             + "if it is not provided in the input data structure. "
             + "When returned from the service, the checksum is always included. "

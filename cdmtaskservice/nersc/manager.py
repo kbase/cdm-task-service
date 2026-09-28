@@ -862,7 +862,9 @@ class NERSCManager:
         job: pipe_models.AdminPipelineJob,
         pipeline_def: PipelineDefinition,
     ):
-        validated = pipeline_def.validate_input(job.pipeline_input.input)
+        validated = pipeline_def.validate_input(
+            job.pipeline_input.input, job.pipeline_input.files
+        )
         file_locations = {
             f.file: get_cache_path(self._nersc_perlmutter_file_cache_path, f.crc64nvme)
             for f in validated.get_s3_files()

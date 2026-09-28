@@ -2,8 +2,14 @@ from pathlib import Path
 
 import pytest
 import semver
+from pydantic import ConfigDict
 
-from cdmtaskservice.pipelines.definition import PipelineDefinition, PipelineInput
+from cdmtaskservice.pipelines.definition import (
+    PipelineDefinition,
+    PipelineInput,
+    PipelineInputFiles,
+    PipelineInputParams,
+)
 from cdmtaskservice.pipelines.registry import (
     NoSuchPipelineError,
     PipelineExistsError,
@@ -11,13 +17,23 @@ from cdmtaskservice.pipelines.registry import (
 )
 
 
-class _FakeInput(PipelineInput):
+class _EmptyParams(PipelineInputParams):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _EmptyFiles(PipelineInputFiles):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     def get_s3_files(self):
         return []
 
     def set_s3_files(self, resolved):
         return self
+
+
+class _FakeInput(PipelineInput):
+    input: _EmptyParams = _EmptyParams()
+    files: _EmptyFiles = _EmptyFiles()
 
     def get_input_json(self, file_locations):
         raise NotImplementedError()

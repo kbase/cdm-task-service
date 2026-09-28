@@ -26,6 +26,9 @@ FLD_PIPELINE_JOB_INPUT_CLUSTER = "cluster"
 FLD_PIPELINE_JOB_INPUT_INPUT = "input"
 """ The field name of the pipeline input in a PipelineJobInput. """
 
+FLD_PIPELINE_JOB_INPUT_FILES = "files"
+""" The field name of the pipeline file references in a PipelineJobInput. """
+
 PIPELINE_JOB_ID_PREFIX = "pipeline-"
 """ The prefix used for pipeline job IDs, distinguishing them from standard job IDs. """
 
@@ -53,10 +56,11 @@ def _validate_s3_path(s3path: str) -> str:
         raise ValueError(str(e)) from e
 
 
-class PipelineJobInput(BaseModel):
+class PipelineJobInputPreview(BaseModel):
     """
-    The input to a pipeline job - the pipeline's own input alongside the pipeline identity and
-    output location.
+    The input to a pipeline job, consisting of fields containing small amounts of data -
+    the pipeline's own input parameters alongside the pipeline identity and output location.
+    Suitable for a list of jobs.
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -65,9 +69,8 @@ class PipelineJobInput(BaseModel):
         description="The cluster on which to run the pipeline.",
     )]
     input: Annotated[dict[str, Any], Field(
-        description="The pipeline version's input, in the shape defined by that pipeline "
-            + "version's input model. When returned from the service, the input "
-            + "has been validated and any S3 files included always have a checksum.",
+        description="The pipeline version's input parameters, in the shape defined by that "
+            + "pipeline version's input model. Never contains file references.",
     )]
     pipeline: Annotated[str, Field(
         examples=["readsqc"],
@@ -92,23 +95,34 @@ class PipelineJobInput(BaseModel):
         return _validate_s3_path(v).rstrip("/") + "/"
 
 
+class PipelineJobInput(PipelineJobInputPreview):
+    """
+    The input to a pipeline job - the pipeline's own input alongside the pipeline identity and
+    output location.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    files: Annotated[dict[str, Any], Field(
+        description="The pipeline version's file references, in the shape defined by that "
+            + "pipeline version's input model. When returned from the service, the input "
+            + "has been validated and any S3 files included always have a checksum.",
+    )]
+
+
 class PipelineJobPreview(models.JobStatus, models.InternalJobCommonPreviewFields):
     """
     Information about a pipeline job, consisting of fields containing small amounts of data.
     Suitable for a list of jobs.
-
-    Unlike job previews, pipeline_input is included as-is; the pipeline's input is an
-    opaque, pipeline-specific structure and so cannot be trimmed down the way arbitrary job
-    input files are for standard jobs.
     """
     # This is an outgoing data structure only so we don't add validators
-    pipeline_input: PipelineJobInput
+    pipeline_input: PipelineJobInputPreview
 
 
 class PipelineJob(PipelineJobPreview, models.InternalJobNonPreviewFields):
     """
     Information about a pipeline job. The pipeline equivalent of models.Job.
     """
+    pipeline_input: PipelineJobInput
 
 
 class AdminPipelineJob(models.InternalAdminJobFields, PipelineJob):

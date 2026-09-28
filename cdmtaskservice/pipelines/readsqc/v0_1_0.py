@@ -24,10 +24,15 @@ from pathlib import Path
 from typing import Any, Self
 
 import semver
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from cdmtaskservice import models
-from cdmtaskservice.pipelines.definition import PipelineDefinition, PipelineInput
+from cdmtaskservice.pipelines.definition import (
+    PipelineDefinition,
+    PipelineInput,
+    PipelineInputFiles,
+    PipelineInputParams,
+)
 
 _WORKFLOW = "rqcfilter"
 
@@ -82,8 +87,9 @@ _READ_MODE_TO_INTERLEAVED = {
 }
 
 
-class ReadsQCInput(PipelineInput):
-    """ Input for the ReadsQC (rqcfilter) pipeline, version 0.1.0. """
+class ReadsQCParams(PipelineInputParams):
+    """ Non-file input parameters for the ReadsQC (rqcfilter) pipeline, version 0.1.0. """
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     read_mode: ReadMode = Field(
         description="The mode in which the pipeline should run. "
@@ -92,6 +98,19 @@ class ReadsQCInput(PipelineInput):
             "reads via input_files2. "
             "Files are concatenated together prior to analysis.",
     )
+    output_prefix: str = Field(
+        description="A prefix for output files from the pipeline. Restricted to word "
+            "characters, dots, and hyphens to keep the resulting file names sane.",
+        min_length=1,
+        max_length=256,
+        pattern=r"^[\w][\w.-]*$",
+    )
+
+
+class ReadsQCFiles(PipelineInputFiles):
+    """ File inputs for the ReadsQC (rqcfilter) pipeline, version 0.1.0. """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     input_files: list[models.S3File] = Field(
         description="For read_mode interleaved, one or more interleaved paired-end read files. "
             "For read_mode paired, the forward read files, paired index-for-index with "
@@ -108,27 +127,6 @@ class ReadsQCInput(PipelineInput):
             "When returned from the service, always returned as data structures with a "
             "checksum.",
     )
-    output_prefix: str = Field(
-        description="A prefix for output files from the pipeline. Restricted to word "
-            "characters, dots, and hyphens to keep the resulting file names sane.",
-        min_length=1,
-        max_length=256,
-        pattern=r"^[\w][\w.-]*$",
-    )
-
-    @model_validator(mode="after")
-    def _check_input_mode(self) -> Self:
-        has_rev = bool(self.input_files2)
-        if self.read_mode == ReadMode.PAIRED:
-            if not has_rev:
-                raise ValueError("read_mode paired requires input_files2")
-            if len(self.input_files) != len(self.input_files2):
-                raise ValueError(
-                    "input_files and input_files2 must have equal length for read_mode paired"
-                )
-        elif has_rev:
-            raise ValueError("input_files2 is only valid for read_mode paired")
-        return self
 
     def get_s3_files(self) -> list[models.S3File]:
         files = list(self.input_files)
@@ -141,6 +139,27 @@ class ReadsQCInput(PipelineInput):
             update["input_files2"] = [resolved[f.file] for f in self.input_files2]
         return self.model_copy(update=update)
 
+
+class ReadsQCInput(PipelineInput):
+    """ Input for the ReadsQC (rqcfilter) pipeline, version 0.1.0. """
+
+    input: ReadsQCParams
+    files: ReadsQCFiles
+
+    @model_validator(mode="after")
+    def _check_input_mode(self) -> Self:
+        has_rev = bool(self.files.input_files2)
+        if self.input.read_mode == ReadMode.PAIRED:
+            if not has_rev:
+                raise ValueError("read_mode paired requires input_files2")
+            if len(self.files.input_files) != len(self.files.input_files2):
+                raise ValueError(
+                    "input_files and input_files2 must have equal length for read_mode paired"
+                )
+        elif has_rev:
+            raise ValueError("input_files2 is only valid for read_mode paired")
+        return self
+
     def get_input_json(self, file_locations: dict[str, Path]) -> dict[str, Any]:
         def loc(f: models.S3File) -> str:
             if f.file not in file_locations:
@@ -148,16 +167,16 @@ class ReadsQCInput(PipelineInput):
             return str(file_locations[f.file])
 
         input_json = {
-            f"{_WORKFLOW}.proj": self.output_prefix,
-            f"{_WORKFLOW}.interleaved": _READ_MODE_TO_INTERLEAVED[self.read_mode],
+            f"{_WORKFLOW}.proj": self.input.output_prefix,
+            f"{_WORKFLOW}.interleaved": _READ_MODE_TO_INTERLEAVED[self.input.read_mode],
             f"{_WORKFLOW}.shortRead": True,
             f"{_WORKFLOW}.rqcfilterdata": str(_RQCFILTERDATA_PATH),
         }
-        if self.read_mode == ReadMode.PAIRED:
-            input_json[f"{_WORKFLOW}.input_fq1"] = [loc(f) for f in self.input_files]
-            input_json[f"{_WORKFLOW}.input_fq2"] = [loc(f) for f in self.input_files2]
+        if self.input.read_mode == ReadMode.PAIRED:
+            input_json[f"{_WORKFLOW}.input_fq1"] = [loc(f) for f in self.files.input_files]
+            input_json[f"{_WORKFLOW}.input_fq2"] = [loc(f) for f in self.files.input_files2]
         else:
-            input_json[f"{_WORKFLOW}.input_files"] = [loc(f) for f in self.input_files]
+            input_json[f"{_WORKFLOW}.input_files"] = [loc(f) for f in self.files.input_files]
         return input_json
 
 

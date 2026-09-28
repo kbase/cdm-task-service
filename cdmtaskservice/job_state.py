@@ -29,7 +29,7 @@ from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 from cdmtaskservice.mongo import MongoDAO, IllegalAdminMetaError
-from cdmtaskservice.pipelines.definition import PipelineInput, PipelineInputValidationError
+from cdmtaskservice.pipelines.definition import PipelineInput
 from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice.refdata import Refdata
@@ -310,28 +310,17 @@ class JobState:
         """
         _not_falsy(pipeline_job_input, "pipeline_job_input")
         _not_falsy(user, "user")
-        pipeline_def = self._pipereg.get(pipeline_job_input.pipeline, pipeline_job_input.version)
-        try:
-            validated_input = pipeline_def.validate_input(pipeline_job_input.input)
-        except PipelineInputValidationError as e:
-            # errors are relative to the pipeline's own input model, but the client submitted
-            # that data nested under PipelineJobInput's `input` field, so adjust to match the
-            # actual request shape.
-            for error in e.errors:
-                error["loc"] = (
-                    (pipe_models.FLD_PIPELINE_JOB_INPUT_INPUT,) + tuple(error["loc"])
-                )
-            raise
-        validated_input, meta = await self._check_and_verify_pipeline_files(validated_input)
+        validated_input, meta = await self._check_and_verify_pipeline_files(pipeline_job_input)
         await self._check_output_path(pipeline_job_input)
         job_id = f"{pipe_models.PIPELINE_JOB_ID_PREFIX}{self._uuid_fn()}"
         if not self._test_mode:
             # check the flow is available before we make any changes
             flow = await self._flowman.get_flow(pipeline_job_input.cluster)
             await flow.preflight_pipeline(user, job_id)
-        pji = pipeline_job_input.model_copy(
-            update={"input": validated_input.model_dump(mode="json")}
-        )
+        pji = pipeline_job_input.model_copy(update={
+            pipe_models.FLD_PIPELINE_JOB_INPUT_INPUT: validated_input.input.model_dump(mode="json"),
+            pipe_models.FLD_PIPELINE_JOB_INPUT_FILES: validated_input.files.model_dump(mode="json"),
+        })
         update_time = self._timestamp_fn()
         job = pipe_models.AdminPipelineJob(
             id=job_id,
@@ -352,8 +341,12 @@ class JobState:
         return job_id
 
     async def _check_and_verify_pipeline_files(
-        self, validated_input: PipelineInput
+        self, pipeline_job_input: pipe_models.PipelineJobInput
     ) -> tuple[PipelineInput, list[S3ObjectMeta]]:
+        pipeline_def = self._pipereg.get(pipeline_job_input.pipeline, pipeline_job_input.version)
+        validated_input = pipeline_def.validate_input(
+            pipeline_job_input.input, pipeline_job_input.files
+        )
         s3files = validated_input.get_s3_files()
         if not s3files:
             return validated_input, []
