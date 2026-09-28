@@ -8,13 +8,16 @@ from typing import Coroutine, Callable, Any
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
-from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
+from cdmtaskservice.exceptions import (
+    InvalidJobStateError,
+    JobRecoveryError,
+    NoSuchJobError,
+)
 from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.mongo import (
     MissingSubJobError,
     JobUpdateConflictError,
     MongoDAO,
-    NoSuchJobError,
     NoSuchReferenceDataError,
     NoSuchSubJobError,
     SubJobHtcondorStatsAlreadySetError,
