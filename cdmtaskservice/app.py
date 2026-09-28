@@ -30,6 +30,7 @@ from cdmtaskservice.exceptions import InvalidAuthHeaderError
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice import logfields
 from cdmtaskservice import models_errors
+from cdmtaskservice.pipelines.definition import PipelineInputValidationError
 from cdmtaskservice.refserv import routes as refroutes
 from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
 from cdmtaskservice import routes
@@ -198,6 +199,7 @@ def create_app():
         root_path = cfg.service_root_path or "",
         exception_handlers = {
             RequestValidationError: _handle_fastapi_validation_exception,
+            PipelineInputValidationError: _handle_pipeline_input_validation_exception,
             StarletteHTTPException: _handle_starlette_exception,
             Exception: _handle_general_exception
         },
@@ -264,6 +266,7 @@ def create_refdata_app():
         root_path = cfg.service_root_path or "",
         exception_handlers = {
             RequestValidationError: _handle_fastapi_validation_exception,
+            PipelineInputValidationError: _handle_pipeline_input_validation_exception,
             StarletteHTTPException: _handle_starlette_exception,
             Exception: _handle_general_exception
         },
@@ -302,6 +305,10 @@ def _handle_fastapi_validation_exception(r: Request, exc: RequestValidationError
         error_type=errors.ErrorType.REQUEST_VALIDATION_FAILED,
         request_validation_detail=exc.errors()
     )
+
+def _handle_pipeline_input_validation_exception(r: Request, exc: PipelineInputValidationError):
+    return _handle_fastapi_validation_exception(r, RequestValidationError(exc.errors))
+
 
 def _handle_starlette_exception(r: Request, exc: StarletteHTTPException):
     # may need to expand this in the future if we find other error types

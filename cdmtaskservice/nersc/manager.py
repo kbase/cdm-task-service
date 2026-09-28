@@ -878,7 +878,7 @@ class NERSCManager:
         _not_falsy(job, "job")
         _not_falsy(files_to_urls, "files_to_urls")
         jaws_output_dir = _require_string(jaws_output_dir, "jaws_output_dir")
-        cburl = _require_string(callback_url, "callback_url")
+        callback_url = _require_string(callback_url, "callback_url")
         _check_num(concurrency, "concurrency")
         cli = self._client_provider()
         perl = await cli.compute(Machine.perlmutter)
@@ -915,7 +915,7 @@ class NERSCManager:
             job.id,
             [os.path.join(jaws_output_dir, nrp) for nrp in nersc_rel_paths],
             presigns,
-            cburl,
+            callback_url,
             total_bytes,
             concurrency,
             insecure_ssl,

@@ -310,6 +310,7 @@ dependencies = [
     { name = "motor", marker = "sys_platform == 'linux'" },
     { name = "python-json-logger", marker = "sys_platform == 'linux'" },
     { name = "requests", marker = "sys_platform == 'linux'" },
+    { name = "semver", marker = "sys_platform == 'linux'" },
     { name = "sfapi-client", marker = "sys_platform == 'linux'" },
     { name = "uvicorn", extra = ["standard"], marker = "sys_platform == 'linux'" },
     { name = "yarl", marker = "sys_platform == 'linux'" },
@@ -341,13 +342,14 @@ requires-dist = [
     { name = "docker", specifier = "==7.1.0" },
     { name = "docker-image-py", specifier = "==0.1.13" },
     { name = "fastapi", extras = ["standard"], specifier = "==0.136.1" },
-    { name = "htcondor", specifier = "==25.0.9" },
+    { name = "htcondor", specifier = "==25.0.13" },
     { name = "jinja-cli", specifier = "==1.2.2" },
     { name = "kbase-auth-client", specifier = "==0.1.2" },
     { name = "marisa-trie", specifier = "==1.4.1" },
     { name = "motor", specifier = "==3.7.1" },
     { name = "python-json-logger", specifier = "==4.1.0" },
     { name = "requests", specifier = "==2.33.1" },
+    { name = "semver", specifier = "==3.0.4" },
     { name = "sfapi-client", specifier = "==0.4.1" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.46.0" },
     { name = "yarl", specifier = "==1.23.0" },
@@ -655,11 +657,11 @@ wheels = [
 
 [[package]]
 name = "htcondor"
-version = "25.0.9"
+version = "25.0.13"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/57/59a35d45d7e9e150d9631522b7e97af86390534fdf700653b0910ed5c2c3/htcondor-25.0.9-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:7c62c758606457a1747754c3ea6ef8058eb4f50999cda1f08f4e00871155559a", size = 49050373, upload-time = "2026-04-16T15:04:25.993Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/47/64f6513e6786db56ea3022f792dad90c4050671c4eefdcb311aaa0110c58/htcondor-25.0.9-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:614c4a6082ba6187188618fed7fbd164703bcff58cfc8ea8d1ee0f0deb359590", size = 50414609, upload-time = "2026-04-16T15:04:29.209Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/af/97f796bdb2f9a5aa9cf8015bc8fd2d7548729ba7e7d2f9ebb581baa5718a/htcondor-25.0.13-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:e584bf3c85e03c0e05843f65e920e8f8aae45a8e7a4fe3c02db69a2a41b57d65", size = 8283719, upload-time = "2026-08-20T15:08:40.876Z" },
+    { url = "https://files.pythonhosted.org/packages/15/29/c419b953c7769bfd367478e2c829da3a1dfeba410f84fcb9ac3b667682ec/htcondor-25.0.13-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:02dd00725fd74410fc24251a4b730173184310e1d00431b188b3dc888a2a358f", size = 8696901, upload-time = "2026-08-20T15:08:42.253Z" },
 ]
 
 [[package]]
@@ -1308,6 +1310,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/05/04/74127fc843314818edfa81b5540e26dd537353b123a4edc563109d8f17dd/s3transfer-0.16.0.tar.gz", hash = "sha256:8e990f13268025792229cd52fa10cb7163744bf56e719e0b9cb925ab79abf920", size = 153827, upload-time = "2025-12-01T02:30:59.114Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fc/51/727abb13f44c1fcf6d145979e1535a35794db0f6e450a0cb46aa24732fe2/s3transfer-0.16.0-py3-none-any.whl", hash = "sha256:18e25d66fed509e3868dc1572b3f427ff947dd2c56f844a5bf09481ad3f3b2fe", size = 86830, upload-time = "2025-12-01T02:30:57.729Z" },
+]
+
+[[package]]
+name = "semver"
+version = "3.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/d1/d3159231aec234a59dd7d601e9dd9fe96f3afff15efd33c1070019b26132/semver-3.0.4.tar.gz", hash = "sha256:afc7d8c584a5ed0a11033af086e8af226a9c0b206f313e0301f8dd7b6b589602", size = 269730, upload-time = "2025-01-24T13:19:27.617Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/24/4d91e05817e92e3a61c8a21e08fd0f390f5301f1c448b137c57c4bc6e543/semver-3.0.4-py3-none-any.whl", hash = "sha256:9c824d87ba7f7ab4a1890799cec8596f15c1241cb473404ea1cb0c55e4b04746", size = 17912, upload-time = "2025-01-24T13:19:24.949Z" },
 ]
 
 [[package]]
