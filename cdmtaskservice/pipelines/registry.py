@@ -9,6 +9,7 @@ import semver
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.pipelines.definition import PipelineDefinition
+from cdmtaskservice.pipelines.models import PipelineSpec
 
 
 class NoSuchPipelineError(Exception):
@@ -47,17 +48,23 @@ class PipelineRegistry:
         if not current_latest or pipeline.version > current_latest.version:
             self._latest[name] = pipeline
 
-    def get(self, name: str, version: semver.Version = None) -> PipelineDefinition:
+    def get(
+        self, name: str | PipelineSpec, version: semver.Version = None
+    ) -> PipelineDefinition:
         """
         Look up a pipeline version by name.
 
-        name - the pipeline name.
+        name - the pipeline name, or a PipelineSpec containing the name and version.
         version - the specific version to look up. If omitted, the latest version by semantic
-            versioning is returned.
+            versioning is returned. May not be supplied if name is a PipelineSpec.
 
         Raises NoSuchPipelineError if no pipeline with the given name, or no matching version,
         is registered.
         """
+        if isinstance(name, PipelineSpec):
+            if version is not None:
+                raise ValueError("May not specify version when name is a PipelineSpec")
+            name, version = name.name, name.version
         versions = self._pipelines.get(name)
         if not versions:
             raise NoSuchPipelineError(f"No pipeline named '{name}' is registered")

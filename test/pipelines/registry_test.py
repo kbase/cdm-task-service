@@ -10,6 +10,7 @@ from cdmtaskservice.pipelines.definition import (
     PipelineInputFiles,
     PipelineInputParams,
 )
+from cdmtaskservice.pipelines.models import PipelineSpec
 from cdmtaskservice.pipelines.registry import (
     NoSuchPipelineError,
     PipelineExistsError,
@@ -126,3 +127,25 @@ def test_get_fail_no_such_version():
         NoSuchPipelineError, match="No version '1.0.0' of pipeline 'foo' is registered"
     ):
         reg.get("foo", semver.Version.parse("1.0.0"))
+
+
+def test_get_by_spec():
+    reg = PipelineRegistry()
+    p1 = _fake_pipeline("foo", "0.1.0")
+    p2 = _fake_pipeline("foo", "0.2.0")
+    reg.register(p1)
+    reg.register(p2)
+
+    assert reg.get(PipelineSpec(name="foo", version=semver.Version.parse("0.1.0"))) is p1
+    assert reg.get(PipelineSpec(name="foo", version=semver.Version.parse("0.2.0"))) is p2
+
+
+def test_get_fail_spec_and_version():
+    reg = PipelineRegistry()
+    reg.register(_fake_pipeline("foo", "0.1.0"))
+
+    with pytest.raises(ValueError, match="May not specify version when name is a PipelineSpec"):
+        reg.get(
+            PipelineSpec(name="foo", version=semver.Version.parse("0.1.0")),
+            semver.Version.parse("0.1.0"),
+        )

@@ -302,7 +302,12 @@ class NERSCJAWSRunner(JobFlow):
             # TODO PERF config / set concurrency
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
             nersc_job_id = await self._nman.download_s3_files(
-                job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
+                job.id,
+                objmeta,
+                presigned,
+                callback_url,
+                insecure_ssl=self._s3insecure,
+                pipeline=job.pipeline_input.get_pipeline_spec() if pipeline else None,
             )
             # Hmm. really this should go through job state but that seems pointless right now.
             # May need to refactor this and the mongo method later to be more generic to
@@ -400,7 +405,7 @@ class NERSCJAWSRunner(JobFlow):
                 # Pipeline jobs don't yet support collecting container logs on failure, so go
                 # straight to the error state rather than the upload-logs flow used by
                 # regular jobs.
-                # TODO PIPELINES improve error handleing, upload logs etc.
+                # TODO PIPELINES improve error handling, upload logs etc.
                 # Not quite sure what's going to be helpful to upload for a regular user
                 await self._updates.update_job_state(
                     job.id,

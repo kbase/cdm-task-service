@@ -343,7 +343,7 @@ class JobState:
     async def _check_and_verify_pipeline_files(
         self, pipeline_job_input: pipe_models.PipelineJobInput
     ) -> tuple[PipelineInput, list[S3ObjectMeta]]:
-        pipeline_def = self._pipereg.get(pipeline_job_input.pipeline, pipeline_job_input.version)
+        pipeline_def = self._pipereg.get(pipeline_job_input.get_pipeline_spec())
         validated_input = pipeline_def.validate_input(
             pipeline_job_input.input, pipeline_job_input.files
         )

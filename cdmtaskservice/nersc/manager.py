@@ -82,6 +82,8 @@ _DTN_HOST = "dtn"
 _JOB_MANIFESTS = Path("manifests")
 _MANIFEST_FILE_PREFIX = "manifest-"
 _CRC64NVME_CHECKSUMS_JSON_FILE_NAME = "upload_checksums.json"
+_PIPELINE_OUTPUT_KEYS_JSON = "pipeline_output_keys.json"
+_CHECKSUM_MANIFEST_JSON = "checksum_manifest.json"
 _JOB_LOGS = "logs"
 _JOBS_DIR = "jobs"
 _REFDATA_DIR = "refdata"
@@ -100,7 +102,6 @@ jaws submit --tag {{job_id}} {{wdlpath}} {{inputjsonpath}} {{site}}
 """
 _JAWS_INPUT_WDL = "input.wdl"
 _JAWS_INPUT_JSON = "input.json"
-_PIPELINE_OUTPUT_KEYS_JSON = "pipeline_output_keys.json"
 
 
 # TODO PERF add start and end time to task output and log / record in db / put in result file)
@@ -132,6 +133,7 @@ export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
 export CTS_JAWS_OUTPUT_DIR=$CTS_JAWS_OUTPUT_DIR
 export CTS_CHECKSUM_FILE_LOCATION=$CTS_CHECKSUM_FILE_LOCATION
 export CTS_OUTPUT_KEYS_LOCATION=$CTS_OUTPUT_KEYS_LOCATION
+export CTS_CHECKSUM_MANIFEST_LOCATION=$CTS_CHECKSUM_MANIFEST_LOCATION
 export CTS_STAGING_DIR=$CTS_STAGING_DIR
 export CTS_DTN_HOST=$CTS_DTN_HOST
 export CTS_REFDATA_DEST_DIR=$CTS_REFDATA_DEST_DIR
@@ -155,6 +157,7 @@ echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
 echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]"
 echo "CTS_CHECKSUM_FILE_LOCATION=[$CTS_CHECKSUM_FILE_LOCATION]"
 echo "CTS_OUTPUT_KEYS_LOCATION=[$CTS_OUTPUT_KEYS_LOCATION]"
+echo "CTS_CHECKSUM_MANIFEST_LOCATION=[$CTS_CHECKSUM_MANIFEST_LOCATION]"
 echo "CTS_STAGING_DIR=[$CTS_STAGING_DIR]"
 echo "CTS_DTN_HOST=[$CTS_DTN_HOST]"
 echo "CTS_REFDATA_DEST_DIR=[$CTS_REFDATA_DEST_DIR]"
@@ -481,10 +484,11 @@ class NERSCManager:
         insecure_ssl: bool = False,
         refdata: bool = False,
         unpack: bool = False,
+        pipeline: pipe_models.PipelineSpec = None,
     ) -> str:
         """
         Download a set of files to NERSC from an S3 instance.
-        
+
         download_id - the ID of the job or reference data for which the files are being
             transferred. This must be a unique ID, and no other transfers should be occurring
             for the id.
@@ -497,12 +501,15 @@ class NERSCManager:
         refdata - whether this is a refdata download and files should be stored in the NERSC
             refdata location.
         unpack - whether to unpack *.gz, *.tar.gz, or *.tgz files.
+        pipeline - if this download is for a pipeline job, the pipeline's identity. Causes the
+            pre-staged WDL bundle's MD5s to be verified as part of the download task.
 
         Returns the NERSC Slurm job ID for the download.
         """
         maniio = self._create_download_manifest(
             download_id, objects, presigned_urls, concurrency, insecure_ssl, refdata, unpack)
         total_bytes = sum(o.size for o in objects)
+        pipeline_def = self._pipereg.get(pipeline) if pipeline else None
         return await self._process_manifest(
             maniio,
             download_id,
@@ -511,6 +518,7 @@ class NERSCManager:
             "download",
             total_bytes,
             mode="refdata_manifest" if refdata else "manifest",
+            pipeline_def=pipeline_def,
         )
 
     async def _upload_presigned_files(
@@ -559,6 +567,7 @@ class NERSCManager:
         task_base_path: Path,
         error_json_file_location: str = None,
         container_logs_location: str = None,
+        checksum_manifest_path: Path = None,
     ) -> list[str]:
         refdata = mode == "refdata_manifest"
         command = [
@@ -573,6 +582,8 @@ class NERSCManager:
         if error_json_file_location:
             command.append(f"export CTS_ERRORS_JSON_LOCATION={error_json_file_location}")
             command.append(f"export CTS_CONTAINER_LOGS_LOCATION={container_logs_location}")
+        if checksum_manifest_path:
+            command.append(f"export CTS_CHECKSUM_MANIFEST_LOCATION={checksum_manifest_path}")
         if refdata:
             command.append(f"export CTS_STAGING_DIR={self._get_refdata_staging_loc(entity_id)}")
             command.append(f"export CTS_DTN_HOST={_DTN_HOST}")
@@ -589,6 +600,34 @@ class NERSCManager:
         command.append(f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}')
         return command
 
+    async def _upload_pipeline_checksum_manifest(
+        self,
+        compute: AsyncCompute,
+        rootpath: Path,
+        pipeline_def: PipelineDefinition = None,
+    ) -> Path:
+        """
+        Build and upload a checksum manifest listing the expected MD5s of a pipeline's staged
+        WDL files, for verification at NERSC prior to the pipeline's JAWS run.
+
+        Returns the path to the uploaded manifest, or None if pipeline_def is not provided.
+        """
+        if not pipeline_def:
+            return None
+        checksum_manifest_path = rootpath / _CHECKSUM_MANIFEST_JSON
+        records = [
+            {
+                "path": str(pipeline_def.nersc_path / relpath),
+                "md5": md5,
+                "label": f"pipeline {pipeline_def.name} {pipeline_def.version} WDL file {relpath}",
+            }
+            for relpath, md5 in pipeline_def.file_md5s.items()
+        ]
+        await self._upload_file_to_nersc(
+            compute, checksum_manifest_path, bio=io.BytesIO(json.dumps(records).encode())
+        )
+        return checksum_manifest_path
+
     async def _process_manifest(
         self,
         manifest: io.BytesIO,
@@ -600,6 +639,7 @@ class NERSCManager:
         mode: str = "manifest",
         error_json_file_location: str = None,
         container_logs_location: str = None,  # this is expected to be present if the above is
+        pipeline_def: PipelineDefinition = None,
     ):
         refdata = mode == "refdata_manifest"
         if refdata:
@@ -611,6 +651,9 @@ class NERSCManager:
         perl = await cli.compute(Machine.perlmutter)
         # TODO CLEANUP manifests after some period of time
         await self._upload_file_to_nersc(perl, manifestpath, bio=manifest)
+        checksum_manifest_path = await self._upload_pipeline_checksum_manifest(
+            perl, rootpath, pipeline_def
+        )
         command = self._build_process_manifest_command(
             entity_id,
             callback_url,
@@ -619,6 +662,7 @@ class NERSCManager:
             rootpath / task_type,
             error_json_file_location=error_json_file_location,
             container_logs_location=container_logs_location,
+            checksum_manifest_path=checksum_manifest_path,
         )
         script = _SBATCH_SCRIPT_TEMPLATE.format(
             time=_seconds_to_slurm_time(_compute_sbatch_time_sec(total_bytes)),
@@ -803,7 +847,7 @@ class NERSCManager:
         job - the pipeline job to process.
         """
         pipeline_input = _not_falsy(job, "job").pipeline_input
-        pipeline_def = self._pipereg.get(pipeline_input.pipeline, pipeline_input.version)
+        pipeline_def = self._pipereg.get(pipeline_input.get_pipeline_spec())
         cli = self._client_provider()
         await self._generate_and_load_pipeline_job_files_to_nersc(cli, job, pipeline_def)
         pre = self._get_job_scratch(job.id)

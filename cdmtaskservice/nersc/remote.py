@@ -7,6 +7,7 @@ python versions.
 '''
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -105,11 +106,47 @@ def calculate_pipeline_checksums(
         json.dump(res, f, indent=4)
 
 
-def process_data_transfer_manifest(manifest_file_path: str):
+def verify_file_checksums(manifest_file: str):
+    """
+    Verify that every file listed in a checksum manifest matches its expected MD5 on disk.
+    A general purpose file corruption / unexpected modification check, usable for any file
+    or set of files whose contents are expected to be immutable once staged at NERSC.
+
+    manifest_file - the path to a JSON file containing a list of records, each with:
+        path - the absolute path to the file to check.
+        md5 - the file's expected MD5.
+        label - a human readable label for the file, used to identify it in error messages.
+            Labels need not be unique.
+
+    Raises ValueError listing every mismatched or missing file, by label, if any are found.
+    """
+    with open(manifest_file) as f:
+        records = json.load(f)
+    mismatches = []
+    for rec in records:
+        path = Path(rec["path"])
+        exp_md5 = rec["md5"]
+        if not path.is_file():
+            mismatches.append({"label": rec["label"], "expected": exp_md5, "actual": None})
+            continue
+        with open(path, "rb") as f:
+            actual = hashlib.file_digest(f, "md5").hexdigest()
+        if actual != exp_md5:
+            mismatches.append({"label": rec["label"], "expected": exp_md5, "actual": actual})
+    if mismatches:
+        raise ValueError(
+            f"File checksum verification failed for manifest {manifest_file}: {mismatches}"
+        )
+
+
+def process_data_transfer_manifest(manifest_file_path: str, checksum_manifest_file_path: str = None):
     """
     Processes a data transfer manifest file.
-    
+
     manifest_file_path - the path to to the transfer manifest file.
+    checksum_manifest_file_path - the path to a checksum manifest file (see
+        verify_file_checksums) to check after the transfer completes. If omitted, no check is
+        performed.
     """
     # The manifest should be only used by the CDM task service and so we don't document
     # its structure.
@@ -120,6 +157,8 @@ def process_data_transfer_manifest(manifest_file_path: str):
     with open(manifest_file_path) as f:
         manifest = json.load(f)
     asyncio.run(s3_pdtm(manifest["file-transfers"]))
+    if checksum_manifest_file_path:
+        verify_file_checksums(checksum_manifest_file_path)
     return None
 
 
@@ -283,7 +322,10 @@ def main():
     if mode == "manifest":
         _error_wrapper(
             process_data_transfer_manifest,
-            [os.environ["CTS_MANIFEST_LOCATION"]],
+            [
+                os.environ["CTS_MANIFEST_LOCATION"],
+                os.environ.get("CTS_CHECKSUM_MANIFEST_LOCATION"),
+            ],
             resfile,
             callback_url
         )

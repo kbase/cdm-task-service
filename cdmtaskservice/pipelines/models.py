@@ -4,6 +4,7 @@ arbitrary user-supplied image. These mirror the Job / JobInput / AdminJobDetails
 cdmtaskservice.models, reusing the pieces that aren't specific to arbitrary job input.
 """
 
+import dataclasses
 from typing import Annotated, Any
 
 import semver
@@ -45,6 +46,17 @@ SemverVersion = Annotated[
 ]
 """ A pydantic-compatible semver.Version field - accepts a Version or a version string on input
 and always serializes back to a string. """
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineSpec:
+    """ Identifies a specific version of a registered pipeline. """
+
+    name: str
+    """ The pipeline's name. """
+
+    version: semver.Version
+    """ The pipeline's version. """
 
 
 def _validate_s3_path(s3path: str) -> str:
@@ -93,6 +105,10 @@ class PipelineJobInputPreview(BaseModel):
     @classmethod
     def _check_outdir(cls, v):
         return _validate_s3_path(v).rstrip("/") + "/"
+
+    def get_pipeline_spec(self) -> PipelineSpec:
+        """ Get the pipeline name and version this input targets. """
+        return PipelineSpec(name=self.pipeline, version=self.version)
 
 
 class PipelineJobInput(PipelineJobInputPreview):
