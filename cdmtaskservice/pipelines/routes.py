@@ -2,12 +2,13 @@
 CDM pipeline job endpoints.
 """
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi import Path as FastPath
 from pydantic import BaseModel, Field
 from typing import Annotated, Any
 
 from cdmtaskservice import app_state, sites
+from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.pipelines.definition import PipelineDefinition
@@ -15,7 +16,16 @@ from cdmtaskservice.user import CTSUser
 
 ROUTER_PIPELINES = APIRouter(tags=["Pipelines - Experimental"], prefix="/pipelines")
 
+ROUTER_ADMIN_PIPELINES = APIRouter(
+    tags=["Admin Pipelines - Experimental"], prefix="/admin/pipelines"
+)
+
 _AUTH = KBaseHTTPBearer()
+
+
+def _ensure_admin(user: CTSUser, err_msg: str):
+    if not user.is_full_admin():
+        raise UnauthorizedError(err_msg)
 
 
 class PipelineDefinitionInfo(BaseModel):
@@ -179,3 +189,41 @@ async def submit_pipeline_job(
     del pipeline_job_input
     job_id = await job_state.submit_pipeline_job(job_input, user)
     return SubmitPipelineJobResponse(job_id=job_id)
+
+
+# These are pretty similar to their standard job equivalents but the actual code is so small
+# it's not clear adding a shared helper module would be a benefit
+
+
+_ANN_PIPELINE_JOB_ID = Annotated[str, FastPath(
+    openapi_examples={"job id": {"value": "pipeline-f0c24820-d792-4efa-a38b-2458ed8ec88f"}},
+    description="The pipeline job ID.",
+    pattern=r"^[\w-]+$",
+    min_length=1,
+    max_length=50,
+)]
+
+
+@ROUTER_ADMIN_PIPELINES.delete(
+    "/jobs/{job_id}/clean",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Clean up after a pipeline job",
+    description="Remove any pipeline job related files managed by this service at the remote "
+        + "compute site. The job must be in a terminal state. If the job is already cleaned "
+        + "this is a noop.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def clean_pipeline_job(
+    r: Request,
+    job_id: _ANN_PIPELINE_JOB_ID,
+    force: Annotated[bool, Query(
+        description="**WARNING**: setting force to true may cause undefined behavior. True will "
+        + "cause job files to be removed regardless of job state."
+    )] = False,
+    user: CTSUser = Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can clean pipeline jobs.")
+    appstate = app_state.get_app_state(r)
+    job = await appstate.job_state.get_pipeline_job(job_id, user, as_admin=True)
+    await appstate.flow_cleaner.clean_job(job, user, force=force)

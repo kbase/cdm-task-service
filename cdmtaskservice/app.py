@@ -234,6 +234,7 @@ def create_app():
     app.include_router(routes.ROUTER_REFDATA)
     app.include_router(pipeline_routes.ROUTER_PIPELINES)
     app.include_router(routes.ROUTER_ADMIN)
+    app.include_router(pipeline_routes.ROUTER_ADMIN_PIPELINES)
     app.include_router(routes.ROUTER_CALLBACKS)
     app.include_router(routes.ROUTER_EXTERNAL_EXEC)
 

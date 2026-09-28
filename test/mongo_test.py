@@ -188,6 +188,13 @@ async def test_indexes(mongo, mondb):
     assert pipejobindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
         "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
+        "cleaned_1_state_1__update_time_1": {
+            "v": 2,
+            "key": [("cleaned", 1), ("state", 1), ("_update_time", 1)],
+            "partialFilterExpression": SON(
+                [("cleaned", False), ("state", SON([("$in", ["canceled", "complete", "error"])]))]
+            ),
+        },
     }
     ecindex = mongo.client[MONGO_TEST_DB]["exitcodes"].index_information()
     assert ecindex == {
@@ -241,56 +248,78 @@ async def test_pipeline_job_basic_roundtrip(mondb):
     assert got == _BASEPIPEJOB
 
 
-async def test_set_job_clean(mondb):
+# (base job, save method, get method, clean method, process method, error noun, job id)
+_JOB_CLEAN_PARAMS = [
+    (_BASEJOB, "save_job", "get_job", "set_job_clean", "process_dirty_jobs", "job", "foo"),
+    (
+        _BASEPIPEJOB, "save_pipeline_job", "get_pipeline_job", "set_pipeline_job_clean",
+        "process_dirty_pipeline_jobs", "pipeline job", "pipefoo",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "base_job,save_meth,get_meth,clean_meth,process_meth,noun,job_id", _JOB_CLEAN_PARAMS
+)
+async def test_set_job_clean(mondb, base_job, save_meth, get_meth, clean_meth, process_meth, noun, job_id):
     mc = await MongoDAO.create(mondb)
-    await mc.save_job(_BASEJOB)
-    
-    got = await mc.get_job("foo", as_admin=True)
+    await getattr(mc, save_meth)(base_job)
+
+    got = await getattr(mc, get_meth)(job_id, as_admin=True)
     assert got.cleaned is False
-    
-    await mc.set_job_clean("foo")
-    expected = _BASEJOB.model_copy(deep=True)
+
+    await getattr(mc, clean_meth)(job_id)
+    expected = base_job.model_copy(deep=True)
     expected.cleaned = True
-    
-    got = await mc.get_job("foo", as_admin=True)
+
+    got = await getattr(mc, get_meth)(job_id, as_admin=True)
     assert got == expected
 
 
-async def test_set_job_clean_fail(mondb):
+@pytest.mark.parametrize(
+    "base_job,save_meth,get_meth,clean_meth,process_meth,noun,job_id", _JOB_CLEAN_PARAMS
+)
+async def test_set_job_clean_fail(mondb, base_job, save_meth, get_meth, clean_meth, process_meth, noun, job_id):
     mc = await MongoDAO.create(mondb)
-    await mc.save_job(_BASEJOB)
-    
-    await _set_job_clean_fail(mc, None, ValueError("job_id is required"))
-    await _set_job_clean_fail(mc, "   \t   ", ValueError("job_id is required"))
-    await _set_job_clean_fail(mc, "whoop", NoSuchJobError("No job with ID 'whoop' exists"))
+    await getattr(mc, save_meth)(base_job)
+
+    await _set_job_clean_fail(mc, clean_meth, None, ValueError("job_id is required"))
+    await _set_job_clean_fail(mc, clean_meth, "   \t   ", ValueError("job_id is required"))
+    await _set_job_clean_fail(
+        mc, clean_meth, "whoop", NoSuchJobError(f"No {noun} with ID 'whoop' exists")
+    )
 
 
-async def _set_job_clean_fail(mc, job_id, expected):
+async def _set_job_clean_fail(mc, clean_meth, job_id, expected):
     with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
-        await mc.set_job_clean(job_id)
+        await getattr(mc, clean_meth)(job_id)
 
 
-async def test_process_dirty_jobs(mondb):
+@pytest.mark.parametrize(
+    "base_job,save_meth,get_meth,clean_meth,process_meth,noun,job_id", _JOB_CLEAN_PARAMS
+)
+async def test_process_dirty_jobs(mondb, base_job, save_meth, get_meth, clean_meth, process_meth, noun, job_id):
     mc = await MongoDAO.create(mondb)
+    save = getattr(mc, save_meth)
     current = datetime.datetime(
         year=2026, month=2, day=10, hour=14, minute=30, second=54, tzinfo=datetime.UTC
     )
     older_than = current - datetime.timedelta(days=30)  # much newer than _SAFE_TIME
-    
+
     # Shouldn't be found due to non-terminal states
     for state in set(models.JobState) - models.JobState.terminal_states():
-        running_state = _BASEJOB.model_copy(deep=True)
+        running_state = base_job.model_copy(deep=True)
         running_state.id = state.value
         running_state.state = state  # don't worry about transition_times
-        await mc.save_job(running_state)
-    
-    cleaned = _BASEJOB.model_copy(deep=True)
+        await save(running_state)
+
+    cleaned = base_job.model_copy(deep=True)
     cleaned.id = "cleaned"
     cleaned.state = models.JobState.COMPLETE
     cleaned.cleaned = True  # shouldn't be found due to cleaned state
-    await mc.save_job(cleaned)
-    
-    new = _BASEJOB.model_copy(deep=True)
+    await save(cleaned)
+
+    new = base_job.model_copy(deep=True)
     new.id = "new"
     new.state = models.JobState.ERROR
     new.transition_times.append(models.AdminJobStateTransition(
@@ -299,10 +328,10 @@ async def test_process_dirty_jobs(mondb):
         trans_id="trans1",
         notif_sent=False,
     ))
-    await mc.save_job(new)
-    
+    await save(new)
+
     # save jobs expected to be found, 1 per terminal state
-    found_comp = _BASEJOB.model_copy(deep=True)
+    found_comp = base_job.model_copy(deep=True)
     found_comp.id = "found_comp"
     found_comp.state = models.JobState.COMPLETE
     found_comp.transition_times.append(models.AdminJobStateTransition(
@@ -311,44 +340,49 @@ async def test_process_dirty_jobs(mondb):
         trans_id="trans1",
         notif_sent=False,
     ))
-    await mc.save_job(found_comp)
-    
-    found_err = _BASEJOB.model_copy(deep=True)
+    await save(found_comp)
+
+    found_err = base_job.model_copy(deep=True)
     found_err.id = "found_err"
     found_err.state = models.JobState.ERROR
-    await mc.save_job(found_err)
-    
-    found_cncl = _BASEJOB.model_copy(deep=True)
+    await save(found_err)
+
+    found_cncl = base_job.model_copy(deep=True)
     found_cncl.id = "found_cncl"
     found_cncl.state = models.JobState.CANCELED
-    await mc.save_job(found_cncl)
-    
+    await save(found_cncl)
+
     found = {}
     async def collect(job):
         found[job.id] = job
-    await mc.process_dirty_jobs(older_than, collect)
-    
+    await getattr(mc, process_meth)(older_than, collect)
+
     # debugging help
     assert found.keys() == {"found_cncl", "found_err", "found_comp"}
     assert found == {"found_cncl": found_cncl, "found_err": found_err, "found_comp": found_comp}
-    
+
     # test noop
     found.clear()
-    await mc.process_dirty_jobs(_SAFE_TIME, collect)
-    assert found.keys() == set() 
+    await getattr(mc, process_meth)(_SAFE_TIME, collect)
+    assert found.keys() == set()
 
 
-async def test_process_dirty_jobs_fail(mondb):
+@pytest.mark.parametrize(
+    "base_job,save_meth,get_meth,clean_meth,process_meth,noun,job_id", _JOB_CLEAN_PARAMS
+)
+async def test_process_dirty_jobs_fail(mondb, base_job, save_meth, get_meth, clean_meth, process_meth, noun, job_id):
     mc = await MongoDAO.create(mondb)
     await _process_dirty_jobs_fail(
-        mc, None, lambda: print("foo"), ValueError("older_than is required")
+        mc, process_meth, None, lambda: print("foo"), ValueError("older_than is required")
     )
-    await _process_dirty_jobs_fail(mc, _SAFE_TIME, None, ValueError("operation is required"))
+    await _process_dirty_jobs_fail(
+        mc, process_meth, _SAFE_TIME, None, ValueError("operation is required")
+    )
 
 
-async def _process_dirty_jobs_fail(mc, older_than, op, expected):
+async def _process_dirty_jobs_fail(mc, process_meth, older_than, op, expected):
     with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
-        await mc.process_dirty_jobs(older_than, op)
+        await getattr(mc, process_meth)(older_than, op)
 
 
 async def test_exit_codes_for_standard_job_roundtrip(mondb):

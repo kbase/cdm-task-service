@@ -141,9 +141,23 @@ class MongoDAO:
                 },
             ),
         ])
-        # Only the unique ID index is needed for now; add more as pipeline job querying is built.
+        # add more as pipeline job querying is built.
         await self._col_pipeline_jobs.create_indexes([
             IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
+            # Find pipeline jobs that need cleaning
+            IndexModel(
+                [
+                    (models.FLD_COMMON_CLEANED, ASCENDING),
+                    (models.FLD_COMMON_STATE, ASCENDING),
+                    (_FLD_UPDATE_TIME, ASCENDING)
+                ],
+                partialFilterExpression={
+                    models.FLD_COMMON_CLEANED: False,
+                    models.FLD_COMMON_STATE: {
+                        "$in": sorted([s.value for s in models.JobState.terminal_states()])
+                    }
+                },
+            ),
         ])
         # TODO PIPELINES will need more indexes for listing
         statefield = f"{models.FLD_COMMON_TRANS_TIMES}.{models.FLD_COMMON_STATE_TRANSITION_STATE}"
@@ -481,10 +495,17 @@ class MongoDAO:
     
     async def set_job_clean(self, job_id: str):
         """ Set a job's cleaned state to true. """
+        await self._set_clean(self._col_jobs, job_id, "job")
+
+    async def set_pipeline_job_clean(self, job_id: str):
+        """ Set a pipeline job's cleaned state to true. """
+        await self._set_clean(self._col_pipeline_jobs, job_id, "pipeline job")
+
+    async def _set_clean(self, collection, job_id: str, noun: str):
         query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
-        res = await self._col_jobs.update_one(query, {"$set": {models.FLD_COMMON_CLEANED: True}})
+        res = await collection.update_one(query, {"$set": {models.FLD_COMMON_CLEANED: True}})
         if not res.matched_count:
-            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+            raise NoSuchJobError(f"No {noun} with ID '{job_id}' exists")
 
     async def process_dirty_jobs(
             self,
@@ -495,9 +516,33 @@ class MongoDAO:
         * the last update time was older than the older_than argument
         * the cleaned flag is false
         * the job state is one of the terminal states
-        
+
         and pass the job to the operation argument, which must be an async function.
         """
+        await self._process_dirty(
+            self._col_jobs, older_than, operation, lambda j: self._doc_to_job(j, as_admin=True)
+        )
+
+    async def process_dirty_pipeline_jobs(
+            self,
+            older_than: datetime.datetime,
+            operation: Callable[[pipe_models.AdminPipelineJob], Awaitable[None]]):
+        """
+        Find pipeline jobs where
+        * the last update time was older than the older_than argument
+        * the cleaned flag is false
+        * the job state is one of the terminal states
+
+        and pass the job to the operation argument, which must be an async function.
+        """
+        await self._process_dirty(
+            self._col_pipeline_jobs,
+            older_than,
+            operation,
+            lambda j: pipe_models.AdminPipelineJob(**self._clean_doc(j)),
+        )
+
+    async def _process_dirty(self, collection, older_than: datetime.datetime, operation, to_model):
         _not_falsy(older_than, "older_than")
         _not_falsy(operation, "operation")
         query = {
@@ -505,10 +550,10 @@ class MongoDAO:
             models.FLD_COMMON_STATE: {"$in": [s.value for s in models.JobState.terminal_states()]},
             _FLD_UPDATE_TIME: {"$lt": older_than},
         }
-        async for j in self._col_jobs.find(query):
+        async for j in collection.find(query):
             # could make this more efficient by making yet another job model that includes
             # admin details but not file paths. May need to separate files from jobs...
-            await operation(self._doc_to_job(j, as_admin=True))
+            await operation(to_model(j))
 
     def _update_job_state_condition(
         self,
