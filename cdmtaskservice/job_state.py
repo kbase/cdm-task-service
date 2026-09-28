@@ -29,8 +29,15 @@ from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 from cdmtaskservice.mongo import MongoDAO, IllegalAdminMetaError
+from cdmtaskservice.pipelines.definition import PipelineInput, PipelineInputValidationError
+from cdmtaskservice.pipelines.models import (
+    AdminPipelineJob,
+    FLD_PIPELINE_JOB_INPUT_INPUT,
+    PipelineJobInput,
+)
+from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice.refdata import Refdata
-from cdmtaskservice.s3.client import S3Client, S3PathInaccessibleError
+from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, S3PathInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -52,6 +59,7 @@ class JobState:
         refdata: Refdata,
         coro_manager: CoroutineWrangler,
         flow_manager: JobFlowManager,
+        pipeline_registry: PipelineRegistry,
         allowed_paths: list[str],
         log_path: str,
         job_max_cpu_hours: float,
@@ -69,6 +77,7 @@ class JobState:
         refdata - a manager for reference data.
         coro_manager - a coroutine manager.
         flow_manager- the job flow manager.
+        pipeline_registry - the registry of available pipeline versions.
         allowed_paths - the paths where users are allowed to read files for input and write
             files for output. Paths may be just a bucket. Paths must end in '/'.
             If omitted, the user can read and write anywhere the service can read and write
@@ -86,6 +95,7 @@ class JobState:
         self._ref = _not_falsy(refdata, "refdata")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._flowman = _not_falsy(flow_manager, "flow_manager")
+        self._pipereg = _not_falsy(pipeline_registry, "pipeline_registry")
         # TODO CODE make a path set that enforces:
         #   * the allowed and log paths end in /.
         #   * The paths are valid
@@ -157,7 +167,7 @@ class JobState:
             await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
 
-    async def _check_output_path(self, job_input: models.JobInput):
+    async def _check_output_path(self, job_input: models.JobInput | PipelineJobInput):
         out = job_input.output_dir  # model enforces a path, not bucket
         if out.startswith(self._logpath):
             raise S3PathInaccessibleError(f"Jobs may not write to the log path {self._logpath}")
@@ -202,6 +212,46 @@ class JobState:
                 + f"{job_input.cluster.value}"
             )
 
+    async def _verify_and_get_meta(
+        self,
+        paths: list[str],
+        expected_checksums: list[str | None],
+        path_label: str = "input",
+    ) -> list[S3ObjectMeta]:
+        """
+        Check that paths are subpaths of the user's allowed paths, if configured, and that
+        each path exists in S3 with a CRC64/NVME checksum, optionally verifying the checksum
+        matches an expected value.
+
+        paths - the S3 paths to check.
+        expected_checksums - the expected CRC64/NVME checksum for each path, in the same order
+            as paths, or None for a path if no checksum is expected.
+        path_label - a noun describing the paths, used in the allowed-paths error message.
+
+        Returns S3 metadata for each path, in the same order as paths.
+        """
+        if self._allowedpaths:
+            for p in paths:
+                if not any([p.startswith(ap) for ap in self._allowedpaths]):
+                    raise S3PathInaccessibleError(
+                        f"The {path_label} path {p} is not a subpath of the user's "
+                        + "allowed paths"
+                    )
+        # TODO PERF may want to make concurrency configurable here
+        # TODO PERF this checks the file path syntax again, consider some way to avoid
+        meta = await self._s3.get_object_meta(S3Paths(paths))
+        for p, m, expected in zip(paths, meta, expected_checksums):
+            if not m.crc64nvme:
+                raise IllegalParameterError(
+                    f"The S3 path '{m.path}' does not have a CRC64/NVME checksum"
+                )
+            if expected and expected != m.crc64nvme:
+                raise ChecksumMismatchError(
+                    f"The expected CRC64/NMVE checksum '{expected}' for the path "
+                    + f"'{p}' does not match the actual checksum '{m.crc64nvme}'"
+                )
+        return meta
+
     async def _check_and_update_script(self, job_input: models.JobInput, image: models.Image):
         if image.script_image and not job_input.script:
             raise IllegalParameterError(
@@ -215,49 +265,22 @@ class JobState:
         if not job_input.script:
             return None
         script = job_input.script
-        path = script.file
-        if self._allowedpaths:
-            if not any([path.startswith(ap) for ap in self._allowedpaths]):
-                raise S3PathInaccessibleError(
-                    f"The script path {path} is not a subpath of the user's allowed paths")
-        meta = (await self._s3.get_object_meta(S3Paths([path])))[0]
-        if not meta.crc64nvme:
-            raise IllegalParameterError(
-                f"The S3 path '{meta.path}' does not have a CRC64/NVME checksum"
-            )
-        if script.crc64nvme and script.crc64nvme != meta.crc64nvme:
-            raise ChecksumMismatchError(
-                f"The expected CRC64/NMVE checksum '{script.crc64nvme}' for the path "
-                + f"'{script.file}' does not match the actual checksum "
-                + f"'{meta.crc64nvme}'"
-            )
+        meta = (await self._verify_and_get_meta(
+            [script.file], [script.crc64nvme], path_label="script"
+        ))[0]
         return models.S3File.model_construct(file=meta.path, crc64nvme=meta.crc64nvme)
 
     async def _check_and_update_files(self, job_input: models.JobInput):
         paths = [f.file for f in job_input.input_files]
-        if self._allowedpaths:
-            for p in paths:
-                if not any([p.startswith(ap) for ap in self._allowedpaths]):
-                    raise S3PathInaccessibleError(
-                        f"The input path {p} is not a subpath of the user's allowed paths")
-        # TODO PERF may want to make concurrency configurable here
-        # TODO PERF this checks the file path syntax again, consider some way to avoid
-        meta = await self._s3.get_object_meta(S3Paths(paths))
-        new_input = []
-        for m, f in zip(meta, job_input.input_files):
-            if not m.crc64nvme:
-                raise IllegalParameterError(
-                    f"The S3 path '{m.path}' does not have a CRC64/NVME checksum"
-                )
-            if f.crc64nvme and f.crc64nvme != m.crc64nvme:
-                raise ChecksumMismatchError(
-                    f"The expected CRC64/NMVE checksum '{f.crc64nvme}' for the path "
-                    + f"'{f.file}' does not match the actual checksum '{m.crc64nvme}'"
-                )
-            # no need to validate the path again
-            new_input.append(models.S3FileWithDataID.model_construct(
-                file=m.path, crc64nvme=m.crc64nvme, data_id=f.data_id)
+        expected = [f.crc64nvme for f in job_input.input_files]
+        meta = await self._verify_and_get_meta(paths, expected)
+        # no need to validate the path again
+        new_input = [
+            models.S3FileWithDataID.model_construct(
+                file=m.path, crc64nvme=m.crc64nvme, data_id=f.data_id
             )
+            for m, f in zip(meta, job_input.input_files)
+        ]
         return new_input, meta
 
     async def _check_refdata(self, job_input: models.JobInput, image: models.Image):
@@ -275,6 +298,71 @@ class JobState:
                 f"Reference data '{refdata.id} required for job is not yet staged at "
                 + f"remote compute environment {job_input.cluster.value}"
         )
+
+    async def submit_pipeline_job(
+        self, pipeline_job_input: PipelineJobInput, user: CTSUser
+    ) -> str:
+        """
+        Submit a pipeline job.
+
+        pipeline_job_input - the input for the pipeline job.
+        user - the user submitting the job.
+
+        Returns the opaque job ID.
+        """
+        _not_falsy(pipeline_job_input, "pipeline_job_input")
+        _not_falsy(user, "user")
+        pipeline_def = self._pipereg.get(pipeline_job_input.pipeline, pipeline_job_input.version)
+        try:
+            validated_input = pipeline_def.validate_input(pipeline_job_input.input)
+        except PipelineInputValidationError as e:
+            # errors are relative to the pipeline's own input model, but the client submitted
+            # that data nested under PipelineJobInput's `input` field, so adjust to match the
+            # actual request shape.
+            for error in e.errors:
+                error["loc"] = (FLD_PIPELINE_JOB_INPUT_INPUT,) + tuple(error["loc"])
+            raise
+        validated_input = await self._check_and_verify_pipeline_files(validated_input)
+        await self._check_output_path(pipeline_job_input)
+        job_id = f"pipeline-{self._uuid_fn()}"
+        if not self._test_mode:
+            # check the flow is available before we make any changes
+            flow = await self._flowman.get_flow(pipeline_job_input.cluster)
+            await flow.preflight_pipeline(user, job_id)
+        pji = pipeline_job_input.model_copy(
+            update={"input": validated_input.model_dump(mode="json")}
+        )
+        update_time = self._timestamp_fn()
+        job = AdminPipelineJob(
+            id=job_id,
+            pipeline_input=pji,
+            user=user.user,
+            state=models.JobState.CREATED,
+            transition_times=[models.AdminJobStateTransition(
+                state=models.JobState.CREATED,
+                time=update_time,
+                trans_id=str(self._uuid_fn()),
+                notif_sent=False,
+            )],
+        )
+        await self._mongo.save_pipeline_job(job)
+        # TODO PIPELINES add kafka updte when needed
+        return job_id
+
+    async def _check_and_verify_pipeline_files(
+        self, validated_input: PipelineInput
+    ) -> PipelineInput:
+        s3files = validated_input.get_s3_files()
+        if not s3files:
+            return validated_input
+        paths = [f.file for f in s3files]
+        expected = [f.crc64nvme for f in s3files]
+        meta = await self._verify_and_get_meta(paths, expected)
+        resolved = {
+            m.path: models.S3File.model_construct(file=m.path, crc64nvme=m.crc64nvme)
+            for m in meta
+        }
+        return validated_input.set_s3_files(resolved)
 
     async def get_job(
         self,

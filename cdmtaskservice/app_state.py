@@ -34,6 +34,8 @@ from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.notifications.kafka_checker import KafkaChecker
+from cdmtaskservice.pipelines.readsqc import v0_1_0 as readsqc_v0_1_0
+from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
 from cdmtaskservice.refserv.cts_client import CTSRefdataClient
@@ -246,6 +248,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
         images = Images(mongodao, imginfo, refdata)
+        pipeline_registry = _create_pipeline_registry(logr)
         job_state = JobState(  # this also has a lot of required args, yech
             mongodao,
             s3cfg.get_internal_client(),
@@ -254,6 +257,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             refdata,
             coman,
             flowman,
+            pipeline_registry,
             cfg.allowed_s3_paths,
             cfg.container_s3_log_dir,
             cfg.job_max_cpu_hours,
@@ -279,6 +283,14 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
     except:
         await dest.destruct()
         raise
+
+
+def _create_pipeline_registry(logr: logging.Logger) -> PipelineRegistry:
+    logr.info("Initializing pipeline registry...")
+    registry = PipelineRegistry()
+    registry.register(readsqc_v0_1_0.init())
+    logr.info("Done")
+    return registry
 
 
 def _get_local_path(path: str) -> Path:

@@ -9,6 +9,7 @@ from typing import Coroutine, Callable, Any
 from cdmtaskservice import models
 from cdmtaskservice import sites
 from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
+from cdmtaskservice.pipelines.models import AdminPipelineJob, PipelineJobInput
 from cdmtaskservice.mongo import (
     MissingSubJobError,
     JobUpdateConflictError,
@@ -76,6 +77,25 @@ _BASEJOB = models.AdminJobDetails(
     ]
 )
 
+_BASEPIPEJOB = AdminPipelineJob(
+    id="pipefoo",
+    pipeline_input=PipelineJobInput(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
+        input={"output_prefix": "proj-xyz"},
+        pipeline="readsqc",
+        version="0.1.0",
+        output_dir="bucket/output",
+    ),
+    user="user",
+    state=models.JobState.CREATED,
+    transition_times=[models.AdminJobStateTransition(
+        state=models.JobState.CREATED,
+        time=_SAFE_TIME,
+        trans_id="trans1",
+        notif_sent=False,
+    )],
+)
+
 _BASESUBJOB1 = models.SubJob(
     id="bar",
     sub_id=0,
@@ -92,7 +112,9 @@ async def test_indexes(mongo, mondb):
     mongo.clear_database(MONGO_TEST_DB, drop_indexes=True)
     await MongoDAO.create(mondb)
     cols = mongo.client[MONGO_TEST_DB].list_collection_names()
-    assert set(cols) == {"jobs", "refdata", "images", "sites", "subjobs", "exitcodes"}
+    assert set(cols) == {
+        "jobs", "pipeline_jobs", "refdata", "images", "sites", "subjobs", "exitcodes"
+    }
     siteindex = mongo.client[MONGO_TEST_DB]["sites"].index_information()
     assert siteindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
@@ -158,6 +180,11 @@ async def test_indexes(mongo, mondb):
             ]),
         },
     }
+    pipejobindex = mongo.client[MONGO_TEST_DB]["pipeline_jobs"].index_information()
+    assert pipejobindex == {
+        "_id_": {"v": 2, "key": [("_id", 1)]},
+        "id_1": {"v": 2, "key": [("id", 1)], "unique": True},
+    }
     ecindex = mongo.client[MONGO_TEST_DB]["exitcodes"].index_information()
     assert ecindex == {
         "_id_": {"v": 2, "key": [("_id", 1)]},
@@ -200,6 +227,14 @@ async def test_job_basic_roundtrip(mondb):
 
     got = await mc.get_job("foo", as_admin=True)
     assert got == _BASEJOB
+
+
+async def test_pipeline_job_basic_roundtrip(mondb):
+    mc = await MongoDAO.create(mondb)
+    await mc.save_pipeline_job(_BASEPIPEJOB)
+
+    got = await mc.get_pipeline_job("pipefoo", as_admin=True)
+    assert got == _BASEPIPEJOB
 
 
 async def test_set_job_clean(mondb):

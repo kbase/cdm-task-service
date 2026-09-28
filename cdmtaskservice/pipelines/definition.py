@@ -52,6 +52,17 @@ class PipelineInput(BaseModel, abc.ABC):
         must be stable enough to zip back up with the corresponding file locations.
         """
 
+    @abc.abstractmethod
+    def set_s3_files(self, resolved: dict[str, models.S3File]) -> Self:
+        """
+        Return a new instance of this input with every S3 file returned by get_s3_files
+        replaced by its counterpart in resolved, e.g. to fill in a checksum CTS resolved from
+        S3. Does not modify this instance.
+
+        resolved - a mapping of S3 path (the `file` field of models.S3File) to the resolved
+            file. Contains an entry for every file returned by get_s3_files.
+        """
+
     @model_validator(mode="after")
     def _check_no_duplicate_files(self) -> Self:
         paths = [f.file for f in self.get_s3_files()]

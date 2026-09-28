@@ -178,6 +178,19 @@ class NERSCJAWSRunner(JobFlow):
                 "User-provided scripts are not supported for the "
                 + f"{self.CLUSTER.value} job flow"
             )
+        self._check_authorized(user)
+
+    async def preflight_pipeline(self, user: CTSUser, job_id: str):
+        """
+        Check that a user is authorized to run a pipeline job prior to running it. Will throw
+        an error if the user doesn't meet requirements.
+
+        user - the user running the job.
+        job_id - the job's ID.
+        """
+        self._check_authorized(_not_falsy(user, "user"))
+
+    def _check_authorized(self, user: CTSUser):
         if not user.is_cts_user() or not user.has_nersc_account:
             raise UnauthorizedError(
                 f"To use the {self.CLUSTER.value} site, you must be a CTS user "

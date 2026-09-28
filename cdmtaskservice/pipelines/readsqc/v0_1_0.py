@@ -126,6 +126,12 @@ class ReadsQCInput(PipelineInput):
         files.extend(self.input_files2 or [])
         return files
 
+    def set_s3_files(self, resolved: dict[str, models.S3File]) -> Self:
+        update = {"input_files": [resolved[f.file] for f in self.input_files]}
+        if self.input_files2:
+            update["input_files2"] = [resolved[f.file] for f in self.input_files2]
+        return self.model_copy(update=update)
+
 
 def build(pipeline_input: ReadsQCInput, file_locations: dict[str, Path]) -> PipelineRun:
     """ Build the JAWS input.json for a ReadsQC (rqcfilter) 0.1.0 run. """
