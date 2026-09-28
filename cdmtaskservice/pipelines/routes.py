@@ -3,6 +3,7 @@ CDM pipeline job endpoints.
 """
 
 from fastapi import APIRouter, Depends, Request
+from fastapi import Path as FastPath
 from pydantic import BaseModel, Field
 from typing import Annotated, Any
 
@@ -58,7 +59,7 @@ def _to_definition_info(pd: PipelineDefinition) -> PipelineDefinitionInfo:
 class PipelineDefinitions(BaseModel):
     """ The response to a request to list available pipeline definitions. """
     data: Annotated[list[PipelineDefinitionInfo], Field(
-        description="The latest version of each registered pipeline."
+        description="The requested pipeline definitions."
     )]
 
 
@@ -75,6 +76,67 @@ async def list_pipeline_definitions(r: Request) -> PipelineDefinitions:
     return PipelineDefinitions(
         data=[_to_definition_info(pd) for pd in registry.list_latest()]
     )
+
+
+_ANN_PIPELINE_NAME = Annotated[str, FastPath(
+    examples=["readsqc"],
+    description="The pipeline's name.",
+    min_length=1,
+    max_length=256,
+)]
+
+
+_ANN_PIPELINE_VERSION = Annotated[pipe_models.SemverVersion, FastPath(
+    examples=["0.1.0"],
+    description="The pipeline version.",
+)]
+
+
+@ROUTER_PIPELINES.get(
+    "/available/{name}",
+    response_model=PipelineDefinitionInfo,
+    summary="Get the latest version of a pipeline definition",
+    description="Get the latest registered version of a pipeline, along with relevant data "
+        + "from its definition.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_pipeline_definition(r: Request, name: _ANN_PIPELINE_NAME) -> PipelineDefinitionInfo:
+    registry = app_state.get_app_state(r).pipeline_registry
+    return _to_definition_info(registry.get(name))
+
+
+@ROUTER_PIPELINES.get(
+    "/available/{name}/versions",
+    response_model=PipelineDefinitions,
+    summary="List all versions of a pipeline definition",
+    description="List every registered version of a pipeline, along with relevant data from "
+        + "each version's definition, sorted newest to oldest by semantic versioning.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def list_pipeline_definition_versions(
+    r: Request, name: _ANN_PIPELINE_NAME
+) -> PipelineDefinitions:
+    registry = app_state.get_app_state(r).pipeline_registry
+    versions = registry.list_versions(name)
+    versions.reverse()
+    return PipelineDefinitions(
+        data=[_to_definition_info(pd) for pd in versions]
+    )
+
+
+@ROUTER_PIPELINES.get(
+    "/available/{name}/versions/{version}",
+    response_model=PipelineDefinitionInfo,
+    summary="Get a specific version of a pipeline definition",
+    description="Get a specific registered version of a pipeline, along with relevant data "
+        + "from its definition.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_pipeline_definition_version(
+    r: Request, name: _ANN_PIPELINE_NAME, version: _ANN_PIPELINE_VERSION
+) -> PipelineDefinitionInfo:
+    registry = app_state.get_app_state(r).pipeline_registry
+    return _to_definition_info(registry.get(name, version))
 
 
 class SubmitPipelineJobResponse(BaseModel):
