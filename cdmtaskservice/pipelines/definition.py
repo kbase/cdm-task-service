@@ -124,6 +124,15 @@ class PipelineDefinition:
     bundle (e.g. a file replaced or edited outside the normal staging process) is caught early
     rather than producing a confusing downstream JAWS failure.
     """
+    # TODO PIPELINES could also md5 reference data
+
+    output_keys: frozenset[str]
+    """
+    The set of top-level outputs.json keys that are File outputs to checksum and upload to S3.
+    JAWS/Cromwell serializes File and String/Array[String] outputs identically as JSON, so this
+    allow-list is the only way to distinguish them. Only scalar File / File? outputs are
+    supported; an Array[File] output will cause an error if allow-listed.
+    """
 
     doc_urls: list[str] = dataclasses.field(default_factory=list)
     """ URLs to documentation for this pipeline version, if any. Defaults to empty. """
@@ -142,6 +151,11 @@ class PipelineDefinition:
         if self.main_wdl not in self.file_md5s:
             raise ValueError(f"main_wdl '{self.main_wdl}' must have an entry in file_md5s")
         object.__setattr__(self, "file_md5s", types.MappingProxyType(dict(self.file_md5s)))
+        if not self.output_keys:
+            raise ValueError("output_keys is required and may not be empty")
+        if not all(isinstance(k, str) and k.strip() for k in self.output_keys):
+            raise ValueError("output_keys must contain only non-empty strings")
+        object.__setattr__(self, "output_keys", frozenset(self.output_keys))
 
     def validate_input(
         self, pipeline_input: dict[str, Any] | PipelineInput

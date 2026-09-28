@@ -100,6 +100,7 @@ jaws submit --tag {{job_id}} {{wdlpath}} {{inputjsonpath}} {{site}}
 """
 _JAWS_INPUT_WDL = "input.wdl"
 _JAWS_INPUT_JSON = "input.json"
+_PIPELINE_OUTPUT_KEYS_JSON = "pipeline_output_keys.json"
 
 
 # TODO PERF add start and end time to task output and log / record in db / put in result file)
@@ -130,6 +131,7 @@ export CTS_ERRORS_JSON_LOCATION=$CTS_ERRORS_JSON_LOCATION
 export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
 export CTS_JAWS_OUTPUT_DIR=$CTS_JAWS_OUTPUT_DIR
 export CTS_CHECKSUM_FILE_LOCATION=$CTS_CHECKSUM_FILE_LOCATION
+export CTS_OUTPUT_KEYS_LOCATION=$CTS_OUTPUT_KEYS_LOCATION
 export CTS_STAGING_DIR=$CTS_STAGING_DIR
 export CTS_DTN_HOST=$CTS_DTN_HOST
 export CTS_REFDATA_DEST_DIR=$CTS_REFDATA_DEST_DIR
@@ -152,6 +154,7 @@ echo "CTS_ERRORS_JSON_LOCATION=[$CTS_ERRORS_JSON_LOCATION]"
 echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
 echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]"
 echo "CTS_CHECKSUM_FILE_LOCATION=[$CTS_CHECKSUM_FILE_LOCATION]"
+echo "CTS_OUTPUT_KEYS_LOCATION=[$CTS_OUTPUT_KEYS_LOCATION]"
 echo "CTS_STAGING_DIR=[$CTS_STAGING_DIR]"
 echo "CTS_DTN_HOST=[$CTS_DTN_HOST]"
 echo "CTS_REFDATA_DEST_DIR=[$CTS_REFDATA_DEST_DIR]"
@@ -872,6 +875,11 @@ class NERSCManager:
             pre / _JAWS_INPUT_JSON,
             bio=io.BytesIO(json.dumps(input_json, indent=4).encode()),
         )
+        await self._upload_file_to_nersc(
+            perl,
+            pre / _PIPELINE_OUTPUT_KEYS_JSON,
+            bio=io.BytesIO(json.dumps(sorted(pipeline_def.output_keys)).encode()),
+        )
 
     async def _generate_and_load_job_files_to_nersc(
         self, cli: AsyncClient, job: models.Job, concurrency: int
@@ -929,7 +937,7 @@ class NERSCManager:
     ) -> str:
         """
         Upload a set of output files from a JAWS run to presigned URLs.
-        
+
         job - the job being processed. No other transfers should be occurring for the job.
         jaws_output_dir - the NERSC output directory of the JAWS job containing the output files,
             manifests, etc.
@@ -942,6 +950,43 @@ class NERSCManager:
 
         Returns the NERSC Slurm job ID for the upload.
         """
+        return await self._upload_and_checksum_JAWS_files(
+            job, jaws_output_dir, files_to_urls, callback_url, concurrency, insecure_ssl
+        )
+
+    async def upload_pipeline_JAWS_job_files(
+        self,
+        job: pipe_models.AdminPipelineJob,
+        jaws_output_dir: Path,
+        files_to_urls: Callable[[list[Path], list[str]], Awaitable[list[PresignedPost]]],
+        callback_url: str,
+        concurrency: int = 10,
+        insecure_ssl: bool = False
+    ) -> str:
+        """
+        Upload a pipeline job's allow-listed output files from a JAWS run to presigned URLs.
+
+        Arguments are equivalent to upload_JAWS_job_files.
+
+        Returns the NERSC Slurm job ID for the upload.
+        """
+        output_keys_location = self._get_job_scratch(_not_falsy(job, "job").id) \
+            / _PIPELINE_OUTPUT_KEYS_JSON
+        return await self._upload_and_checksum_JAWS_files(
+            job, jaws_output_dir, files_to_urls, callback_url, concurrency, insecure_ssl,
+            output_keys_location=output_keys_location,
+        )
+
+    async def _upload_and_checksum_JAWS_files(
+        self,
+        job: models.Job | pipe_models.AdminPipelineJob,
+        jaws_output_dir: Path,
+        files_to_urls: Callable[[list[Path], list[str]], Awaitable[list[PresignedPost]]],
+        callback_url: str,
+        concurrency: int = 10,
+        insecure_ssl: bool = False,
+        output_keys_location: Path | None = None,
+    ) -> str:
         _not_falsy(job, "job")
         _not_falsy(files_to_urls, "files_to_urls")
         jaws_output_dir = _require_string(jaws_output_dir, "jaws_output_dir")
@@ -951,16 +996,19 @@ class NERSCManager:
         perl = await cli.compute(Machine.perlmutter)
         rootpath = self._get_job_scratch(job.id)
         checksum_file = _CRC64NVME_CHECKSUMS_JSON_FILE_NAME
+        mode = "pipeline_checksum" if output_keys_location else "checksum"
         command = [  # similar to the command in _process_manifest
-            f"export CTS_MODE=checksum; ",
+            f"export CTS_MODE={mode}; ",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_RESULT_FILE_LOCATION={rootpath / 'upload_checksums_result.json'}; ",
             f"export CTS_LOG_FILE_LOCATION={rootpath / 'upload_checksums_log.txt'}; ",
             f"export CTS_JAWS_OUTPUT_DIR={jaws_output_dir}; ",
             f"export CTS_CHECKSUM_FILE_LOCATION={rootpath / checksum_file}; ",
-            f"export SCRATCH=$SCRATCH; ",
-            f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}',
         ]
+        if output_keys_location:
+            command.append(f"export CTS_OUTPUT_KEYS_LOCATION={output_keys_location}; ")
+        command.append(f"export SCRATCH=$SCRATCH; ")
+        command.append(f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}')
         command = "".join(command)
         # May want to make this non-blocking if calculating checksums takes too long
         # Would require another set of job states and another callback URL so try to avoid

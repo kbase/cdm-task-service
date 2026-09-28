@@ -81,6 +81,38 @@ def parse_outputs_json(outputs_json: io.BytesIO) -> OutputsJSON:
     return OutputsJSON(outfiles, stdo, stde)
 
 
+def parse_pipeline_outputs_json(
+    outputs_json: io.BytesIO, allowed_keys: list[str]
+) -> dict[str, str]:
+    """
+    Parse a pipeline WDL outputs.json, returning only the entries whose key is in
+    allowed_keys, mapped to the file path for that key.
+
+    Keys in allowed_keys that are absent or null in outputs.json are silently skipped - both
+    are legitimate for an optional (File?) WDL output. Keys present in outputs.json but not
+    in allowed_keys are ignored - that's the point of the allow-list.
+
+    Raises ValueError if an allow-listed key's value is present, non-null, and not a JSON
+    string - i.e. doesn't match the "single File output" assumption implied by allow-listing
+    it (e.g. an Array[File] or Array[String] mistakenly allow-listed). This does not catch a
+    mistakenly allow-listed WDL String output, since that's indistinguishable from a File
+    path string in JSON.
+    """
+    js = json.load(_not_falsy(outputs_json, "outputs_json"))
+    out = {}
+    for key in _not_falsy(allowed_keys, "allowed_keys"):
+        if key not in js or js[key] is None:
+            continue
+        val = js[key]
+        if not isinstance(val, str):
+            raise ValueError(
+                f"Expected a string (File path) value for allow-listed output key "
+                f"'{key}', got {type(val).__name__}"
+            )
+        out[key] = val
+    return out
+
+
 def _get_relative_file_path(file: str) -> str:
     """
     Given a JAWS output file path, get the file path relative to the container output directoy,

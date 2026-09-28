@@ -43,6 +43,15 @@ _FILE_MD5S = {
 }
 
 
+_OUTPUT_KEYS = frozenset({
+    f"{_WORKFLOW}.filtered_final",
+    f"{_WORKFLOW}.filtered_stats_final",
+    f"{_WORKFLOW}.filtered_stats2_final",
+    f"{_WORKFLOW}.rqc_info",
+    f"{_WORKFLOW}.stats",
+})
+
+
 _RQCFILTERDATA_PATH = Path("/refdata/cdm_task_service/_pipelines/RQCFilterData/2026_09_10/")
 
 
@@ -162,5 +171,6 @@ def init() -> PipelineDefinition:
         nersc_path=_NERSC_WDL_PATH,
         main_wdl="rqcfilter.wdl",
         file_md5s=_FILE_MD5S,
+        output_keys=_OUTPUT_KEYS,
         doc_urls=_DOC_URLS,
     )
