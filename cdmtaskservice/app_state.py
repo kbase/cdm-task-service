@@ -84,6 +84,8 @@ class CTSAppState(AppState):
     """ The refdata manager class. """
     images: Images
     """ The Docker images manager class. """
+    pipeline_registry: PipelineRegistry
+    """ The registry of available pipeline versions. """
     jobflow_manager: JobFlowManager
     """ The job flow manager class. """
     kafka_checker: KafkaChecker
@@ -273,6 +275,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             job_state=job_state,
             refdata=refdata,
             images=images,
+            pipeline_registry=pipeline_registry,
             jobflow_manager=flowman,
             kafka_checker=kc,
             flow_cleaner=flowclean,
@@ -389,6 +392,10 @@ def get_app_state(r: Request) -> AppState:
     """
     Get the application state from a request.
     """
+    # TODO CODE returns the AppState base type, but CTS-only routes need CTSAppState-only
+    # attributes (job_state, pipeline_registry, etc.), causing type checker errors at every
+    # call site in the CTS routers. Consider a separate get_cts_app_state(r) -> CTSAppState
+    # for those routers, or a generic / overload here, to narrow the return type properly.
     if not r.app.state._cdmstate:
         raise ValueError("App state has not been initialized")
     return r.app.state._cdmstate

@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from cdmtaskservice import models, pydantic_type_walker
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
+from cdmtaskservice.json_schema_readable import simplify_schema
 
 
 class PipelineInputValidationError(Exception):
@@ -189,6 +190,18 @@ class PipelineDefinition:
     doc_urls: list[str] = dataclasses.field(default_factory=list)
     """ URLs to documentation for this pipeline version, if any. Defaults to empty. """
 
+    input_schema: dict[str, Any] = dataclasses.field(init=False)
+    """
+    The shape of this pipeline version's input parameters, excluding file references. The input
+    must match the shape described by this schema.
+    """
+
+    files_schema: dict[str, Any] = dataclasses.field(init=False)
+    """
+    The shape of this pipeline version's file references. The file input must match the shape
+    described by this schema.
+    """
+
     def __post_init__(self):
         _require_string(self.name, "name")
         _not_falsy(self.version, "version")
@@ -211,6 +224,8 @@ class PipelineDefinition:
         except pydantic_type_walker.DisallowedTypeError as e:
             raise ValueError(f"input model may not contain S3 file references: {e.path}") from e
         pydantic_type_walker.check_annotation(files_field, "files")
+        object.__setattr__(self, "input_schema", simplify_schema(input_field.model_json_schema()))
+        object.__setattr__(self, "files_schema", simplify_schema(files_field.model_json_schema()))
         _not_falsy(self.nersc_path, "nersc_path")
         _require_string(self.main_wdl, "main_wdl")
         if not self.file_md5s:
