@@ -1074,7 +1074,24 @@ class JobStatus(_JobBase):
     )]
 
 
-class JobPreview(JobStatus):
+class InternalJobCommonPreviewFields(BaseModel):
+    """
+    Preview fields shared between arbitrary jobs and pipeline jobs.
+
+    Not a model exposed by the API in its own right - mixed into JobPreview / PipelineJobPreview.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    error: Annotated[str | None, Field(
+        examples=["The front fell off"],
+        description="A description of the error that occurred."
+    )] = None
+    output_file_count: Annotated[int | None, Field(
+        examples=[24],
+        description="The number of output files, if available."
+    )] = None
+
+
+class JobPreview(JobStatus, InternalJobCommonPreviewFields):
     """
     Information about a job, consisting of fields containing small amounts of data.
     Suitable for a list of jobs.
@@ -1108,14 +1125,6 @@ class JobPreview(JobStatus):
         description="The maximum memory in bytes used by a single container in the job, "
             + "if available.")
     ] = None
-    output_file_count: Annotated[int | None, Field(
-        examples=[24],
-        description="The number of output files, if available."
-    )] = None
-    error: Annotated[str | None, Field(
-        examples=["The front fell off"],
-        description="A description of the error that occurred."
-    )] = None
     logpath: Annotated[str | None, Field(
         examples=["cts-logs/container_logs/e14a21ba-032d-42f2-b235-d82606675b17"],
         description="A location in S3 where the logfiles for the job containers can be viewed."
@@ -1129,18 +1138,28 @@ class JobPreview(JobStatus):
         return self.job_input.params.refdata_mount_point or self.image.default_refdata_mount_point
 
 
-class Job(JobPreview):
+class InternalJobNonPreviewFields(BaseModel):
     """
-    Information about a job.
+    Fields excluded from a job preview: outputs, since the list may be large, and trans_history,
+    since it's not needed for a preview. Shared between arbitrary jobs and pipeline jobs.
+
+    Not a model exposed by the API in its own right - mixed into Job / PipelineJob.
     """
     # This is an outgoing data structure only so we don't add validators
-    job_input: JobInput
     # May need to assemble jobs manually if path validation is too expensive.
     outputs: list[S3File] | None = None
     trans_history: Annotated[list[JobStateTransition] | None, Field(
         description="Historical state transition records from previous recovery attempts. "
             + "Populated when the job is reset during job recovery."
     )] = None
+
+
+class Job(JobPreview, InternalJobNonPreviewFields):
+    """
+    Information about a job.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    job_input: JobInput
 
 
 class NERSCDetails(BaseModel):
@@ -1242,9 +1261,13 @@ class AdminJobStateTransition(JobStateTransition):
     )]
 
 
-class AdminJobDetails(Job):
+class InternalAdminJobFields(BaseModel):
     """
-    Information about a job with added details of interest to service administrators.
+    Fields for admin details views shared between arbitrary jobs and pipeline jobs: admin-only
+    details plus transition_times / trans_history tightened to the admin variant that includes
+    notification info.
+
+    Not a model exposed by the API in its own right - mixed into AdminJobDetails / AdminPipelineJob.
     """
     # Output only model, no validation
     transition_times: Annotated[list[AdminJobStateTransition], Field(
@@ -1265,7 +1288,7 @@ class AdminJobDetails(Job):
                 "state": JobState.JOB_SUBMITTING,
                 "time": "2024-10-24T22:47:67Z",
                 "trans_id": "baz",
-                "notif_sent": False, 
+                "notif_sent": False,
             },
         ]],
         description="A list of job state transitions."
@@ -1280,7 +1303,6 @@ class AdminJobDetails(Job):
     )] = False
     nersc_details: NERSCDetails | None = None
     jaws_details: JAWSDetails | None = None
-    htcondor_details: HTCondorDetails | None = None
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
@@ -1291,6 +1313,13 @@ class AdminJobDetails(Job):
             + "Populated when the job is reset during job recovery."
     )] = None
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
+
+
+class AdminJobDetails(InternalAdminJobFields, Job):
+    """
+    Information about a job with added details of interest to service administrators.
+    """
+    htcondor_details: HTCondorDetails | None = None
 
 
 class ContainerUpdate(BaseModel):
