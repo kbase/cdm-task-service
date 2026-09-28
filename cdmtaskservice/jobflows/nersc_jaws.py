@@ -26,12 +26,13 @@ from cdmtaskservice.exceptions import (
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jaws.poller import poll as poll_jaws
 from cdmtaskservice.jobflows.flowmanager import JobFlow
-from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates
+from cdmtaskservice.jobflows.state_updates import JobFlowStateUpdates, EntityType
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager, TransferResult, TransferState
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
+from cdmtaskservice.pipelines.models import AdminPipelineJob
 from cdmtaskservice.s3.client import S3ObjectMeta, PresignedPost
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice import sites
@@ -131,13 +132,14 @@ class NERSCJAWSRunner(JobFlow):
         err_type: str,
         refdata: bool = False
     ) -> Any:
+        entity_type = EntityType.REFDATA if refdata else EntityType.JOB
         # can't check that the NERSC task is complete first because the task
         # won't complete until the callback request returns, which won't happen
         # if we wait for the task to complete. IOW, deadlock
         try:
             res, data = await trans_func()
         except Exception as e:
-            await self._updates.handle_exception(e, entity_id, err_type, refdata=refdata)
+            await self._updates.handle_exception(e, entity_id, err_type, entity_type=entity_type)
             raise
         if res.state == TransferState.INCOMPLETE:
             errcls = InvalidReferenceDataStateError if refdata else InvalidJobStateError
@@ -156,7 +158,7 @@ class NERSCJAWSRunner(JobFlow):
                 f"An unexpected error occurred during file {op.lower()}",
                 res.message,
                 traceback=res.traceback,
-                refdata=refdata,
+                entity_type=entity_type,
             )
             raise ValueError(f"{op} failed: {res.message}")
         else:
@@ -260,13 +262,32 @@ class NERSCJAWSRunner(JobFlow):
         """
         Start running a job. It is expected that the Job has been persisted to the data
         storage system and is in the created state.
-        
+
         job - the job
         objmeta - the S3 object metadata for the files in the job. CRC64/NVME checksums
             are required for all objects.
         """
         if _not_falsy(job, "job").state != models.JobState.CREATED:
             raise InvalidJobStateError("Job must be in the created state")
+        await self._start_download(job.id, objmeta)
+
+    async def start_pipeline_job(self, job: AdminPipelineJob, objmeta: list[S3ObjectMeta]):
+        """
+        Start running a pipeline job. It is expected that the job has been persisted to the
+        data storage system and is in the created state.
+
+        job - the pipeline job.
+        objmeta - the S3 object metadata for the files in the job. CRC64/NVME checksums
+            are required for all objects.
+        """
+        if _not_falsy(job, "job").state != models.JobState.CREATED:
+            raise InvalidJobStateError("Job must be in the created state")
+        await self._start_download(job.id, objmeta, pipeline=True)
+
+    async def _start_download(
+        self, job_id: str, objmeta: list[S3ObjectMeta], pipeline: bool = False
+    ):
+        entity_type = EntityType.PIPELINE_JOB if pipeline else EntityType.JOB
         # Could check that the s3 and job paths / etags match... YAGNI
         # TODO PERF this validates the file paths yet again. Maybe the way to go is just have
         #           a validate method on S3Paths which can be called or not as needed, with
@@ -275,19 +296,23 @@ class NERSCJAWSRunner(JobFlow):
         try:
             # TODO RELIABILITY config / set expiration time
             presigned = await self._s3ext.presign_get_urls(paths)
-            callback_url = get_download_complete_callback(self._callback_root, job.id)
+            callback_url = get_download_complete_callback(self._callback_root, job_id)
             # TODO PERF config / set concurrency
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
-            job_id = await self._nman.download_s3_files(
-                job.id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
+            nersc_job_id = await self._nman.download_s3_files(
+                job_id, objmeta, presigned, callback_url, insecure_ssl=self._s3insecure
             )
             # Hmm. really this should go through job state but that seems pointless right now.
             # May need to refactor this and the mongo method later to be more generic to
             # remote cluster and have job_state handle choosing the correct mongo method & params
             # to run
-            await self._updates.update_job_state(job.id, submitted_nersc_download(job_id))
+            await self._updates.update_job_state(
+                job_id, submitted_nersc_download(nersc_job_id), pipeline=pipeline
+            )
         except Exception as e:
-            await self._updates.handle_exception(e, job.id, "starting file download for")
+            await self._updates.handle_exception(
+                e, job_id, "starting file download for", entity_type=entity_type
+            )
 
     async def download_complete(self, job: models.AdminJobDetails):
         """
@@ -615,7 +640,7 @@ class NERSCJAWSRunner(JobFlow):
             )
         except Exception as e:
             await self._updates.handle_exception(
-                e, refdata.id, "starting file download for", refdata=True
+                e, refdata.id, "starting file download for", entity_type=EntityType.REFDATA
             )
 
     async def refdata_complete(self, refdata_id: str):

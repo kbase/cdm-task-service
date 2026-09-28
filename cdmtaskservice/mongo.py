@@ -758,6 +758,26 @@ class MongoDAO:
             last_update_time=last_update_time,
         )
 
+    async def update_pipeline_job_state(
+        self,
+        job_id: str,
+        update: JobUpdate,
+        time: datetime.datetime,
+        trans_id: str,
+    ):
+        """
+        Update a pipeline job's state.
+        See update_job_state for parameter details; behaves identically but operates on the
+        pipeline jobs collection.
+        """
+        await self._update_job_state(
+            self._col_pipeline_jobs,
+            job_id,
+            update,
+            time,
+            trans_id=_require_string(trans_id, "trans_id"),
+        )
+
     @staticmethod
     def _history_append(history_field: str, *value_exprs) -> dict:
         """
@@ -895,7 +915,7 @@ class MongoDAO:
     async def job_update_sent(self, job_id: str, trans_id: str):
         """
         Mark a job state transition as sent to a notification system.
-        
+
         job_id - the ID of the job.
         trans_id - the ID of the job state transition.
         """

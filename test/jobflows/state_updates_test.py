@@ -6,6 +6,7 @@ from unittest.mock import ANY, create_autospec, patch
 
 from cdmtaskservice import logfields, models, sites, update_state
 from cdmtaskservice.jobflows.state_updates import (
+    EntityType,
     JobFlowStateUpdates,
     SubjobFlowStateUpdates,
     ParentJobUpdate,
@@ -228,7 +229,7 @@ async def test_save_error_job_with_traceback_and_logpath():
 async def test_save_error_refdata():
     mongo, kafka, jfsu = _make_jfsu()
 
-    await jfsu.save_error("rid", "user err", "admin err", refdata=True)
+    await jfsu.save_error("rid", "user err", "admin err", entity_type=EntityType.REFDATA)
 
     mongo.update_refdata_state.assert_called_once_with(
         sites.Cluster.KBASE,
@@ -242,7 +243,9 @@ async def test_save_error_refdata():
 async def test_save_error_refdata_with_traceback():
     mongo, _, jfsu = _make_jfsu()
 
-    await jfsu.save_error("rid", "user err", "admin err", traceback="tb", refdata=True)
+    await jfsu.save_error(
+        "rid", "user err", "admin err", traceback="tb", entity_type=EntityType.REFDATA
+    )
 
     mongo.update_refdata_state.assert_called_once_with(
         sites.Cluster.KBASE,
@@ -301,7 +304,7 @@ async def test_handle_exception_refdata(caplog):
         try:
             raise ValueError("refdata error")
         except ValueError as e:
-            await jfsu.handle_exception(e, "rid", "test test testing", refdata=True)
+            await jfsu.handle_exception(e, "rid", "test test testing", entity_type=EntityType.REFDATA)
 
     tb = mongo.update_refdata_state.call_args.args[2].update_fields[UpdateField.TRACEBACK]
     assert "ValueError: refdata error" in tb

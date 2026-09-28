@@ -322,7 +322,7 @@ class JobState:
             for error in e.errors:
                 error["loc"] = (FLD_PIPELINE_JOB_INPUT_INPUT,) + tuple(error["loc"])
             raise
-        validated_input = await self._check_and_verify_pipeline_files(validated_input)
+        validated_input, meta = await self._check_and_verify_pipeline_files(validated_input)
         await self._check_output_path(pipeline_job_input)
         job_id = f"pipeline-{self._uuid_fn()}"
         if not self._test_mode:
@@ -347,14 +347,16 @@ class JobState:
         )
         await self._mongo.save_pipeline_job(job)
         # TODO PIPELINES add kafka updte when needed
+        if not self._test_mode:
+            await self._coman.run_coroutine(flow.start_pipeline_job(job, meta))
         return job_id
 
     async def _check_and_verify_pipeline_files(
         self, validated_input: PipelineInput
-    ) -> PipelineInput:
+    ) -> tuple[PipelineInput, list[S3ObjectMeta]]:
         s3files = validated_input.get_s3_files()
         if not s3files:
-            return validated_input
+            return validated_input, []
         paths = [f.file for f in s3files]
         expected = [f.crc64nvme for f in s3files]
         meta = await self._verify_and_get_meta(paths, expected)
@@ -362,7 +364,7 @@ class JobState:
             m.path: models.S3File.model_construct(file=m.path, crc64nvme=m.crc64nvme)
             for m in meta
         }
-        return validated_input.set_s3_files(resolved)
+        return validated_input.set_s3_files(resolved), meta
 
     async def get_job(
         self,

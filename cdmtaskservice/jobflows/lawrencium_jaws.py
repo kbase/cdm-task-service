@@ -11,6 +11,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
+from cdmtaskservice.jobflows.state_updates import EntityType
 from cdmtaskservice import models
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
@@ -93,7 +94,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
             # filename needs to be written (maybe insert _attempt_# or something into the name).
         except Exception as e:
             await self._updates.handle_exception(
-                e, refdata.id, "setting up callbacks for", refdata=True
+                e, refdata.id, "setting up callbacks for", entity_type=EntityType.REFDATA
             )
 
     async def refdata_complete(self, refdata_id: str):
