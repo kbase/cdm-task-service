@@ -81,6 +81,15 @@ class PipelineInputFiles(BaseModel, abc.ABC):
             raise ValueError(f"Duplicate files in input: {sorted(dupes)}")
         return self
 
+    @model_validator(mode="after")
+    def _check_max_files(self) -> Self:
+        count = len(self.get_s3_files())
+        if count > models.MAX_INPUT_FILES_PER_JOB:
+            raise ValueError(
+                f"Too many input files: {count} > {models.MAX_INPUT_FILES_PER_JOB}"
+            )
+        return self
+
 
 class PipelineInput(BaseModel, abc.ABC):
     """

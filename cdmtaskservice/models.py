@@ -98,6 +98,11 @@ FLD_COMMON_STATE_TRANSITION_TIME = "time"
 S3_PATH_MIN_LENGTH = 3 + 1 + 1  # 3 for bucket + / + 1 char
 S3_PATH_MAX_LENGTH = 63 + 1 + 1024  # 63 for bucket + / + 1024 bytes
 CRC64NVME_B64ENC_LENGTH=12
+# Need to see how well this performs. If we need more files per job,
+# can test performance & tweak S3 client concurrency. Alternatively, add a file set
+# endpoint where file sets of size < some reasonable number can be submitted, and then
+# multiple file sets can be combined in a job.
+MAX_INPUT_FILES_PER_JOB = 10000
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
@@ -655,11 +660,7 @@ class JobInput(JobInputPreview):
             + "Either all or no files must have data IDs associated with them. "
             + "When returned from the service, the checksum is always included.",
         min_length=1,
-        # Need to see how well this performs. If we need more files per job,
-        # can test performance & tweak S3 client concurrency. Alternatively, add a file set
-        # endpoint where file sets of size < some reasonable number can be submitted, and then
-        # multiple file sets can be combined in a JobInput
-        max_length=10000,
+        max_length=MAX_INPUT_FILES_PER_JOB,
     )]
     script: Annotated[S3File | None, Field(
         examples=["mybucket/foo/script.sh"],
