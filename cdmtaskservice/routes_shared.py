@@ -19,6 +19,11 @@ def ensure_admin(user: CTSUser, err_msg: str):
         raise UnauthorizedError(err_msg)
 
 
+def ensure_admin_or_executor(user: CTSUser, err_msg: str):
+    if not user.is_full_admin() and not user.is_external_executor:
+        raise UnauthorizedError(err_msg)
+
+
 ANN_JOB_SITE = Annotated[sites.Cluster | None, Query(
     description="Filter jobs by the site where the job ran."
 )]

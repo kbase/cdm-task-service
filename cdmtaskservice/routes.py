@@ -49,6 +49,7 @@ from cdmtaskservice.routes_shared import (
     ANN_JOB_LIMIT as _ANN_JOB_LIMIT,
     ANN_JOB_ADMIN_USER as _ANN_JOB_ADMIN_USER,
     ensure_valid_kbase_user as _ensure_valid_kbase_user,
+    ensure_admin_or_executor as _ensure_admin_or_executor,
 )
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
@@ -90,11 +91,6 @@ def _parse_allowed_sites(allowed_sites: str | None) -> set[sites.SubmittableClus
         except ValueError:
             raise IllegalParameterError(f"Invalid site '{s}' in allowed_sites")
     return parsed or None
-
-
-def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
-    if not user.is_full_admin() and not user.is_external_executor:
-        raise UnauthorizedError(err_msg)
 
 
 async def _get_job_and_flow(

@@ -7,12 +7,13 @@ from fastapi import Path as FastPath
 from pydantic import BaseModel, Field
 from typing import Annotated, Any
 
-from cdmtaskservice import app_state, sites
+from cdmtaskservice import app_state, models, sites
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.pipelines.definition import PipelineDefinition
 from cdmtaskservice.routes_shared import (
     ensure_admin as _ensure_admin,
+    ensure_admin_or_executor as _ensure_admin_or_executor,
     ANN_JOB_SITE as _ANN_JOB_SITE,
     ANN_JOB_STATE as _ANN_JOB_STATE,
     ANN_JOB_AFTER as _ANN_JOB_AFTER,
@@ -228,6 +229,50 @@ async def submit_pipeline_job(
     return SubmitPipelineJobResponse(job_id=job_id)
 
 
+_ANN_PIPELINE_JOB_ID = Annotated[str, FastPath(
+    openapi_examples={"job id": {"value": "pipeline-f0c24820-d792-4efa-a38b-2458ed8ec88f"}},
+    description="The pipeline job ID.",
+    pattern=r"^[\w-]+$",
+    min_length=1,
+    max_length=50,
+)]
+
+
+@ROUTER_PIPELINES.get(
+    "/jobs/{job_id}/status",
+    response_model=models.JobStatus,
+    summary="Get a pipeline job's minimal status",
+    description="Get minimal information about a pipeline job to determine the current status "
+        + "of the job. Suitable for polling for job completion. Only the submitting user may "
+        + "view the job.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_pipeline_job_status(
+    r: Request,
+    job_id: _ANN_PIPELINE_JOB_ID,
+    user: CTSUser = Depends(_AUTH),
+) -> models.JobStatus:
+    job_state = app_state.get_app_state(r).job_state
+    return await job_state.get_pipeline_job_status(job_id, user)
+
+
+@ROUTER_PIPELINES.get(
+    "/jobs/{job_id}",
+    response_model=pipe_models.PipelineJob,
+    response_model_exclude_none=True,
+    summary="Get a pipeline job",
+    description="Get a pipeline job. Only the submitting user may view the job.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_pipeline_job(
+    r: Request,
+    job_id: _ANN_PIPELINE_JOB_ID,
+    user: CTSUser = Depends(_AUTH),
+) -> pipe_models.PipelineJob:
+    job_state = app_state.get_app_state(r).job_state
+    return await job_state.get_pipeline_job(job_id, user)
+
+
 @ROUTER_ADMIN_PIPELINES.get(
     "/jobs",
     response_model=ListPipelineJobsResponse,
@@ -259,17 +304,27 @@ async def list_pipeline_jobs_admin(
     ))
 
 
-# These are pretty similar to their standard job equivalents but the actual code is so small
-# it's not clear adding a shared helper module would be a benefit
-
-
-_ANN_PIPELINE_JOB_ID = Annotated[str, FastPath(
-    openapi_examples={"job id": {"value": "pipeline-f0c24820-d792-4efa-a38b-2458ed8ec88f"}},
-    description="The pipeline job ID.",
-    pattern=r"^[\w-]+$",
-    min_length=1,
-    max_length=50,
-)]
+@ROUTER_ADMIN_PIPELINES.get(
+    "/jobs/{job_id}",
+    response_model=pipe_models.AdminPipelineJob,
+    response_model_exclude_none=True,
+    summary="Get a pipeline job as an admin",
+    description="Get any pipeline job, regardless of ownership, with additional details about "
+        + "the job run.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_pipeline_job_admin(
+    r: Request,
+    job_id: _ANN_PIPELINE_JOB_ID,
+    user: CTSUser = Depends(_AUTH),
+) -> pipe_models.AdminPipelineJob:
+    _ensure_admin_or_executor(
+        user,  # external executors currently don't run pipeline jobs but this doesn't hurt
+        "Only service administrators and external job executors can get pipeline jobs as "
+            + "an admin."
+    )
+    job_state = app_state.get_app_state(r).job_state
+    return await job_state.get_pipeline_job(job_id, user, as_admin=True)
 
 
 @ROUTER_ADMIN_PIPELINES.delete(
