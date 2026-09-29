@@ -225,9 +225,14 @@ class S3Client:
                     raise S3BucketNotFoundError(
                         f"The bucket '{bucket}' was not found on the s3 system"
                     )
-                raise S3PathNotFoundError(
-                    f"The path '{path}' was not found on the s3 system"
-                ) from e
+                elif path:
+                    raise S3PathNotFoundError(
+                        f"The path '{path}' was not found on the s3 system"
+                    ) from e
+                else:
+                    logger.exception(
+                        f"Unexpected response from S3. Response data:\n{e.response}")
+                    raise S3UnexpectedError(f"Unexpected response from S3: {e}") from e
             if code in ("AccessDenied", "403"):  # why both? Both 403s
                 # may need to add other cases here
                 op = "Write" if write else "Read"

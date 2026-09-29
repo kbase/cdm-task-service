@@ -70,6 +70,13 @@ async def test_create_fail_bad_args(minio, minio_unauthed_user):
     await _create_fail(
         f"http://localhost:{minio.port}", minio_unauthed_user[0], minio_unauthed_user[1],
         S3ClientConnectError("Access denied to list buckets on the s3 system"))
+    await _create_fail(
+        "https://ci.kbase.us/services/ws/docs/nonexistent_path_xyz123", "foo", "bar",
+        S3UnexpectedError(
+            "Unexpected response from S3: An error occurred (404) when calling the "
+            + "ListBuckets operation: Not Found"
+        ),
+    )
 
 
 async def _create_fail(host, akey, skey, expected, config=None, print_stacktrace=False):
