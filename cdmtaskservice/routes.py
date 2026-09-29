@@ -15,9 +15,8 @@ from fastapi import (
     Query,
 )
 from fastapi.responses import FileResponse, StreamingResponse
-from kbase.auth import InvalidUserError
 from pathlib import Path
-from pydantic import BaseModel, Field, AwareDatetime, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Annotated, Any
 
 from cdmtaskservice import app_state
@@ -32,10 +31,28 @@ from cdmtaskservice.callback_url_paths import (
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
 )
-from cdmtaskservice.exceptions import IllegalParameterError, UnauthorizedError
+from cdmtaskservice.exceptions import (
+    IllegalParameterError,
+    UnauthorizedError,
+)
 from cdmtaskservice.git_commit import GIT_COMMIT
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice.jobflows.flowmanager import JobFlow
+from cdmtaskservice.pipelines import models as pipe_models
+from cdmtaskservice.routes_shared import (
+    ensure_admin as _ensure_admin,
+    ANN_JOB_SITE as _ANN_JOB_SITE,
+    ANN_JOB_STATE as _ANN_JOB_STATE,
+    ANN_JOB_AFTER as _ANN_JOB_AFTER,
+    ANN_JOB_BEFORE as _ANN_JOB_BEFORE,
+    ANN_JOB_LIMIT as _ANN_JOB_LIMIT,
+    ANN_JOB_ADMIN_USER as _ANN_JOB_ADMIN_USER,
+    ensure_valid_kbase_user as _ensure_valid_kbase_user,
+    ensure_admin_or_executor as _ensure_admin_or_executor,
+    get_job_and_flow as _get_job_and_flow,
+    admin_get_job_and_flow as _admin_get_job_and_flow,
+    JobIDType as _JobIDType,
+)
 from cdmtaskservice.version import VERSION
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSUser, CTSRole, SERVICE_USER
@@ -53,11 +70,6 @@ ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 ROUTER_EXTERNAL_EXEC = APIRouter(tags=["External Execution"])
 
 _AUTH = KBaseHTTPBearer()
-
-
-def _ensure_admin(user: CTSUser, err_msg: str):
-    if not user.is_full_admin():
-        raise UnauthorizedError(err_msg)
 
 
 def _ensure_executor(user: CTSUser, err_msg: str):
@@ -81,38 +93,6 @@ def _parse_allowed_sites(allowed_sites: str | None) -> set[sites.SubmittableClus
         except ValueError:
             raise IllegalParameterError(f"Invalid site '{s}' in allowed_sites")
     return parsed or None
-
-
-def _ensure_admin_or_executor(user: CTSUser, err_msg: str):
-    if not user.is_full_admin() and not user.is_external_executor:
-        raise UnauthorizedError(err_msg)
-
-
-async def _get_job_and_flow(
-    r: Request, job_id: str, user: CTSUser, *, as_admin: bool = False
-) -> tuple[models.AdminJobDetails, JobFlow]:
-    """
-    Fetch a job with admin-level details and its associated flow. The returned job is an
-    AdminJobDetails instance and MUST NOT be returned directly to non-admin users.
-    """
-    appstate = app_state.get_app_state(r)
-    job = await appstate.job_state.get_job(job_id, user, as_admin=as_admin, admin_details=True)
-    flow = await appstate.jobflow_manager.get_flow(job.job_input.cluster)
-    return job, flow
-
-
-async def _admin_get_job_and_flow(
-    r: Request, job_id: str, user: CTSUser, action: str
-) -> tuple[models.AdminJobDetails, JobFlow]:
-    """
-    Verify the user is a full admin, then fetch the job with admin-level details and its
-    associated flow. The returned job is an AdminJobDetails instance and MUST NOT be returned
-    directly to non-admin users.
-
-    action - the action being performed, appended to "Only service administrators can ".
-    """
-    _ensure_admin(user, f"Only service administrators can {action}")
-    return await _get_job_and_flow(r, job_id, user, as_admin=True)
 
 
 class Root(BaseModel):
@@ -247,30 +227,6 @@ async def get_sites(r: Request) -> Sites:
 class ListJobsResponse(BaseModel):
     """ The response to a successful job listing request. """
     jobs: Annotated[list[models.JobPreview], Field(description="The jobs")]
-
-
-_ANN_JOB_SITE = Annotated[sites.Cluster | None, Query(
-    description="Filter jobs by the site where the job ran."
-)]
-_ANN_JOB_STATE = Annotated[models.JobState | None, Query(
-    description="Filter jobs by the state of the job."
-)]
-_ANN_JOB_AFTER = Annotated[AwareDatetime | None, Query(
-    openapi_examples={"isodate": {"value": "2024-10-24T22:35:40Z"}},
-    description="Filter jobs where the last update time is newer than the provided date, "
-        + "inclusive",
-)]
-_ANN_JOB_BEFORE = Annotated[AwareDatetime | None, Query(
-    openapi_examples={"isodate": {"value": "2024-10-24T22:35:59.999Z"}},
-    description="Filter jobs where the last update time is older than the provided date, "
-        + "exclusive",
-)]
-_ANN_JOB_LIMIT = Annotated[int | None, Query(
-    openapi_examples={"max value": {"value": 1000}},
-    description="The maximum number of jobs to return",
-    ge=1,
-    le=1000,
-)]
 
 
 @ROUTER_JOBS.get(
@@ -762,13 +718,7 @@ async def create_refdata(
 )
 async def list_jobs_admin(
     r: Request,
-    user: Annotated[str, Query(
-        openapi_examples={"kbasehelp user": {"value": "kbasehelp"}},
-        description="Filter jobs by the owner of the job.",
-        min_length=1,
-        max_length=100,
-        pattern=r"^[a-z][a-z\d_]*$",
-    )] = None,
+    user: _ANN_JOB_ADMIN_USER = None,
     cluster: _ANN_JOB_SITE = None,
     state: _ANN_JOB_STATE = None,
     after: _ANN_JOB_AFTER = None,
@@ -777,9 +727,7 @@ async def list_jobs_admin(
     methoduser: CTSUser=Depends(_AUTH),
 ) -> ListJobsResponse:
     _ensure_admin(methoduser, "Only service administrators can list other users' jobs.")
-    auth = app_state.get_app_state(r).auth
-    if user and not await auth.is_valid_kbase_user(user, app_state.get_request_token(r)):
-        raise InvalidUserError(f"No such user: {user}")
+    await _ensure_valid_kbase_user(r, user)
     job_state = app_state.get_app_state(r).job_state
     return ListJobsResponse(jobs=await job_state.list_jobs(
         user=user,
@@ -1259,7 +1207,7 @@ async def download_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    job, flow = await _callback_handling(r, "Download", job_id)
+    job, flow = await _callback_handling(r, "Download", job_id, job_id_type=_JobIDType.EITHER)
     await flow.download_complete(job)
 
 
@@ -1298,7 +1246,7 @@ async def job_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    job, flow = await _callback_handling(r, "Remote job", job_id)
+    job, flow = await _callback_handling(r, "Remote job", job_id, job_id_type=_JobIDType.EITHER)
     await flow.job_complete(job)
 
 
@@ -1314,7 +1262,7 @@ async def upload_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    job, flow = await _callback_handling(r, "Upload", job_id)
+    job, flow = await _callback_handling(r, "Upload", job_id, job_id_type=_JobIDType.EITHER)
     await flow.upload_complete(job)
 
 
@@ -1330,18 +1278,21 @@ async def error_log_upload_complete(
     r: Request,
     job_id: _ANN_JOB_ID
 ):
-    job, flow = await _callback_handling(r, "Error log upload", job_id)
+    # Not yet implemented for pipeline jobs.
+    job, flow = await _callback_handling(
+        r, "Error log upload", job_id, job_id_type=_JobIDType.STANDARD
+    )
     await flow.error_log_upload_complete(job)
 
 
 async def _callback_handling(
-    r: Request, operation: str, job_id: str
-) -> (JobFlow, models.AdminJobDetails):
+    r: Request, operation: str, job_id: str, *, job_id_type: _JobIDType
+) -> tuple[models.AdminJobDetails | pipe_models.AdminPipelineJob, JobFlow]:
     logging.getLogger(__name__).info(
         f"{operation} reported as complete for job {job_id}",
         extra={logfields.JOB_ID: job_id},
     )
-    return await _get_job_and_flow(r, job_id, SERVICE_USER, as_admin=True)
+    return await _get_job_and_flow(r, job_id, SERVICE_USER, job_id_type=job_id_type, as_admin=True)
 
 
 @ROUTER_EXTERNAL_EXEC.put(

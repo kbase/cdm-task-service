@@ -28,9 +28,6 @@ class NERSCPaths:
     jaws_refdata_root_dir: Path = field(init=False)
     """The root directory for reference data configured for the JAWS 'kbase` site."""
 
-    jaws_staging_dir_dtns: Path = field(init=False)
-    """The JAWS staging directory for the `kbase` site on a NERSC DTN."""
-
     jaws_staging_dir_perlmutter: Path = field(init=False)
     """The JAWS staging directory for the `kbase` site on the NERSC Perlmutter system."""
 
@@ -38,13 +35,11 @@ class NERSCPaths:
         self,
         code_path: str,
         jaws_refdata_root_dir: str,
-        jaws_staging_dir_dtns: str,
         jaws_staging_dir_perlmutter: str
     ):
         fields = {
             'code_path': code_path,
             'jaws_refdata_root_dir': jaws_refdata_root_dir,
-            'jaws_staging_dir_dtns': jaws_staging_dir_dtns,
             'jaws_staging_dir_perlmutter': jaws_staging_dir_perlmutter,
         }
         for name, value in fields.items():

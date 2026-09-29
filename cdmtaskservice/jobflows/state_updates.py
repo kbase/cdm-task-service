@@ -11,6 +11,7 @@ import uuid
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice import models
+from cdmtaskservice.models import EntityType
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice import logfields
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -60,25 +61,34 @@ class JobFlowStateUpdates:
         self._trans_id_fn = _trans_id_fn
         
     async def handle_exception(
-        self, e: Exception, entity_id: str, erraction: str, refdata: bool = False
+        self,
+        e: Exception,
+        entity_id: str,
+        erraction: str,
+        entity_type: EntityType = EntityType.JOB,
     ):
         """
         Update a job's state to register an exception. Expected to be called from within an
         except block only.
-        
+
         e - the exception that occurred.
-        entity_id - the job or refdata ID.
+        entity_id - the job, pipeline job, or refdata ID.
         erraction - the action that caused the error. Used in the logging string.  Examples:
            * downloading files for the
            * completing
-        refdata - True if the exception occurred in a refdata operation.
+        entity_type - the kind of entity entity_id refers to.
         """
         _not_falsy(e, "e")
         _require_string(entity_id, "entity_id")
         _require_string(erraction, "erraction")
+        entity_desc = {
+            EntityType.JOB: "job",
+            EntityType.PIPELINE_JOB: "pipeline job",
+            EntityType.REFDATA: "refdata",
+        }[entity_type]
+        logfield = logfields.REFDATA_ID if entity_type == EntityType.REFDATA else logfields.JOB_ID
         logging.getLogger(__name__).exception(
-            f"Error {erraction} {'refdata' if refdata else 'job'}.",
-            extra={logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id}
+            f"Error {erraction} {entity_desc}.", extra={logfield: entity_id}
         )
         await self.save_error(
             entity_id,
@@ -88,9 +98,9 @@ class JobFlowStateUpdates:
             "An unexpected error occurred",
             str(e),
             traceback=traceback.format_exc(),
-            refdata=refdata,
+            entity_type=entity_type,
         )
-        
+
     async def save_error(
         self,
         entity_id: str,
@@ -98,30 +108,32 @@ class JobFlowStateUpdates:
         admin_err: str,
         traceback: str = None,
         logpath: str = None,
-        refdata=False,
+        entity_type: EntityType = EntityType.JOB,
     ):
         """
         Save an error to the database.
-        
-        entity_id - the job or refdata ID.
+
+        entity_id - the job, pipeline job, or refdata ID.
         user_err - the error to present to users.
         admin_err - the error to present to admins.
         traceback - the error traceback, if any.
         logpath - the path to error logs in an S3 instance, if any.
-        refdata - True if the error occurred in a refdata operation.
+        entity_type - the kind of entity entity_id refers to.
         """
         _require_string(entity_id, "entity_id")
         _require_string(user_err, "user_err")
         _require_string(admin_err, "admin_err")
         # if this fails, well, then we're screwed
-        if refdata:
+        if entity_type == EntityType.REFDATA:
             await self.update_refdata_state(entity_id, refdata_error(
                 user_err, admin_err, traceback=traceback)
             )
         else:
-            await self.update_job_state(entity_id, error(
-                admin_err, user_error=user_err, traceback=traceback, log_files_path=logpath
-            ))
+            await self.update_job_state(
+                entity_id,
+                error(admin_err, user_error=user_err, traceback=traceback, log_files_path=logpath),
+                pipeline=entity_type == EntityType.PIPELINE_JOB,
+            )
 
     async def update_job_state(
         self,
@@ -130,6 +142,7 @@ class JobFlowStateUpdates:
         update_time: datetime.datetime = None,
         recovery_cooldown: datetime.timedelta | None = None,
         last_update_time: datetime.datetime | None = None,
+        pipeline: bool = False,
     ):
         """
         Update the state of a job.
@@ -143,11 +156,17 @@ class JobFlowStateUpdates:
         last_update_time - if provided, gates the write on the job's update time matching this
             value. If the job was modified by another process since it was last read, the write
             is skipped and JobUpdateConflictError is raised.
+        pipeline - whether job_id refers to a pipeline job rather than a standard job.
         """
         _require_string(job_id, "job_id")
         _not_falsy(update, "update")
         trans_id = self._trans_id_fn()
         update_time = update_time if update_time else self._timestamp_fn()
+        if pipeline:
+            await self._mongo.update_pipeline_job_state(job_id, update, update_time, trans_id)
+            # TODO PIPELINES send kafka notifications for pipeline job state changes once
+            #                 the notification strategy for pipelines is decided
+            return
         async def cb():
             await self._mongo.job_update_sent(job_id, trans_id)
         await self._mongo.update_job_state(

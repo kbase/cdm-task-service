@@ -44,14 +44,18 @@ FLD_JOB_USER = "user"
 FLD_JOB_JOB_INPUT = "job_input"
 FLD_JOB_INPUT_CLUSTER = "cluster"
 FLD_JOB_INPUT_INPUT_FILES = "input_files"
+FLD_JOB_INPUT_SCRIPT = "script"
 FLD_JOB_INPUT_RUNTIME = "runtime"
 FLD_JOB_STATE_TRANSITION_ID = "trans_id"
 FLD_JOB_STATE_TRANSITION_NOTIFICATION_SENT = "notif_sent"
 FLD_JOB_ADMIN_META = "admin_meta"
 FLD_JOB_NERSC_DETAILS = "nersc_details"
-FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"
-FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"
-FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"
+FLD_NERSC_DETAILS_DL_TASK_ID = "download_task_id"  # deprecated, see FLD_NERSC_DETAILS_DL_JOB_ID
+FLD_NERSC_DETAILS_DL_JOB_ID = "download_job_id"
+FLD_NERSC_DETAILS_UL_TASK_ID = "upload_task_id"  # deprecated, see FLD_NERSC_DETAILS_UL_JOB_ID
+FLD_NERSC_DETAILS_UL_JOB_ID = "upload_job_id"
+FLD_NERSC_DETAILS_LOG_UL_TASK_ID = "log_upload_task_id"  # deprecated, see *_LOG_UL_JOB_ID
+FLD_NERSC_DETAILS_LOG_UL_JOB_ID = "log_upload_job_id"
 FLD_JOB_JAWS_DETAILS = "jaws_details"
 FLD_JAWS_DETAILS_RUN_ID = "run_id"
 FLD_JOB_HTC_CLUSTER_ID = "cluster_id"
@@ -68,7 +72,8 @@ FLD_SUBJOB_HTC_STATS_MISSING = "stats_missing"
 FLD_REFDATA_FILE = "file"
 FLD_REFDATA_STATUSES = "statuses"
 FLD_REFDATA_CLUSTER = "cluster"
-FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"
+FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"  # deprecated, see FLD_REFDATA_NERSC_DL_JOB_ID
+FLD_REFDATA_NERSC_DL_JOB_ID = "nersc_download_job_id"
 # Fields that are shared between multiple models for consistency
 # Currently refdata, jobs, and subjobs
 FLD_COMMON_ID = "id"
@@ -93,6 +98,11 @@ FLD_COMMON_STATE_TRANSITION_TIME = "time"
 S3_PATH_MIN_LENGTH = 3 + 1 + 1  # 3 for bucket + / + 1 char
 S3_PATH_MAX_LENGTH = 63 + 1 + 1024  # 63 for bucket + / + 1024 bytes
 CRC64NVME_B64ENC_LENGTH=12
+# Need to see how well this performs. If we need more files per job,
+# can test performance & tweak S3 client concurrency. Alternatively, add a file set
+# endpoint where file sets of size < some reasonable number can be submitted, and then
+# multiple file sets can be combined in a job.
+MAX_INPUT_FILES_PER_JOB = 10000
 
 
 # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
@@ -476,7 +486,12 @@ class S3File(BaseModel):
         min_length=CRC64NVME_B64ENC_LENGTH,
         max_length=CRC64NVME_B64ENC_LENGTH,
     )] = None
-    
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_path_string(cls, v):
+        return {"file": v} if isinstance(v, str) else v
+
     @field_validator("file", mode="before")
     @classmethod
     def _check_file(cls, v):
@@ -628,7 +643,7 @@ class JobInput(JobInputPreview):
     """
     model_config = ConfigDict(extra='forbid')
 
-    input_files: Annotated[list[str] | list[S3FileWithDataID], Field(
+    input_files: Annotated[list[S3FileWithDataID], Field(
         examples=[
             [{
                 "file": "mybucket/foo/bat",
@@ -645,17 +660,13 @@ class JobInput(JobInputPreview):
             + "Either all or no files must have data IDs associated with them. "
             + "When returned from the service, the checksum is always included.",
         min_length=1,
-        # Need to see how well this performs. If we need more files per job,
-        # can test performance & tweak S3 client concurrency. Alternatively, add a file set
-        # endpoint where file sets of size < some reasonable number can be submitted, and then
-        # multiple file sets can be combined in a JobInput
-        max_length=10000,
+        max_length=MAX_INPUT_FILES_PER_JOB,
     )]
-    script: Annotated[str | S3File | None, Field(
+    script: Annotated[S3File | None, Field(
         examples=["mybucket/foo/script.sh"],
         description="A user-provided script, either as a file path string or a data "
             + "structure including the file path and optionally a CRC64/NVME checksum. "
-            + "The file path always start with the bucket. "
+            + "The file path always starts with the bucket. "
             + "The script is expected to have a CRC64/NVME checksum available, even "
             + "if it is not provided in the input data structure. "
             + "When returned from the service, the checksum is always included. "
@@ -667,31 +678,9 @@ class JobInput(JobInputPreview):
             + "allow script execution.",
     )] = None
 
-    @field_validator("input_files", mode="before")
-    @classmethod
-    def _check_input_files(cls, v):
-        if v is None:
-            return None
-        newlist = []
-        for i, f in enumerate(v):
-            if isinstance(f, str):
-                newlist.append(_validate_s3_path(f, index=i))
-            else:
-                newlist.append(f)
-        return newlist
-
-    @field_validator("script", mode="before")
-    @classmethod
-    def _check_script(cls, v):
-        if isinstance(v, str):
-            return _validate_s3_path(v)
-        return v
-    
     @field_validator("input_files", mode="after")
     @classmethod
     def _check_data_ids(cls, v):
-        if not isinstance(v[0], S3FileWithDataID):
-            return v
         data_ids = bool(v[0].data_id)
         for f in v:
             if bool(f.data_id) is not data_ids:
@@ -706,10 +695,7 @@ class JobInput(JobInputPreview):
             # manifest file format is ignored, but not necc None, if type is not manifest file
             and fp.type is ParameterType.MANIFEST_FILE
             and fp.manifest_file_format is ManifestFileFormat.DATA_IDS
-            and (
-                not isinstance(self.input_files[0], S3FileWithDataID)
-                or not self.input_files[0].data_id
-            )
+            and not self.input_files[0].data_id
         ):
             raise ValueError(
                 "If a manifest file with data IDs is specified, "
@@ -725,13 +711,7 @@ class JobInput(JobInputPreview):
             )
         return self
 
-    def inputs_are_S3File(self) -> bool:
-        """
-        Returns True if the inputfiles are of type S3FileWithDataID, False otherwise.
-        """
-        return isinstance(self.input_files[0], S3FileWithDataID)
-        
-    def get_files_per_container(self) -> list[list[S3FileWithDataID | str]]:
+    def get_files_per_container(self) -> list[list[S3FileWithDataID]]:
         """
         Returns the input files split up by container.
         """
@@ -934,6 +914,14 @@ class JobState(str, Enum):
         return self in self.active_states()
 
 
+class EntityType(Enum):
+    """ The kind of entity - job, pipeline job, or reference data - being operated on. """
+
+    JOB = "job"
+    PIPELINE_JOB = "pipeline_job"
+    REFDATA = "refdata"
+
+
 class ExternalRunnerState(str, Enum):
     """ The state of a job or container on an external compute resource. """
     NONE = "none"
@@ -1095,7 +1083,24 @@ class JobStatus(_JobBase):
     )]
 
 
-class JobPreview(JobStatus):
+class InternalJobCommonPreviewFields(BaseModel):
+    """
+    Preview fields shared between arbitrary jobs and pipeline jobs.
+
+    Not a model exposed by the API in its own right - mixed into JobPreview / PipelineJobPreview.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    error: Annotated[str | None, Field(
+        examples=["The front fell off"],
+        description="A description of the error that occurred."
+    )] = None
+    output_file_count: Annotated[int | None, Field(
+        examples=[24],
+        description="The number of output files, if available."
+    )] = None
+
+
+class JobPreview(JobStatus, InternalJobCommonPreviewFields):
     """
     Information about a job, consisting of fields containing small amounts of data.
     Suitable for a list of jobs.
@@ -1129,14 +1134,6 @@ class JobPreview(JobStatus):
         description="The maximum memory in bytes used by a single container in the job, "
             + "if available.")
     ] = None
-    output_file_count: Annotated[int | None, Field(
-        examples=[24],
-        description="The number of output files, if available."
-    )] = None
-    error: Annotated[str | None, Field(
-        examples=["The front fell off"],
-        description="A description of the error that occurred."
-    )] = None
     logpath: Annotated[str | None, Field(
         examples=["cts-logs/container_logs/e14a21ba-032d-42f2-b235-d82606675b17"],
         description="A location in S3 where the logfiles for the job containers can be viewed."
@@ -1149,13 +1146,27 @@ class JobPreview(JobStatus):
         """
         return self.job_input.params.refdata_mount_point or self.image.default_refdata_mount_point
 
+    def get_entity_type(self) -> EntityType:
+        """ Get the entity type for this job. """
+        return EntityType.JOB
 
-class Job(JobPreview):
+    def is_pipeline(self) -> bool:
+        """ Return True if this job is a pipeline job. """
+        return False
+
+    def get_cluster(self) -> sites.Cluster:
+        """ Get the cluster on which this job runs. """
+        return self.job_input.cluster
+
+
+class InternalJobNonPreviewFields(BaseModel):
     """
-    Information about a job.
+    Fields excluded from a job preview: outputs, since the list may be large, and trans_history,
+    since it's not needed for a preview. Shared between arbitrary jobs and pipeline jobs.
+
+    Not a model exposed by the API in its own right - mixed into Job / PipelineJob.
     """
     # This is an outgoing data structure only so we don't add validators
-    job_input: JobInput
     # May need to assemble jobs manually if path validation is too expensive.
     outputs: list[S3File] | None = None
     trans_history: Annotated[list[JobStateTransition] | None, Field(
@@ -1164,29 +1175,56 @@ class Job(JobPreview):
     )] = None
 
 
+class Job(JobPreview, InternalJobNonPreviewFields):
+    """
+    Information about a job.
+    """
+    # This is an outgoing data structure only so we don't add validators
+    job_input: JobInput
+
+
 class NERSCDetails(BaseModel):
     """
     Details about a job run at NERSC.
     """
     # Output only model, no validation
-    download_task_id: Annotated[list[str], Field(
-        description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
-            + "instance to NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
+    download_task_id: Annotated[list[str] | None, Field(
+        default=None,
+        deprecated="Replaced by download_job_id. Only present on records created before NERSC "
+            + "downloads were migrated from SFAPI async tasks to Slurm jobs.",
+        description="IDs for SFAPI download tasks. Deprecated - see download_job_id."
     )]
-    upload_task_id: Annotated[list[str], Field(
-        default_factory=list,
-        description="IDs for tasks run via the NERSC SFAPI to upload files to an S3 "
-            + "instance from NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
-            + "Empty if an upload task has not yet been submitted to NERSC."
+    download_job_id: Annotated[list[str] | None, Field(
+        default=None,
+        description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to download files from "
+            + "an S3 instance to NERSC. Multiple job IDs indicate job retries after failures. "
+            + "Missing if the record predates the migration to Slurm jobs, see download_task_id."
     )]
-    log_upload_task_id: Annotated[list[str], Field(
-        default_factory=list,
-        description="IDs for tasks run via the NERSC SFAPI to upload log files to an S3 "
-            + "instance from NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures."
-            + "Empty if a log upload task has not yet been submitted to NERSC."
+    upload_task_id: Annotated[list[str] | None, Field(
+        default=None,
+        deprecated="Replaced by upload_job_id. Only present on records created before NERSC "
+            + "uploads were migrated from SFAPI async tasks to Slurm jobs.",
+        description="IDs for SFAPI upload tasks. Deprecated - see upload_job_id."
+    )]
+    upload_job_id: Annotated[list[str] | None, Field(
+        default=None,
+        description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to upload files to an S3 "
+            + "instance from NERSC. Multiple job IDs indicate job retries after failures. "
+            + "Missing if an upload job has not yet been submitted to NERSC, or if the record "
+            + "predates the migration to Slurm jobs, see upload_task_id."
+    )]
+    log_upload_task_id: Annotated[list[str] | None, Field(
+        default=None,
+        deprecated="Replaced by log_upload_job_id. Only present on records created before NERSC "
+            + "log uploads were migrated from SFAPI async tasks to Slurm jobs.",
+        description="IDs for SFAPI log upload tasks. Deprecated - see log_upload_job_id."
+    )]
+    log_upload_job_id: Annotated[list[str] | None, Field(
+        default=None,
+        description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to upload log files to "
+            + "an S3 instance from NERSC. Multiple job IDs indicate job retries after failures. "
+            + "Missing if a log upload job has not yet been submitted to NERSC, or if the record "
+            + "predates the migration to Slurm jobs, see log_upload_task_id."
     )]
 
 
@@ -1244,9 +1282,13 @@ class AdminJobStateTransition(JobStateTransition):
     )]
 
 
-class AdminJobDetails(Job):
+class InternalAdminJobFields(BaseModel):
     """
-    Information about a job with added details of interest to service administrators.
+    Fields for admin details views shared between arbitrary jobs and pipeline jobs: admin-only
+    details plus transition_times / trans_history tightened to the admin variant that includes
+    notification info.
+
+    Not a model exposed by the API in its own right - mixed into AdminJobDetails / AdminPipelineJob.
     """
     # Output only model, no validation
     transition_times: Annotated[list[AdminJobStateTransition], Field(
@@ -1267,7 +1309,7 @@ class AdminJobDetails(Job):
                 "state": JobState.JOB_SUBMITTING,
                 "time": "2024-10-24T22:47:67Z",
                 "trans_id": "baz",
-                "notif_sent": False, 
+                "notif_sent": False,
             },
         ]],
         description="A list of job state transitions."
@@ -1282,7 +1324,6 @@ class AdminJobDetails(Job):
     )] = False
     nersc_details: NERSCDetails | None = None
     jaws_details: JAWSDetails | None = None
-    htcondor_details: HTCondorDetails | None = None
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
@@ -1293,6 +1334,13 @@ class AdminJobDetails(Job):
             + "Populated when the job is reset during job recovery."
     )] = None
     traceback: Annotated[str | None, Field(description="The error's traceback.")] = None
+
+
+class AdminJobDetails(InternalAdminJobFields, Job):
+    """
+    Information about a job with added details of interest to service administrators.
+    """
+    htcondor_details: HTCondorDetails | None = None
 
 
 class ContainerUpdate(BaseModel):
@@ -1394,6 +1442,10 @@ class ReferenceDataStatus(BaseModel):
         description="A description of the error that occurred."
     )] = None
 
+    def get_cluster(self) -> sites.Cluster:
+        """ Get the cluster to which this status applies. """
+        return self.cluster
+
 
 class AdminReferenceDataStatus(ReferenceDataStatus):
     """
@@ -1406,11 +1458,17 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
             + "download manifests and results, etc."
     )] = False
     nersc_download_task_id: Annotated[list[str] | None, Field(
-        default_factory=list,
-        description="IDs for tasks run via the NERSC SFAPI to download files from an S3 "
-            + "instance to NERSC. Note that task details only persist for ~10 minutes past "
-            + "completion in the SFAPI. Multiple tasks indicate job retries after failures. "
-            + "Only present if the refdata is being downloaded to NERSC."
+        default=None,
+        deprecated="Replaced by nersc_download_job_id. Only present on records created before "
+            + "NERSC refdata downloads were migrated from SFAPI async tasks to Slurm jobs.",
+        description="IDs for SFAPI download tasks. Deprecated - see nersc_download_job_id."
+    )]
+    nersc_download_job_id: Annotated[list[str] | None, Field(
+        default=None,
+        description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to download files from "
+            + "an S3 instance to NERSC. Multiple job IDs indicate job retries after failures. "
+            + "Only present if the refdata is being downloaded to NERSC via a Slurm job, i.e. "
+            + "the record postdates the migration to Slurm jobs, see nersc_download_task_id."
     )]
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
@@ -1434,7 +1492,7 @@ class _ReferenceDataRoot(S3File, RegistrationInfo):
     def get_status_for_cluster(self, cluster: sites.Cluster) -> ReferenceDataStatus:
         """
         Get the status of a cluster for this reference data.
-        """ 
+        """
         _not_falsy(cluster, "cluster")
         for s in self.statuses:
             if s.cluster == cluster:
@@ -1442,6 +1500,14 @@ class _ReferenceDataRoot(S3File, RegistrationInfo):
         raise NoRefdataClusterStatusError(
             f"No status for cluster {cluster.value} for reference data {self.id}"
         )
+
+    def get_entity_type(self) -> EntityType:
+        """ Get the entity type for this reference data. """
+        return EntityType.REFDATA
+
+    def is_pipeline(self) -> bool:
+        """ Return True if this entity is a pipeline job. Always False for reference data. """
+        return False
 
 
 class ReferenceData(_ReferenceDataRoot):

@@ -14,6 +14,7 @@ from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
+from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice import sites
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSUser
@@ -58,25 +59,31 @@ class FlowCleaner:
             f"Started flow cleanup scheduler, running approximately every {frequency} "
             + f"on jobs / refdata older than {minimum_age}")
     
-    async def clean_job(self, job: models.AdminJobDetails, user: CTSUser, force: bool = False):
+    async def clean_job(
+        self,
+        job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
+        user: CTSUser,
+        force: bool = False,
+    ):
         """
-        Clean any transient files for a job. If the job is already in the cleaned state this is
-        a noop. If the job is not in a terminal state the job will not be set to cleaned.
-        
-        WARNING: setting force to True may cause undefined behavior. True will 
+        Clean any transient files for a job or pipeline job. If the job is already in the
+        cleaned state this is a noop. If the job is not in a terminal state the job will not be
+        set to cleaned.
+
+        WARNING: setting force to True may cause undefined behavior. True will
         cause job files to be removed regardless of job state.
         """
         # Similar to the method below, but trying to merge them was a mess
         _not_falsy(job, "job")
-        _not_falsy(user, user)
+        _not_falsy(user, "user")
         if job.cleaned:
             return
-        flow = await self._flowman.get_flow(job.job_input.cluster)
+        flow = await self._flowman.get_flow(job.get_cluster())
         await flow.clean_job(job, force=force)
         if job.state.is_terminal():
             # if force is True and the job isn't in the terminal state
             # the job may produce more dirt later
-            await self._mongo.set_job_clean(job.id)
+            await self._set_clean(job)
             self._logr.info(
                 f"Cleaned job '{job.id}' at user '{user.user}' request",
                 extra={logfields.JOB_ID: job.id}
@@ -87,23 +94,29 @@ class FlowCleaner:
                 + "request but did not set clean state",
                 extra={logfields.JOB_ID: job.id}
             )
-    
-    async def _process_job(self, job: models.AdminJobDetails):
+
+    async def _set_clean(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
+        if job.is_pipeline():
+            await self._mongo.set_pipeline_job_clean(job.id)
+        else:
+            await self._mongo.set_job_clean(job.id)
+
+    async def _process_job(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
         # Similar to the method above, but trying to merge them was a mess
         # May need to parallelize this, but YAGNI for now
         try:
-            if job.job_input.cluster not in await self._flowman.list_usable_clusters():
+            if job.get_cluster() not in await self._flowman.list_usable_clusters():
                 return
-            flow = await self._flowman.get_flow(job.job_input.cluster)
+            flow = await self._flowman.get_flow(job.get_cluster())
             await flow.clean_job(job)
-            await self._mongo.set_job_clean(job.id)
+            await self._set_clean(job)
             self._logr.info(f"Cleaned job '{job.id}'", extra={logfields.JOB_ID: job.id})
         except Exception as e:
             # Nothing really to be done. Maybe fixed on next attempt
             self._logr.exception(
                 f"Failed cleaning job '{job.id}': {e}", extra={logfields.JOB_ID: job.id}
             )
-            
+
     async def clean_refdata(
         self,
         refdata: models.AdminReferenceData,
@@ -180,6 +193,11 @@ class FlowCleaner:
         except Exception as e:
             # Nothing really to be done. Something is very wrong. Maybe fixed on next attempt
             self._logr.exception(f"Failed processing jobs for cleanup: {e}")
+        try:
+            await self._mongo.process_dirty_pipeline_jobs(older_than, self._process_job)
+        except Exception as e:
+            # Nothing really to be done. Something is very wrong. Maybe fixed on next attempt
+            self._logr.exception(f"Failed processing pipeline jobs for cleanup: {e}")
         try:
             await self._mongo.process_dirty_refdata(older_than, self._process_refdata)
         except Exception as e:

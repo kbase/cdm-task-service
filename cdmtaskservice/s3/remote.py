@@ -381,9 +381,12 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
     # stress error checking too much.
     # Potential performance improvements:
     # * aiofiles
-    # * Add multiprocessing; not clear if helpful given low CPU load expected 
-    # * See if multipart uploads are possible with presigned urls
-    #   * Presumably only helpful if disk reads are the bottleneck
+    # * Add multiprocessing; not clear if helpful given low CPU load expected
+    # * TODO PERF support multipart transfers via multiple range-based presigned URLs per file,
+    #   fetched/pushed concurrently. A single HTTP stream tends to plateau well below what a
+    #   high-bandwidth WAN path (e.g. NERSC <-> ANL over ESnet) can sustain; splitting large
+    #   files across several concurrent range requests is the standard fix and doesn't require
+    #   exposing real S3 credentials to NERSC the way handing off to an S3-aware CLI would.
     # TODO TEST add tests for this and its dependency functions.
     _not_falsy(manifest, "manifest")
     operation = manifest["op"]
@@ -410,11 +413,6 @@ async def process_data_transfer_manifest(manifest: dict[str, Any]):
             )
         else:
             raise ValueError(f"unknown operation: {operation}")
-    if "completion-file" in manifest:
-        with open(manifest["completion-file"], "w") as f:
-            # just raise a keyerror if it's not there
-            f.write(manifest["completion-file-contents"] + "\n")
-        _logr.info(f"Wrote completion file {manifest['completion-file']}")
     _logr.info(f"{operation} manifest processing complete")
 
 

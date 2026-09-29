@@ -37,6 +37,7 @@ from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
 from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates
 from cdmtaskservice import logfields
 from cdmtaskservice import models
+from cdmtaskservice.models import EntityType
 from cdmtaskservice.mongo import (
     MongoDAO,
     JobUpdateConflictError,
@@ -214,6 +215,12 @@ class KBaseRunner(JobFlow):
             ) for i in range(job_input.num_containers)
         ])
 
+    async def preflight_pipeline(self, user: CTSUser, job_id: str):
+        """ Throws an exception as pipelines are not supported for this job flow. """
+        raise UnsupportedOperationError(
+            f"Pipelines are not supported for the {self.CLUSTER.value} job flow"
+        )
+
     async def get_subjobs(self, job_id: str, container_num: int = None
     ) -> models.SubJob | list[models.SubJob]:
         """
@@ -241,7 +248,7 @@ class KBaseRunner(JobFlow):
         to HTC, an empty dict is returned.
         """
         # allow getting details from earlier runs? Seems unnecessary
-        if _not_falsy(job, "job").job_input.cluster != self.CLUSTER:
+        if _not_falsy(job, "job").get_cluster() != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
         _check_num(container_number, "container_number", minimum=0)
         if container_number >= job.job_input.num_containers:
@@ -266,7 +273,7 @@ class KBaseRunner(JobFlow):
         to HTCondor, all containers are reported as NONE.
         """
         _not_falsy(job, "job")
-        if job.job_input.cluster != self.CLUSTER:
+        if job.get_cluster() != self.CLUSTER:
             raise ValueError(f"Job cluster must match {self.CLUSTER}")
         if not job.htcondor_details or not job.htcondor_details.cluster_id:
             n = job.job_input.num_containers
@@ -1156,7 +1163,7 @@ class KBaseRunner(JobFlow):
             await self._refcli.stage_refdata(refdata.id, self.CLUSTER)
         except Exception as e:
             await self._updates.handle_exception(
-                e, refdata.id, "starting staging for", refdata=True
+                e, refdata.id, "starting staging for", entity_type=EntityType.REFDATA
             )
 
     async def refdata_complete(self, refdata_id: str):

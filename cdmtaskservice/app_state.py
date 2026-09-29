@@ -34,6 +34,9 @@ from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.client import NERSCSFAPIClientProvider
 from cdmtaskservice.notifications.kafka_checker import KafkaChecker
+from cdmtaskservice.pipelines.metaassembly import v0_1_0 as metaassembly_v0_1_0
+from cdmtaskservice.pipelines.readsqc import v0_1_0 as readsqc_v0_1_0
+from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice.refdata import Refdata
 from cdmtaskservice.refserv.config import CDMRefdataServiceConfig
 from cdmtaskservice.refserv.cts_client import CTSRefdataClient
@@ -82,6 +85,8 @@ class CTSAppState(AppState):
     """ The refdata manager class. """
     images: Images
     """ The Docker images manager class. """
+    pipeline_registry: PipelineRegistry
+    """ The registry of available pipeline versions. """
     jobflow_manager: JobFlowManager
     """ The job flow manager class. """
     kafka_checker: KafkaChecker
@@ -228,8 +233,9 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         dest.register("kafka notifier", asyncio.wait_for(kafka_notifier.close(), 10))
         logr.info("Done")
         flowman = JobFlowManager(mongodao)
+        pipeline_registry = _create_pipeline_registry(logr)
         jaws_job_flows = await _register_nersc_job_flows(
-            logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
+            logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman, pipeline_registry
         )
         await _register_kbase_job_flow(
             logr, dest, cfg, flowman, mongodao, s3cfg, kafka_notifier, coman
@@ -254,6 +260,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             refdata,
             coman,
             flowman,
+            pipeline_registry,
             cfg.allowed_s3_paths,
             cfg.container_s3_log_dir,
             cfg.job_max_cpu_hours,
@@ -269,6 +276,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             job_state=job_state,
             refdata=refdata,
             images=images,
+            pipeline_registry=pipeline_registry,
             jobflow_manager=flowman,
             kafka_checker=kc,
             flow_cleaner=flowclean,
@@ -279,6 +287,15 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
     except:
         await dest.destruct()
         raise
+
+
+def _create_pipeline_registry(logr: logging.Logger) -> PipelineRegistry:
+    logr.info("Initializing pipeline registry...")
+    registry = PipelineRegistry()
+    registry.register(readsqc_v0_1_0.init())
+    registry.register(metaassembly_v0_1_0.init())
+    logr.info("Done")
+    return registry
 
 
 def _get_local_path(path: str) -> Path:
@@ -315,7 +332,8 @@ async def _register_nersc_job_flows(
     mongodao: MongoDAO,
     s3config: S3Config,
     kafka_notifier: KafkaNotifier,
-    coman: CoroutineWrangler
+    coman: CoroutineWrangler,
+    pipeline_registry: PipelineRegistry,
 ) -> JAWSFlowProvider:
     # This is only useful for testing with other processes that just want to pull job records
     # but not start or run jobs or only run KBase jobs. As such it's undocumented.
@@ -332,7 +350,8 @@ async def _register_nersc_job_flows(
         kafka_notifier,
         coman,
         cfg.service_group,
-        cfg.service_root_url
+        cfg.service_root_url,
+        pipeline_registry,
     )
     dest.register("JAWS flow provider", jaws_job_flows.close())
     flowman.register_flow(NERSCJAWSRunner.CLUSTER, jaws_job_flows.get_nersc_job_flow)
@@ -375,6 +394,10 @@ def get_app_state(r: Request) -> AppState:
     """
     Get the application state from a request.
     """
+    # TODO CODE returns the AppState base type, but CTS-only routes need CTSAppState-only
+    # attributes (job_state, pipeline_registry, etc.), causing type checker errors at every
+    # call site in the CTS routers. Consider a separate get_cts_app_state(r) -> CTSAppState
+    # for those routers, or a generic / overload here, to narrow the return type properly.
     if not r.app.state._cdmstate:
         raise ValueError("App state has not been initialized")
     return r.app.state._cdmstate

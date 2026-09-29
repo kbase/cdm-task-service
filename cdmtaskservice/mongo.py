@@ -19,7 +19,8 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     verify_aware_datetime
 )
-from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError
+from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError, NoSuchJobError
+from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
 
 
@@ -65,6 +66,7 @@ class MongoDAO:
         self._col_sites = self._db.sites
         self._col_images = self._db.images
         self._col_jobs = self._db.jobs
+        self._col_pipeline_jobs = self._db.pipeline_jobs
         self._col_subjobs = self._db.subjobs
         self._col_exitcodes = self._db.exitcodes
         self._col_refdata = self._db.refdata
@@ -125,6 +127,47 @@ class MongoDAO:
                 partialFilterExpression={_FLD_TRANS_TIME_SEND: False}
             ),
             # Find jobs that need cleaning
+            IndexModel(
+                [
+                    (models.FLD_COMMON_CLEANED, ASCENDING),
+                    (models.FLD_COMMON_STATE, ASCENDING),
+                    (_FLD_UPDATE_TIME, ASCENDING)
+                ],
+                partialFilterExpression={
+                    models.FLD_COMMON_CLEANED: False,
+                    models.FLD_COMMON_STATE: {
+                        "$in": sorted([s.value for s in models.JobState.terminal_states()])
+                    }
+                },
+            ),
+        ])
+        pipelineclusterfield = (
+            f"{pipe_models.FLD_PIPELINE_JOB_PIPELINE_INPUT}."
+            + f"{pipe_models.FLD_PIPELINE_JOB_INPUT_CLUSTER}"
+        )
+        await self._col_pipeline_jobs.create_indexes([
+            IndexModel([(models.FLD_COMMON_ID, ASCENDING)], unique=True),
+            # find & sort pipeline jobs by transition time (admin only)
+            IndexModel([(_FLD_UPDATE_TIME, DESCENDING)]),
+            # find pipeline jobs by current state and state transition time (admin only)
+            IndexModel([(models.FLD_COMMON_STATE, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
+            # find pipeline jobs by cluster and state transition time (admin only)
+            IndexModel([(pipelineclusterfield, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
+            # find pipeline jobs by user and state transition time
+            IndexModel([(models.FLD_JOB_USER, ASCENDING), (_FLD_UPDATE_TIME, DESCENDING)]),
+            # find pipeline jobs by user, current state and state transition time
+            IndexModel([
+                (models.FLD_JOB_USER, ASCENDING),
+                (models.FLD_COMMON_STATE, ASCENDING),
+                (_FLD_UPDATE_TIME, DESCENDING)
+            ]),
+            # find pipeline jobs by user, cluster, and state transition time
+            IndexModel([
+                (models.FLD_JOB_USER, ASCENDING),
+                (pipelineclusterfield, ASCENDING),
+                (_FLD_UPDATE_TIME, DESCENDING)
+            ]),
+            # Find pipeline jobs that need cleaning
             IndexModel(
                 [
                     (models.FLD_COMMON_CLEANED, ASCENDING),
@@ -349,6 +392,38 @@ class MongoDAO:
         # to ensure unique IDs
         await self._col_jobs.insert_one(jobd)
 
+    async def save_pipeline_job(self, job: pipe_models.AdminPipelineJob):
+        """ Save a pipeline job. Job IDs are expected to be unique. """
+        _not_falsy(job, "job")
+        jobd = job.model_dump(exclude_none=True)
+        jobd[_FLD_UPDATE_TIME] = job.transition_times[-1].time
+        jobd[_FLD_RETRY_ATTEMPT] = 0  # unused for now
+        self._add_retry_attempt_to_trans_times(jobd)
+        # don't bother checking for duplicate key exceptions since the service is supposed
+        # to ensure unique IDs
+        await self._col_pipeline_jobs.insert_one(jobd)
+
+    async def get_pipeline_job(
+        self, job_id: str, as_admin: bool = False
+    ) -> pipe_models.PipelineJob | pipe_models.AdminPipelineJob:
+        """
+        Get a pipeline job by its ID.
+
+        job_id - the job ID.
+        as_admin - get additional details about the job.
+        """
+        doc = await self._col_pipeline_jobs.find_one(
+            {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
+        )
+        if not doc:
+            raise NoSuchJobError(f"No pipeline job with ID '{job_id}' exists")
+        doc = self._clean_doc(doc)
+        return (
+            pipe_models.AdminPipelineJob(**doc)
+            if as_admin
+            else pipe_models.PipelineJob(**doc)
+        )
+
     async def get_job(
         self, job_id: str, as_admin: bool = False
     ) -> models.Job | models.AdminJobDetails:
@@ -375,7 +450,16 @@ class MongoDAO:
         """
         Get minimal information about a job's status by the job's ID.
         """
-        doc = await self._col_jobs.find_one(
+        return await self._get_job_status(self._col_jobs, job_id, "job")
+
+    async def get_pipeline_job_status(self, job_id: str) -> models.JobStatus:
+        """
+        Get minimal information about a pipeline job's status by the job's ID.
+        """
+        return await self._get_job_status(self._col_pipeline_jobs, job_id, "pipeline job")
+
+    async def _get_job_status(self, collection, job_id: str, noun: str) -> models.JobStatus:
+        doc = await collection.find_one(
             {models.FLD_COMMON_ID: _require_string(job_id, "job_id")},
             {
                 _FLD_MONGO_ID: 0,
@@ -387,7 +471,7 @@ class MongoDAO:
             },
         )
         if not doc:
-            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+            raise NoSuchJobError(f"No {noun} with ID '{job_id}' exists")
         return models.JobStatus(**doc)
 
     async def list_jobs(
@@ -401,7 +485,7 @@ class MongoDAO:
     ) -> list[models.JobPreview]:
         """
         List jobs.
-        
+
         user - filter jobs by user.
         site - filter jobs by the compute site.
         state - filter jobs by the job's current state.
@@ -410,6 +494,69 @@ class MongoDAO:
             exclusive.
         limit - the maximum number of jobs to return.
         """
+        return await self._list_jobs(
+            self._col_jobs,
+            models.JobPreview,
+            models.FLD_JOB_JOB_INPUT,
+            models.FLD_JOB_INPUT_CLUSTER,
+            [models.FLD_JOB_INPUT_INPUT_FILES, models.FLD_JOB_INPUT_SCRIPT],
+            user=user,
+            site=site,
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+
+    async def list_pipeline_jobs(
+        self,
+        user: str | None = None,
+        site: sites.Cluster | None = None,
+        state: models.JobState | None = None,
+        after: datetime.datetime | None = None,
+        before: datetime.datetime | None = None,
+        limit: int = 1000
+    ) -> list[pipe_models.PipelineJobPreview]:
+        """
+        List pipeline jobs.
+
+        user - filter jobs by user.
+        site - filter jobs by the compute site.
+        state - filter jobs by the job's current state.
+        after - filter jobs to jobs that entered the current state after the given time, inclusive.
+        before - filter jobs to jobs that entered the current state before the given time,
+            exclusive.
+        limit - the maximum number of jobs to return.
+        """
+        return await self._list_jobs(
+            self._col_pipeline_jobs,
+            pipe_models.PipelineJobPreview,
+            pipe_models.FLD_PIPELINE_JOB_PIPELINE_INPUT,
+            pipe_models.FLD_PIPELINE_JOB_INPUT_CLUSTER,
+            [pipe_models.FLD_PIPELINE_JOB_INPUT_FILES],
+            user=user,
+            site=site,
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+
+    async def _list_jobs(
+        self,
+        collection,
+        model_cls,
+        input_field: str,
+        cluster_field: str,
+        exclude_fields: list[str],
+        *,
+        user: str | None,
+        site: sites.Cluster | None,
+        state: models.JobState | None,
+        after: datetime.datetime | None,
+        before: datetime.datetime | None,
+        limit: int,
+    ) -> list:
         timequery = {}
         if after:
             timequery["$gte"] = verify_aware_datetime(after, "after")
@@ -419,32 +566,38 @@ class MongoDAO:
         if user:
             query[models.FLD_JOB_USER] = user
         if site:
-            query[f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_CLUSTER}"] = site.value
+            query[f"{input_field}.{cluster_field}"] = site.value
         if state:
             query[models.FLD_COMMON_STATE] = state.value
         if timequery:
             query[_FLD_UPDATE_TIME] = timequery
         # drop the potentially large fields
-        project = {
-            models.FLD_COMMON_OUTPUTS: 0,
-            f"{models.FLD_JOB_JOB_INPUT}.{models.FLD_JOB_INPUT_INPUT_FILES}": 0
-        }
+        project = {models.FLD_COMMON_OUTPUTS: 0}
+        for exclude_field in exclude_fields:
+            project[f"{input_field}.{exclude_field}"] = 0
         sort = [(_FLD_UPDATE_TIME, DESCENDING)]
         jobs = []
-        async for j in self._col_jobs.find(
+        async for j in collection.find(
             query, project
             ).sort(sort
             ).limit(_check_num(limit, "limit")
         ):
-            jobs.append(models.JobPreview(**self._clean_doc(j)))
+            jobs.append(model_cls(**self._clean_doc(j)))
         return jobs
-    
+
     async def set_job_clean(self, job_id: str):
         """ Set a job's cleaned state to true. """
+        await self._set_clean(self._col_jobs, job_id, "job")
+
+    async def set_pipeline_job_clean(self, job_id: str):
+        """ Set a pipeline job's cleaned state to true. """
+        await self._set_clean(self._col_pipeline_jobs, job_id, "pipeline job")
+
+    async def _set_clean(self, collection, job_id: str, noun: str):
         query = {models.FLD_COMMON_ID: _require_string(job_id, "job_id")}
-        res = await self._col_jobs.update_one(query, {"$set": {models.FLD_COMMON_CLEANED: True}})
+        res = await collection.update_one(query, {"$set": {models.FLD_COMMON_CLEANED: True}})
         if not res.matched_count:
-            raise NoSuchJobError(f"No job with ID '{job_id}' exists")
+            raise NoSuchJobError(f"No {noun} with ID '{job_id}' exists")
 
     async def process_dirty_jobs(
             self,
@@ -455,9 +608,33 @@ class MongoDAO:
         * the last update time was older than the older_than argument
         * the cleaned flag is false
         * the job state is one of the terminal states
-        
+
         and pass the job to the operation argument, which must be an async function.
         """
+        await self._process_dirty(
+            self._col_jobs, older_than, operation, lambda j: self._doc_to_job(j, as_admin=True)
+        )
+
+    async def process_dirty_pipeline_jobs(
+            self,
+            older_than: datetime.datetime,
+            operation: Callable[[pipe_models.AdminPipelineJob], Awaitable[None]]):
+        """
+        Find pipeline jobs where
+        * the last update time was older than the older_than argument
+        * the cleaned flag is false
+        * the job state is one of the terminal states
+
+        and pass the job to the operation argument, which must be an async function.
+        """
+        await self._process_dirty(
+            self._col_pipeline_jobs,
+            older_than,
+            operation,
+            lambda j: pipe_models.AdminPipelineJob(**self._clean_doc(j)),
+        )
+
+    async def _process_dirty(self, collection, older_than: datetime.datetime, operation, to_model):
         _not_falsy(older_than, "older_than")
         _not_falsy(operation, "operation")
         query = {
@@ -465,10 +642,10 @@ class MongoDAO:
             models.FLD_COMMON_STATE: {"$in": [s.value for s in models.JobState.terminal_states()]},
             _FLD_UPDATE_TIME: {"$lt": older_than},
         }
-        async for j in self._col_jobs.find(query):
+        async for j in collection.find(query):
             # could make this more efficient by making yet another job model that includes
             # admin details but not file paths. May need to separate files from jobs...
-            await operation(self._doc_to_job(j, as_admin=True))
+            await operation(to_model(j))
 
     def _update_job_state_condition(
         self,
@@ -639,7 +816,7 @@ class MongoDAO:
             pre_doc, job_id, update, time, subjob_id, recovery_cooldown, last_update_time
         )
 
-    _FLD_NERSC_DL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_TASK_ID}"
+    _FLD_NERSC_DL_JOB = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_DL_JOB_ID}"
     _FLD_JAWS_RUN_ID = f"{models.FLD_JOB_JAWS_DETAILS}.{models.FLD_JAWS_DETAILS_RUN_ID}"
     _FLD_HTC_CLUSTER_ID = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_JOB_HTC_CLUSTER_ID}"
     _FLD_HTC_CPU_HOURS = f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_COMMON_HTC_CPU_HOURS}"
@@ -648,13 +825,13 @@ class MongoDAO:
     _FLD_HTC_STATS_INCOMPLETE = (
         f"{models.FLD_COMMON_HTC_DETAILS}.{models.FLD_JOB_HTC_STATS_INCOMPLETE}"
     )
-    _FLD_NERSC_UL_TASK = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_TASK_ID}"
-    _FLD_NERSC_LOG_UL_TASK = (
-        f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_TASK_ID}"
+    _FLD_NERSC_UL_JOB = f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_UL_JOB_ID}"
+    _FLD_NERSC_LOG_UL_JOB = (
+        f"{models.FLD_JOB_NERSC_DETAILS}.{models.FLD_NERSC_DETAILS_LOG_UL_JOB_ID}"
     )
     def _setup_field_mappings(self):
         self._FIELD_TO_KEY_AND_PUSH = {
-            UpdateField.NERSC_DOWNLOAD_TASK_ID: (self._FLD_NERSC_DL_TASK, True),
+            UpdateField.NERSC_DOWNLOAD_JOB_ID: (self._FLD_NERSC_DL_JOB, True),
             UpdateField.JAWS_RUN_ID: (self._FLD_JAWS_RUN_ID, True),
             UpdateField.HTCONDOR_CLUSTER_ID: (self._FLD_HTC_CLUSTER_ID, True),
             UpdateField.HTCONDOR_CPU_HOURS: (self._FLD_HTC_CPU_HOURS, False),
@@ -664,10 +841,10 @@ class MongoDAO:
             UpdateField.CPU_HOURS: (models.FLD_COMMON_CPU_HOURS, False),
             UpdateField.CPU_FACTOR: (models.FLD_JOB_CPU_FACTOR, False),
             UpdateField.MAX_MEMORY: (models.FLD_COMMON_MAX_MEM, False),
-            UpdateField.NERSC_UPLOAD_TASK_ID: (self._FLD_NERSC_UL_TASK, True),
+            UpdateField.NERSC_UPLOAD_JOB_ID: (self._FLD_NERSC_UL_JOB, True),
             UpdateField.OUTPUT_FILE_PATHS: (models.FLD_COMMON_OUTPUTS, False),
             UpdateField.OUTPUT_FILE_COUNT: (models.FLD_JOB_OUTPUT_FILE_COUNT, False),
-            UpdateField.NERSC_LOG_UPLOAD_TASK_ID: (self._FLD_NERSC_LOG_UL_TASK, True),
+            UpdateField.NERSC_LOG_UPLOAD_JOB_ID: (self._FLD_NERSC_LOG_UL_JOB, True),
             UpdateField.EXIT_CODE: (models.FLD_SUBJOB_EXIT_CODE, False),
             UpdateField.RUNTIME: (models.FLD_SUBJOB_RUNTIME, False),
             UpdateField.USER_ERROR: (models.FLD_COMMON_ERROR, False),
@@ -676,7 +853,7 @@ class MongoDAO:
             UpdateField.LOG_PATH: (models.FLD_JOB_LOGPATH, False),
         }
         self._REFDATA_FIELD_TO_KEY_AND_PUSH = {
-            UpdateField.NERSC_DOWNLOAD_TASK_ID: (models.FLD_REFDATA_NERSC_DL_TASK_ID, True),
+            UpdateField.NERSC_DOWNLOAD_JOB_ID: (models.FLD_REFDATA_NERSC_DL_JOB_ID, True),
             UpdateField.USER_ERROR: (models.FLD_COMMON_ERROR, False),
             UpdateField.ADMIN_ERROR: (models.FLD_COMMON_ADMIN_ERROR, False),
             UpdateField.TRACEBACK: (models.FLD_COMMON_TRACEBACK, False),
@@ -720,6 +897,26 @@ class MongoDAO:
             trans_id=_require_string(trans_id, "trans_id"),
             recovery_cooldown=recovery_cooldown,
             last_update_time=last_update_time,
+        )
+
+    async def update_pipeline_job_state(
+        self,
+        job_id: str,
+        update: JobUpdate,
+        time: datetime.datetime,
+        trans_id: str,
+    ):
+        """
+        Update a pipeline job's state.
+        See update_job_state for parameter details; behaves identically but operates on the
+        pipeline jobs collection.
+        """
+        await self._update_job_state(
+            self._col_pipeline_jobs,
+            job_id,
+            update,
+            time,
+            trans_id=_require_string(trans_id, "trans_id"),
         )
 
     @staticmethod
@@ -859,7 +1056,7 @@ class MongoDAO:
     async def job_update_sent(self, job_id: str, trans_id: str):
         """
         Mark a job state transition as sent to a notification system.
-        
+
         job_id - the ID of the job.
         trans_id - the ID of the job state transition.
         """
@@ -1371,7 +1568,7 @@ class MongoDAO:
         # to ensure unique IDs
 
         # TDOO REFDATA add a force option to allow for file overwrites if needed
-        r = refdata.model_dump()
+        r = refdata.model_dump(exclude_none=True)
         # Could add a check in the refdata model that rds have > 0 statuses,
         # statuses have > 0 transitions and the last
         # transition == the redfdata cluster state... probably not necessary.
@@ -1395,7 +1592,7 @@ class MongoDAO:
         refdata_id - the ID of the refdata to modify.
         rds - the information for the new site.
         """
-        s = _not_falsy(rds, "rds").model_dump()
+        s = _not_falsy(rds, "rds").model_dump(exclude_none=True)
         s[_FLD_UPDATE_TIME] = rds.transition_times[-1].time
         result = await self._col_refdata.update_one(
             {
@@ -1582,10 +1779,6 @@ class MongoDAO:
 
 class NoSuchImageError(Exception):
     """ The image does not exist in the system. """
-
-
-class NoSuchJobError(Exception):
-    """ The job does not exist in the system. """
 
 
 class NoSuchSubJobError(Exception):

@@ -38,6 +38,16 @@ class SubmittableCluster(str, Enum):
     KBASE = "kbase"
 
 
+class PipelineCluster(str, Enum):
+    """
+    Clusters where a pipeline job may run.
+
+    perlmutter-jaws: The Perlmutter cluster at NERSC run via JAWS.
+    """
+
+    PERLMUTTER_JAWS = "perlmutter-jaws"
+
+
 class NodeType(BaseModel):
     """ Represents a class of nodes within a compute site. """
 

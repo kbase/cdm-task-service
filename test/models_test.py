@@ -30,9 +30,9 @@ def _files_per_container(containers: int, files: int, expfiles: list[list[int]])
     fpc = ji.get_files_per_container()
     exp = []
     for lst in expfiles:
-        exp.append([f"foo/bar{i}" for i in lst])
+        exp.append([models.S3FileWithDataID(file=f"foo/bar{i}") for i in lst])
     assert fpc == exp
-    
+
     ji = models.JobInput(
         cluster=sites.Cluster.PERLMUTTER_JAWS,
         image="fakeimage",

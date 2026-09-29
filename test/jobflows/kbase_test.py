@@ -27,6 +27,7 @@ from cdmtaskservice.refserv.client import RefdataServiceClient
 from cdmtaskservice.s3.client import S3Client, S3ObjectMeta
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
+from cdmtaskservice.user import CTSUser
 
 
 # TODO TEST add more tests
@@ -196,6 +197,20 @@ async def test_get_job_external_runner_status_submitted():
         ],
     )
     condor.get_cluster_proc_states.assert_called_once_with(123, 7)
+
+
+######
+# preflight_pipeline tests
+######
+
+
+async def test_preflight_pipeline():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(
+        UnsupportedOperationError,
+        match="^Pipelines are not supported for the kbase job flow$"
+    ):
+        await runner.preflight_pipeline(CTSUser(user="testuser"), "jid")
 
 
 ######

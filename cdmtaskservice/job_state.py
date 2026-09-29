@@ -7,7 +7,7 @@ import logging
 import math
 from pathlib import Path
 import uuid
-from typing import AsyncIterator, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from cdmtaskservice import logfields
 from cdmtaskservice import models
@@ -29,8 +29,11 @@ from cdmtaskservice.images import Images
 from cdmtaskservice.jobflows.flowmanager import JobFlowManager
 from cdmtaskservice.jobflows.container_filenames import get_filenames_for_container
 from cdmtaskservice.mongo import MongoDAO, IllegalAdminMetaError
+from cdmtaskservice.pipelines.definition import PipelineInput
+from cdmtaskservice.pipelines import models as pipe_models
+from cdmtaskservice.pipelines.registry import PipelineRegistry
 from cdmtaskservice.refdata import Refdata
-from cdmtaskservice.s3.client import S3Client, S3PathInaccessibleError
+from cdmtaskservice.s3.client import S3Client, S3ObjectMeta, S3PathInaccessibleError
 from cdmtaskservice.s3.paths import S3Paths
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -52,6 +55,7 @@ class JobState:
         refdata: Refdata,
         coro_manager: CoroutineWrangler,
         flow_manager: JobFlowManager,
+        pipeline_registry: PipelineRegistry,
         allowed_paths: list[str],
         log_path: str,
         job_max_cpu_hours: float,
@@ -69,6 +73,7 @@ class JobState:
         refdata - a manager for reference data.
         coro_manager - a coroutine manager.
         flow_manager- the job flow manager.
+        pipeline_registry - the registry of available pipeline versions.
         allowed_paths - the paths where users are allowed to read files for input and write
             files for output. Paths may be just a bucket. Paths must end in '/'.
             If omitted, the user can read and write anywhere the service can read and write
@@ -86,6 +91,7 @@ class JobState:
         self._ref = _not_falsy(refdata, "refdata")
         self._coman = _not_falsy(coro_manager, "coro_manager")
         self._flowman = _not_falsy(flow_manager, "flow_manager")
+        self._pipereg = _not_falsy(pipeline_registry, "pipeline_registry")
         # TODO CODE make a path set that enforces:
         #   * the allowed and log paths end in /.
         #   * The paths are valid
@@ -157,7 +163,9 @@ class JobState:
             await self._coman.run_coroutine(flow.start_job(job, meta))
         return job_id
 
-    async def _check_output_path(self, job_input: models.JobInput):
+    async def _check_output_path(
+        self, job_input: models.JobInput | pipe_models.PipelineJobInput
+    ):
         out = job_input.output_dir  # model enforces a path, not bucket
         if out.startswith(self._logpath):
             raise S3PathInaccessibleError(f"Jobs may not write to the log path {self._logpath}")
@@ -202,6 +210,46 @@ class JobState:
                 + f"{job_input.cluster.value}"
             )
 
+    async def _verify_and_get_meta(
+        self,
+        paths: list[str],
+        expected_checksums: list[str | None],
+        path_label: str = "input",
+    ) -> list[S3ObjectMeta]:
+        """
+        Check that paths are subpaths of the user's allowed paths, if configured, and that
+        each path exists in S3 with a CRC64/NVME checksum, optionally verifying the checksum
+        matches an expected value.
+
+        paths - the S3 paths to check.
+        expected_checksums - the expected CRC64/NVME checksum for each path, in the same order
+            as paths, or None for a path if no checksum is expected.
+        path_label - a noun describing the paths, used in the allowed-paths error message.
+
+        Returns S3 metadata for each path, in the same order as paths.
+        """
+        if self._allowedpaths:
+            for p in paths:
+                if not any([p.startswith(ap) for ap in self._allowedpaths]):
+                    raise S3PathInaccessibleError(
+                        f"The {path_label} path {p} is not a subpath of the user's "
+                        + "allowed paths"
+                    )
+        # TODO PERF may want to make concurrency configurable here
+        # TODO PERF this checks the file path syntax again, consider some way to avoid
+        meta = await self._s3.get_object_meta(S3Paths(paths))
+        for p, m, expected in zip(paths, meta, expected_checksums):
+            if not m.crc64nvme:
+                raise IllegalParameterError(
+                    f"The S3 path '{m.path}' does not have a CRC64/NVME checksum"
+                )
+            if expected and expected != m.crc64nvme:
+                raise ChecksumMismatchError(
+                    f"The expected CRC64/NMVE checksum '{expected}' for the path "
+                    + f"'{p}' does not match the actual checksum '{m.crc64nvme}'"
+                )
+        return meta
+
     async def _check_and_update_script(self, job_input: models.JobInput, image: models.Image):
         if image.script_image and not job_input.script:
             raise IllegalParameterError(
@@ -215,56 +263,22 @@ class JobState:
         if not job_input.script:
             return None
         script = job_input.script
-        path = script.file if isinstance(script, models.S3File) else script
-        if self._allowedpaths:
-            if not any([path.startswith(ap) for ap in self._allowedpaths]):
-                raise S3PathInaccessibleError(
-                    f"The script path {path} is not a subpath of the user's allowed paths")
-        meta = (await self._s3.get_object_meta(S3Paths([path])))[0]
-        if not meta.crc64nvme:
-            raise IllegalParameterError(
-                f"The S3 path '{meta.path}' does not have a CRC64/NVME checksum"
-            )
-        if (isinstance(script, models.S3File) and script.crc64nvme
-                and script.crc64nvme != meta.crc64nvme):
-            raise ChecksumMismatchError(
-                f"The expected CRC64/NMVE checksum '{script.crc64nvme}' for the path "
-                + f"'{script.file}' does not match the actual checksum "
-                + f"'{meta.crc64nvme}'"
-            )
+        meta = (await self._verify_and_get_meta(
+            [script.file], [script.crc64nvme], path_label="script"
+        ))[0]
         return models.S3File.model_construct(file=meta.path, crc64nvme=meta.crc64nvme)
 
     async def _check_and_update_files(self, job_input: models.JobInput):
-        paths = [
-            f.file if isinstance(f, models.S3FileWithDataID) else f
-                 for f in job_input.input_files
-        ]
-        if self._allowedpaths:
-            for p in paths:
-                if not any([p.startswith(ap) for ap in self._allowedpaths]):
-                    raise S3PathInaccessibleError(
-                        f"The input path {p} is not a subpath of the user's allowed paths")
-        # TODO PERF may want to make concurrency configurable here
-        # TODO PERF this checks the file path syntax again, consider some way to avoid
-        meta = await self._s3.get_object_meta(S3Paths(paths))
-        new_input = []
-        for m, f in zip(meta, job_input.input_files):
-            if not m.crc64nvme:
-                raise IllegalParameterError(
-                    f"The S3 path '{m.path}' does not have a CRC64/NVME checksum"
-                )
-            data_id = None
-            if isinstance(f, models.S3FileWithDataID):
-                data_id = f.data_id
-                if f.crc64nvme and f.crc64nvme != m.crc64nvme:
-                    raise ChecksumMismatchError(
-                        f"The expected CRC64/NMVE checksum '{f.crc64nvme}' for the path "
-                        + f"'{f.file}' does not match the actual checksum '{m.crc64nvme}'"
-                    )
-            # no need to validate the path again
-            new_input.append(models.S3FileWithDataID.model_construct(
-                file=m.path, crc64nvme=m.crc64nvme, data_id=data_id)
+        paths = [f.file for f in job_input.input_files]
+        expected = [f.crc64nvme for f in job_input.input_files]
+        meta = await self._verify_and_get_meta(paths, expected)
+        # no need to validate the path again
+        new_input = [
+            models.S3FileWithDataID.model_construct(
+                file=m.path, crc64nvme=m.crc64nvme, data_id=f.data_id
             )
+            for m, f in zip(meta, job_input.input_files)
+        ]
         return new_input, meta
 
     async def _check_refdata(self, job_input: models.JobInput, image: models.Image):
@@ -283,6 +297,68 @@ class JobState:
                 + f"remote compute environment {job_input.cluster.value}"
         )
 
+    async def submit_pipeline_job(
+        self, pipeline_job_input: pipe_models.PipelineJobInput, user: CTSUser
+    ) -> str:
+        """
+        Submit a pipeline job.
+
+        pipeline_job_input - the input for the pipeline job.
+        user - the user submitting the job.
+
+        Returns the opaque job ID.
+        """
+        _not_falsy(pipeline_job_input, "pipeline_job_input")
+        _not_falsy(user, "user")
+        validated_input, meta = await self._check_and_verify_pipeline_files(pipeline_job_input)
+        await self._check_output_path(pipeline_job_input)
+        job_id = f"{pipe_models.PIPELINE_JOB_ID_PREFIX}{self._uuid_fn()}"
+        if not self._test_mode:
+            # check the flow is available before we make any changes
+            flow = await self._flowman.get_flow(pipeline_job_input.cluster)
+            await flow.preflight_pipeline(user, job_id)
+        pji = pipeline_job_input.model_copy(update={
+            pipe_models.FLD_PIPELINE_JOB_INPUT_INPUT: validated_input.input.model_dump(mode="json"),
+            pipe_models.FLD_PIPELINE_JOB_INPUT_FILES: validated_input.files.model_dump(mode="json"),
+        })
+        update_time = self._timestamp_fn()
+        job = pipe_models.AdminPipelineJob(
+            id=job_id,
+            pipeline_input=pji,
+            user=user.user,
+            state=models.JobState.CREATED,
+            transition_times=[models.AdminJobStateTransition(
+                state=models.JobState.CREATED,
+                time=update_time,
+                trans_id=str(self._uuid_fn()),
+                notif_sent=False,
+            )],
+        )
+        await self._mongo.save_pipeline_job(job)
+        # TODO PIPELINES add kafka updte when needed
+        if not self._test_mode:
+            await self._coman.run_coroutine(flow.start_job(job, meta))
+        return job_id
+
+    async def _check_and_verify_pipeline_files(
+        self, pipeline_job_input: pipe_models.PipelineJobInput
+    ) -> tuple[PipelineInput, list[S3ObjectMeta]]:
+        pipeline_def = self._pipereg.get(pipeline_job_input.get_pipeline_spec())
+        validated_input = pipeline_def.validate_input(
+            pipeline_job_input.input, pipeline_job_input.files
+        )
+        s3files = validated_input.get_s3_files()
+        if not s3files:
+            return validated_input, []
+        paths = [f.file for f in s3files]
+        expected = [f.crc64nvme for f in s3files]
+        meta = await self._verify_and_get_meta(paths, expected)
+        resolved = {
+            m.path: models.S3File.model_construct(file=m.path, crc64nvme=m.crc64nvme)
+            for m in meta
+        }
+        return validated_input.set_s3_files(resolved), meta
+
     async def get_job(
         self,
         job_id: str,
@@ -293,7 +369,7 @@ class JobState:
         """
         Get a job based on its ID. If the provided user doesn't match the job's owner,
         an error is thrown.
-        
+
         job_id - the job ID
         user - the user requesting the job.
         as_admin - True if the user should always have access to the job and should access
@@ -301,10 +377,40 @@ class JobState:
         admin_details - True if the user should access additional job details, but not have
             special access to the job.
         """
-        _not_falsy(user, "user")
-        job = await self._mongo.get_job(
-            _require_string(job_id, "job_id"), as_admin=as_admin or admin_details
+        return await self._get_any_job(self._mongo.get_job, job_id, user, as_admin, admin_details)
+
+    async def get_pipeline_job(
+        self,
+        job_id: str,
+        user: CTSUser,
+        as_admin: bool = False,
+        admin_details: bool = False,
+    ) -> pipe_models.PipelineJob | pipe_models.AdminPipelineJob:
+        """
+        Get a pipeline job based on its ID. If the provided user doesn't match the job's owner,
+        an error is thrown.
+
+        job_id - the job ID
+        user - the user requesting the job.
+        as_admin - True if the user should always have access to the job and should access
+            additional job details.
+        admin_details - True if the user should access additional job details, but not have
+            special access to the job.
+        """
+        return await self._get_any_job(
+            self._mongo.get_pipeline_job, job_id, user, as_admin, admin_details
         )
+
+    async def _get_any_job(
+        self,
+        fetch: Callable[..., Awaitable[Any]],
+        job_id: str,
+        user: CTSUser,
+        as_admin: bool,
+        admin_details: bool,
+    ) -> Any:
+        _not_falsy(user, "user")
+        job = await fetch(_require_string(job_id, "job_id"), as_admin=as_admin or admin_details)
         if not as_admin and job.user != user.user:
             # reveals the job ID exists in the system but I don't see a problem with that
             raise UnauthorizedError(f"User {user.user} may not access job {job_id}")
@@ -322,12 +428,34 @@ class JobState:
         """
         Get minimal information about a job's status based on the job's ID.
         If the provided user doesn't match the job's owner, an error is thrown.
-        
+
         job_id - the job ID.
         user - the user requesting the job.
         """
+        return await self._get_any_job_status(self._mongo.get_job_status, job_id, user)
+
+    async def get_pipeline_job_status(
+        self,
+        job_id: str,
+        user: CTSUser,
+    ) -> models.JobStatus:
+        """
+        Get minimal information about a pipeline job's status based on the job's ID.
+        If the provided user doesn't match the job's owner, an error is thrown.
+
+        job_id - the job ID.
+        user - the user requesting the job.
+        """
+        return await self._get_any_job_status(self._mongo.get_pipeline_job_status, job_id, user)
+
+    async def _get_any_job_status(
+        self,
+        fetch: Callable[[str], Awaitable[models.JobStatus]],
+        job_id: str,
+        user: CTSUser,
+    ) -> models.JobStatus:
         _not_falsy(user, "user")
-        job = await self._mongo.get_job_status(_require_string(job_id, "job_id"))
+        job = await fetch(_require_string(job_id, "job_id"))
         if job.user != user.user:
             # reveals the job ID exists in the system but I don't see a problem with that
             raise UnauthorizedError(f"User {user.user} may not access job {job_id}")
@@ -350,7 +478,7 @@ class JobState:
         exited.
         """
         job = await self.get_job(job_id, user, as_admin)
-        containers_self_managed = sites.CLUSTER_TO_EXECUTION_TYPE[job.job_input.cluster]
+        containers_self_managed = sites.CLUSTER_TO_EXECUTION_TYPE[job.get_cluster()]
         if containers_self_managed:
             return await self._mongo.get_exit_codes_for_subjobs(job.id)
         ecs = await self._mongo.get_exit_codes_for_standard_job(job.id)
@@ -386,7 +514,7 @@ class JobState:
                 f"Container number must be < {job.job_input.num_containers} for job {job_id}"
             )
 
-        if sites.CLUSTER_TO_EXECUTION_TYPE[job.job_input.cluster]:
+        if sites.CLUSTER_TO_EXECUTION_TYPE[job.get_cluster()]:
             subjob = await self._mongo.get_subjob(job_id, container_num)
             # Note that if log path is present, checked above, that means no containers are
             # still running. Logs are only uploaded for containers with a non-zero exit code;
@@ -447,7 +575,7 @@ class JobState:
     ) -> list[models.JobPreview]:
         """
         List jobs in the system.
-        
+
         user - filter the jobs by a specific user.
         site - filter jobs by the compute site.
         state - filter the jobs by the given state.
@@ -456,11 +584,63 @@ class JobState:
             exclusive.
         limit - the maximum number of jobs to return between 1 and 1000.
         """
+        return await self._list_any_jobs(
+            self._mongo.list_jobs,
+            user=user,
+            site=site,
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+
+    async def list_pipeline_jobs(
+        self,
+        # can't be a KBaseUser since it may be provided by an admin as a parameter
+        user: str | None = None,
+        site: sites.Cluster | None = None,
+        state: models.JobState | None = None,
+        after: datetime.datetime | None = None,
+        before: datetime.datetime | None = None,
+        limit: int = 1000
+    ) -> list[pipe_models.PipelineJobPreview]:
+        """
+        List pipeline jobs in the system.
+
+        user - filter the jobs by a specific user.
+        site - filter jobs by the compute site.
+        state - filter the jobs by the given state.
+        after - filter jobs to jobs that entered the current state after the given time, inclusive.
+        before - filter jobs to jobs that entered the current state before the given time,
+            exclusive.
+        limit - the maximum number of jobs to return between 1 and 1000.
+        """
+        return await self._list_any_jobs(
+            self._mongo.list_pipeline_jobs,
+            user=user,
+            site=site,
+            state=state,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+
+    async def _list_any_jobs(
+        self,
+        fetch: Callable[..., Awaitable[Any]],
+        *,
+        user: str | None,
+        site: sites.Cluster | None,
+        state: models.JobState | None,
+        after: datetime.datetime | None,
+        before: datetime.datetime | None,
+        limit: int,
+    ) -> Any:
         # mostly a pass through method
         limit = 1000 if limit is None else limit
         if limit < 1 or limit > 1000:
             raise IllegalParameterError("Limit must be between 1 and 1000 inclusive")
-        return await self._mongo.list_jobs(
+        return await fetch(
             user=user,
             site=site,
             state=state,

@@ -12,6 +12,7 @@ from cdmtaskservice.exceptions import InvalidReferenceDataStateError
 from cdmtaskservice.jaws import client as jaws_client
 from cdmtaskservice.jobflows.nersc_jaws import NERSCJAWSRunner
 from cdmtaskservice import models
+from cdmtaskservice.models import EntityType
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
@@ -93,7 +94,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
             # filename needs to be written (maybe insert _attempt_# or something into the name).
         except Exception as e:
             await self._updates.handle_exception(
-                e, refdata.id, "setting up callbacks for", refdata=True
+                e, refdata.id, "setting up callbacks for", entity_type=EntityType.REFDATA
             )
 
     async def refdata_complete(self, refdata_id: str):
@@ -111,7 +112,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         async def tfunc():
             return await self._nman.get_refdata_transfer_result(refdata, self.CLUSTER), None
         await self._get_transfer_result(  # check for errors
-            tfunc, refdata.id, "Transfer", "transferring", refdata=True
+            tfunc, refdata.id, "Transfer", "transferring", entity_type=EntityType.REFDATA
         )
         await self._updates.update_refdata_state(refdata.id, refdata_complete())
 

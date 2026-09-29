@@ -1099,13 +1099,6 @@ def test_wdl_fail_no_refdata_mount():
     ))
 
 
-def test_wdl_fail_not_S3File():
-    fm = {models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar")}
-    ji = _JOB_BASIC.job_input.model_copy(update={"input_files": ["bucket/file1"]})
-    job = _JOB_BASIC.model_copy(update={"job_input": ji})
-    _wdl_fail(job, fm, None, None, ValueError("input files must be S3 files with a checksum"))
-
-
 def test_wdl_fail_manifest_files():
     fm = {models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar")}
     p = models.Parameters(args=[models.ParameterWithFlag(
