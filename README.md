@@ -73,7 +73,7 @@ aws s3 cp s3://test-bucket/test-file-no-checksum s3://test-bucket/new-file --che
 
 ## Service Requirements
 
-* Python 3.12+
+* Python 3.14+
 * [crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/README.md)
 * An S3 instance for use as a file store, but see "S3 requirements" below
 * MongoDB 7+
