@@ -52,8 +52,7 @@ class RefdataManager:
         self._refpath = _not_falsy(refdata_path, "refdata_path")
         self._metapath = _not_falsy(refdata_meta_path, "refdata_meta_path")
         self._logr = logging.getLogger(__name__)
-        # TODO CODE update to an InterpreterPoolExecutor when upgrading to Python 3.14
-        #           is possible. Currently some dependencies aren't compatible.
+        # TODO CODE update to an InterpreterPoolExecutor & test
         # 10 workers seems like plenty, refdata staging should be rare.
         self._exe = ProcessPoolExecutor(max_workers=10)
 

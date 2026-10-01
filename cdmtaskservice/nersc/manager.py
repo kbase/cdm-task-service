@@ -114,9 +114,8 @@ _JAWS_INPUT_JSON = "input.json"
 # the newer interpreter, e.g. NoModuleFoundError: awscrt at job runtime despite a successful
 # install at startup.
 # To check for newer versions to pin to, run `module avail python` on a NERSC Perlmutter login
-# node. After updating this constant, restart the CTS server so _install_pip_dependencies
-# reinstalls under the newly pinned version.
-_PYTHON_MODULE = "python/3.13-26.8.0"
+# node.
+_PYTHON_MODULE = "python/3.14-26.8.1"
 _RUN_CTS_REMOTE_CODE_FILENAME = "run_cts_remote_code.sh"
 # Might want to make a shared constants module for all these env var names and update this
 # file and remote.py

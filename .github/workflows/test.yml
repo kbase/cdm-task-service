@@ -21,7 +21,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - python-version: "3.12.13"
+          - python-version: "3.14.7"
             mongo: "mongodb-linux-x86_64-ubuntu2204-7.0.18"
             minio: "2025-02-07T23-21-09Z"  # minimum supported version
             minio_sha256: "5a1b5bc661f0b8fd55eee530ea472205e77624718e31f7b4402bc269299501d5"
