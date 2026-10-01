@@ -2,6 +2,7 @@
 API for the CDM task service.
 '''
 
+from contextlib import asynccontextmanager
 import contextvars
 import datetime
 import logging
@@ -193,11 +194,20 @@ def create_app():
     cfg.print_config(sys.stdout)  # maybe should redo the service config in json...?
     sys.stdout.flush()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        logr.info("Running app state build")
+        await app_state.build_app(app, cfg, SERVICE_NAME)
+        yield
+        logr.info("Running app state destroy")
+        await app_state.destroy_app_state(app)
+
     app = FastAPI(
         title = SERVICE_NAME,
         description = SERVICE_DESCRIPTION,
         version = VERSION,
         root_path = cfg.service_root_path or "",
+        lifespan = lifespan,
         exception_handlers = {
             RequestValidationError: _handle_fastapi_validation_exception,
             PipelineInputValidationError: _handle_pipeline_input_validation_exception,
@@ -238,16 +248,6 @@ def create_app():
     app.include_router(routes.ROUTER_CALLBACKS)
     app.include_router(routes.ROUTER_EXTERNAL_EXEC)
 
-    async def build_app_wrapper():
-        logr.info("Running app state build")
-        await app_state.build_app(app, cfg, SERVICE_NAME)
-    app.add_event_handler("startup", build_app_wrapper)
-
-    async def clean_app_wrapper():
-        logr.info("Running app state destroy")
-        await app_state.destroy_app_state(app)
-    app.add_event_handler("shutdown", clean_app_wrapper)
-    
     return app
 
 
@@ -262,11 +262,20 @@ def create_refdata_app():
     cfg.print_config(sys.stdout)  # maybe should redo the service config in json...?
     sys.stdout.flush()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        logr.info("Running app state build")
+        await app_state.build_refdata_app(app, cfg, REFDATA_SERVICE_NAME)
+        yield
+        logr.info("Running app state destroy")
+        await app_state.destroy_app_state(app)
+
     app = FastAPI(
         title = REFDATA_SERVICE_NAME,
         description = REFDATA_SERVICE_DESCRIPTION,
         version = VERSION,
         root_path = cfg.service_root_path or "",
+        lifespan = lifespan,
         exception_handlers = {
             RequestValidationError: _handle_fastapi_validation_exception,
             PipelineInputValidationError: _handle_pipeline_input_validation_exception,
@@ -284,16 +293,6 @@ def create_refdata_app():
     app.include_router(routes.ROUTER_GENERAL)
     app.include_router(refroutes.ROUTER_REFDATA)
 
-    async def build_app_wrapper():
-        logr.info("Running app state build")
-        await app_state.build_refdata_app(app, cfg, REFDATA_SERVICE_NAME)
-    app.add_event_handler("startup", build_app_wrapper)
-
-    async def clean_app_wrapper():
-        logr.info("Running app state destroy")
-        await app_state.destroy_app_state(app)
-    app.add_event_handler("shutdown", clean_app_wrapper)
-    
     return app
 
 
