@@ -115,7 +115,8 @@ async def test_image_methods_fail():
             "Illegal character in image name 'ghcr.io/kbase/ɰorkspace_deluxe:0.15.0': 'ɰ'"),
         "ghcr.io/kbase/Workspace_deluxe:0.15.0": ImageNameParseError(
             "Unable to parse image name 'ghcr.io/kbase/Workspace_deluxe:0.15.0': "
-            + "invalid reference format: repository name must be lowercase"),
+            + "invalid reference format: repository name (kbase/Workspace_deluxe) "
+            + "must be lowercase"),
         "ghcr.io/kbase/workspace_deluxe:0.15ɰ.0": ImageNameParseError(
             "Illegal character in image name 'ghcr.io/kbase/workspace_deluxe:0.15ɰ.0': 'ɰ'"),
         "ghcr.io/kbase/workspace_deluxe:.0.15.0": ImageNameParseError(
