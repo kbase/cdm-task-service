@@ -8,17 +8,19 @@ python versions.
 '''
 
 import datetime
-from typing import Any
+from typing import TypeVar
 import unicodedata
 
+_T = TypeVar("_T")
 
-def not_falsy(obj: Any, name: str):
+
+def not_falsy(obj: _T, name: str) -> _T:
     """
     Check an argument is not falsy.
-    
+
     obj - the argument to check.
     name - the name of the argument to use in exceptions.
-    
+
     returns the object.
     """
     if not obj:
