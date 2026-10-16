@@ -81,7 +81,7 @@ class CTSRefdataClient:
         self,
         refdata_id: str,
         cluster: sites.Cluster,
-        new_state: models.ReferenceDataState,
+        new_state: models.StagingState,
         admin_error: str | None = None,
         traceback: str | None = None,
     ):
@@ -102,7 +102,7 @@ class CTSRefdataClient:
             + f"update/{new_state.value}"
         )
         payload = None
-        if new_state == models.ReferenceDataState.ERROR:
+        if new_state == models.StagingState.ERROR:
             payload = {"admin_error":admin_error, "traceback":traceback}
         async with self._sess.put(url, json=payload) as resp:
             await self._check_resp(resp, "Failed updating refdata state")

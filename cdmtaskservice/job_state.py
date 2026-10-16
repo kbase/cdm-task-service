@@ -284,14 +284,17 @@ class JobState:
     async def _check_refdata(self, job_input: models.JobInput, image: models.Image):
         if not image.refdata_id:
             return
-        if not job_input.params.refdata_mount_point and not image.default_refdata_mount_point:
+        if (
+            not job_input.params.staged_data_mount_point
+            and not image.default_staged_data_mount_point
+        ):
             raise IllegalParameterError(
                 "Image for job requires reference data but no refdata mount point "
                 + "is specified in the job input parameters or the image details"
         )
         refdata = await self._ref.get_refdata_by_id(image.refdata_id)
         refstatus = refdata.get_status_for_cluster(job_input.cluster)
-        if refstatus.state != models.ReferenceDataState.COMPLETE:
+        if refstatus.state != models.StagingState.COMPLETE:
             raise InvalidReferenceDataStateError(
                 f"Reference data '{refdata.id} required for job is not yet staged at "
                 + f"remote compute environment {job_input.cluster.value}"

@@ -1,10 +1,17 @@
 # TODO TEST add  more tests
 
 from pydantic import ValidationError
+import pytest
 from pytest import raises
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
+
+# These tests deliberately read deprecated fields (refdata_mount_point /
+# default_refdata_mount_point) to confirm their backwards compatible behavior, so the
+# resulting DeprecationWarning is expected rather than a signal of accidental deprecated
+# field use elsewhere in the code.
+_IGNORE_MOUNT_POINT_DEPRECATION = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
 def test_files_per_container():
@@ -122,15 +129,195 @@ def test_job_state_is_active():
 
 
 def test_refdata_state_terminal_states():
-    assert models.ReferenceDataState.terminal_states() == {
-        models.ReferenceDataState.ERROR, models.ReferenceDataState.COMPLETE
+    assert models.StagingState.terminal_states() == {
+        models.StagingState.ERROR, models.StagingState.COMPLETE
     }
 
 
 def test_refdata_state_is_terminal():
-    expected = {s: False for s in list(models.ReferenceDataState)}
-    expected[models.ReferenceDataState.COMPLETE] = True
-    expected[models.ReferenceDataState.ERROR] = True
-    
+    expected = {s: False for s in list(models.StagingState)}
+    expected[models.StagingState.COMPLETE] = True
+    expected[models.StagingState.ERROR] = True
+
     for s, term in expected.items():
         assert s.is_terminal() is term
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_new_field():
+    p = models.Parameters(staged_data_mount_point="/foo")
+    assert p.staged_data_mount_point == "/foo"
+    assert p.refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_deprecated_field_promoted():
+    p = models.Parameters(refdata_mount_point="/foo")
+    assert p.staged_data_mount_point == "/foo"
+    assert p.refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_new_field_takes_precedence():
+    p = models.Parameters(staged_data_mount_point="/new", refdata_mount_point="/old")
+    assert p.staged_data_mount_point == "/new"
+    assert p.refdata_mount_point == "/new"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_unset():
+    p = models.Parameters()
+    assert p.staged_data_mount_point is None
+    assert p.refdata_mount_point is None
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_null_deprecated_fields():
+    p = models.Parameters(staged_data_mount_point="/foo")
+    p2 = p.null_deprecated_fields()
+    assert p2.staged_data_mount_point == "/foo"
+    assert p2.refdata_mount_point is None
+    # the original instance is unmodified
+    assert p.staged_data_mount_point == "/foo"
+    assert p.refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_promotion_handles_non_dict_input():
+    # The before-validator's isinstance(v, dict) guard means non-dict input (an existing
+    # instance, or invalid input like a bare string) is passed through unchanged rather than
+    # crashing with an unrelated AttributeError from calling .get() on it.
+    p = models.Parameters(staged_data_mount_point="/foo")
+    p2 = models.Parameters.model_validate(p)
+    assert p2.staged_data_mount_point == "/foo"
+    assert p2.refdata_mount_point == "/foo"
+
+    with raises(ValidationError, match="Input should be a valid dictionary or instance"):
+        models.Parameters.model_validate("not a dict")
+
+
+_JOB_IMAGE_REQUIRED_FIELDS = {
+    "registered_by": "user",
+    "registered_on": "2024-10-24T22:35:40Z",
+    "name": "n",
+    "digest": "sha256:" + "a" * 64,
+    "entrypoint": ["run"],
+}
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_new_field():
+    ji = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_staged_data_mount_point": "/foo"}
+    )
+    assert ji.default_staged_data_mount_point == "/foo"
+    assert ji.default_refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_deprecated_field_promoted():
+    ji = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_refdata_mount_point": "/foo"}
+    )
+    assert ji.default_staged_data_mount_point == "/foo"
+    assert ji.default_refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_new_field_takes_precedence():
+    ji = models.JobImage.model_validate({
+        **_JOB_IMAGE_REQUIRED_FIELDS,
+        "default_staged_data_mount_point": "/new",
+        "default_refdata_mount_point": "/old",
+    })
+    assert ji.default_staged_data_mount_point == "/new"
+    assert ji.default_refdata_mount_point == "/new"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_unset():
+    ji = models.JobImage.model_validate(_JOB_IMAGE_REQUIRED_FIELDS)
+    assert ji.default_staged_data_mount_point is None
+    assert ji.default_refdata_mount_point is None
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_null_deprecated_fields():
+    ji = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_staged_data_mount_point": "/foo"}
+    )
+    ji2 = ji.null_deprecated_fields()
+    assert ji2.default_staged_data_mount_point == "/foo"
+    assert ji2.default_refdata_mount_point is None
+    # the original instance is unmodified
+    assert ji.default_staged_data_mount_point == "/foo"
+    assert ji.default_refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_promotion_handles_non_dict_input():
+    # See test_parameters_staged_data_mount_point_promotion_handles_non_dict_input for why
+    # this matters.
+    ji = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_staged_data_mount_point": "/foo"}
+    )
+    ji2 = models.JobImage.model_validate(ji)
+    assert ji2.default_staged_data_mount_point == "/foo"
+    assert ji2.default_refdata_mount_point == "/foo"
+
+    with raises(ValidationError, match="Input should be a valid dictionary or instance"):
+        models.JobImage.model_validate("not a dict")
+
+
+def _job_with_staged_data_mount_points(param_mount_point, image_default_mount_point):
+    return models.Job.model_construct(
+        image=models.JobImage.model_construct(
+            default_staged_data_mount_point=image_default_mount_point
+        ),
+        job_input=models.JobInput.model_construct(
+            params=models.Parameters.model_construct(
+                staged_data_mount_point=param_mount_point
+            )
+        ),
+    )
+
+
+def test_job_get_staged_data_mount_point_from_params():
+    job = _job_with_staged_data_mount_points("/params", "/image")
+    assert job.get_staged_data_mount_point() == "/params"
+
+
+def test_job_get_staged_data_mount_point_from_image_default():
+    job = _job_with_staged_data_mount_points(None, "/image")
+    assert job.get_staged_data_mount_point() == "/image"
+
+
+def test_job_get_staged_data_mount_point_none():
+    job = _job_with_staged_data_mount_points(None, None)
+    assert job.get_staged_data_mount_point() is None
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_null_deprecated_fields():
+    # Job.null_deprecated_fields() delegates to JobInput.null_deprecated_fields() and
+    # JobImage.null_deprecated_fields(); those methods' own promotion/sync behavior is covered
+    # by test_parameters_null_deprecated_fields and test_job_image_null_deprecated_fields, so
+    # here we only need real (validated) nested Parameters/JobImage instances to confirm the
+    # delegation is wired correctly - model_construct would bypass the sync validators that
+    # populate the deprecated fields in the first place.
+    params = models.Parameters(staged_data_mount_point="/params")
+    image = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_staged_data_mount_point": "/image"}
+    )
+    job = models.Job.model_construct(
+        image=image,
+        job_input=models.JobInput.model_construct(params=params),
+    )
+    job2 = job.null_deprecated_fields()
+    assert job2.job_input.params.staged_data_mount_point == "/params"
+    assert job2.job_input.params.refdata_mount_point is None
+    assert job2.image.default_staged_data_mount_point == "/image"
+    assert job2.image.default_refdata_mount_point is None
+    # the original instance is unmodified
+    assert job.job_input.params.refdata_mount_point == "/params"
+    assert job.image.default_refdata_mount_point == "/image"

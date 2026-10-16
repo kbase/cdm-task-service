@@ -59,7 +59,7 @@ def generate_wdl(
     _not_falsy(job, "job")
     _not_falsy(file_mapping, "file_mapping")
     arggen = ArgumentGenerator(job, manifest_file_list=manifest_file_list)
-    if relative_refdata_path and not job.get_refdata_mount_point():
+    if relative_refdata_path and not job.get_staged_data_mount_point():
         raise ValueError(
             "If a refdata path is supplied, a mount point for the job must be supplied"
         )
@@ -130,7 +130,7 @@ def _generate_wdl(job: Job, workflow_name: str, manifests: bool, relative_refdat
     gpuCount: {job.job_input.gpus}"""
     if relative_refdata_path:
         refdata_mount = f'''
-    dynamic_refdata: "{relative_refdata_path}:{job.get_refdata_mount_point()}"'''
+    dynamic_refdata: "{relative_refdata_path}:{job.get_staged_data_mount_point()}"'''
 
     return f"""
 version {_WDL_VERSION}

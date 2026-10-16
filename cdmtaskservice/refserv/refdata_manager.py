@@ -93,12 +93,12 @@ class RefdataManager:
         # the staging to error out in the CTS, but that should never happen
         refdata = await self._cli.get_refdata(refdata_id)
         refstate = refdata.get_status_for_cluster(cluster)
-        if refstate.state != models.ReferenceDataState.CREATED:
+        if refstate.state != models.StagingState.CREATED:
             raise InvalidReferenceDataStateError(
                 f"Reference data must be in the created state for cluster {refstate.cluster.value}"
             )
         await self._cli.update_refdata_state(
-            refdata.id, cluster, models.ReferenceDataState.DOWNLOAD_SUBMITTED
+            refdata.id, cluster, models.StagingState.DOWNLOAD_SUBMITTED
         )
         # Now this server coroutine has claimed the staging process, any other requests to
         # the server will fail for this refdata ID so we're safe to proceed and send errors
@@ -118,7 +118,7 @@ class RefdataManager:
                 self._exe, _unpack_refdata, refdata.id, arcpath, refdata.unpack, self._metapath
             )
             await self._cli.update_refdata_state(
-                refdata.id, cluster, models.ReferenceDataState.COMPLETE
+                refdata.id, cluster, models.StagingState.COMPLETE
             )
         except Exception as e:
             self._logr.exception(
@@ -128,7 +128,7 @@ class RefdataManager:
             await self._cli.update_refdata_state(
                 refdata.id,
                 cluster,
-                models.ReferenceDataState.ERROR,
+                models.StagingState.ERROR,
                 admin_error=str(e),
                 traceback=traceback.format_exc()
             )
