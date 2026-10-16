@@ -427,10 +427,10 @@ Local relative path: {loc}
         if job.image.refdata_id:
             host_mount = str(Path(self._cfg.refdata_host_path) / job.image.refdata_id)
             # Don't allow refdata write
-            mounts[host_mount] = (job.get_refdata_mount_point(), False)
+            mounts[host_mount] = (job.get_staged_data_mount_point(), False)
             self._logr.info(
-                f"Mounting host refdata at '{host_mount}' to '{job.get_refdata_mount_point()}' "
-                + "in container"
+                f"Mounting host staged data at '{host_mount}' to "
+                + f"'{job.get_staged_data_mount_point()}' in container"
             )
         return mounts
 

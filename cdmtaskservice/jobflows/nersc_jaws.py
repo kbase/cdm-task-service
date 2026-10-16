@@ -685,7 +685,7 @@ class NERSCJAWSRunner(JobFlow):
             is required.
         """
         refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
-        if refstate.state != models.ReferenceDataState.CREATED:
+        if refstate.state != models.StagingState.CREATED:
             raise InvalidReferenceDataStateError("Reference data must be in the created state")
         # Could check that the s3 and refdata path / etag match... YAGNI
         # TODO PERF this validates the file paths yet again.
@@ -722,7 +722,7 @@ class NERSCJAWSRunner(JobFlow):
         """
         refdata = await self._mongo.get_refdata_by_id(_require_string(refdata_id, "refdata_id"))
         refstate = refdata.get_status_for_cluster(self.CLUSTER)
-        if refstate.state != models.ReferenceDataState.DOWNLOAD_SUBMITTED:
+        if refstate.state != models.StagingState.DOWNLOAD_SUBMITTED:
             raise InvalidReferenceDataStateError(
                 "Reference data must be in the download submitted state for "
                 + f"cluster {refstate.cluster.value}"
@@ -744,7 +744,7 @@ class NERSCJAWSRunner(JobFlow):
     async def update_refdata_state(
         self,
         refdata_id: str,
-        new_state: models.ReferenceDataState,
+        new_state: models.StagingState,
         update: models.RefdataUpdate | None = None
     ):
         """ Throws an error as this method is unsupported. """

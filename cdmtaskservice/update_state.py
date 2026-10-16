@@ -81,7 +81,7 @@ class UpdateField(StrEnum):
     """ The path to logs created by a process. """
 
 
-T = TypeVar("T", models.JobState, models.ReferenceDataState)
+T = TypeVar("T", models.JobState, models.StagingState)
 
 
 class Update(Generic[T]):
@@ -159,7 +159,7 @@ class JobUpdate(Update[models.JobState]):
     """ An update for a job. """
 
 
-class RefdataUpdate(Update[models.ReferenceDataState]):
+class RefdataUpdate(Update[models.StagingState]):
     """ An update for a refdata staging process. """
 
 
@@ -579,8 +579,8 @@ def submitted_refdata_download() -> RefdataUpdate:
     Update a refdata staging process's state from created to download submitted.
     """
     return RefdataUpdate(
-        )._set_current_state(models.ReferenceDataState.CREATED
-        )._set_new_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED
+        )._set_current_state(models.StagingState.CREATED
+        )._set_new_state(models.StagingState.DOWNLOAD_SUBMITTED
     )
 
 
@@ -590,8 +590,8 @@ def submitted_nersc_refdata_download(job_id: str) -> RefdataUpdate:
     superfacility API download job ID.
     """
     return RefdataUpdate(
-        )._set_current_state(models.ReferenceDataState.CREATED
-        )._set_new_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED
+        )._set_current_state(models.StagingState.CREATED
+        )._set_new_state(models.StagingState.DOWNLOAD_SUBMITTED
         )._set_fields(
             {UpdateField.NERSC_DOWNLOAD_JOB_ID: _require_string(job_id, "job_id")}
     )
@@ -602,8 +602,8 @@ def refdata_complete() -> RefdataUpdate:
     Update a refdata staging process's state from download submitted to complete.
     """
     return RefdataUpdate(
-        )._set_current_state(models.ReferenceDataState.DOWNLOAD_SUBMITTED
-        )._set_new_state(models.ReferenceDataState.COMPLETE
+        )._set_current_state(models.StagingState.DOWNLOAD_SUBMITTED
+        )._set_new_state(models.StagingState.COMPLETE
     )
 
 

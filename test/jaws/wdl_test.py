@@ -185,7 +185,7 @@ def test_wdl_refdata():
     # should be tested there
     mapping = {models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar")}
     im = _JOB_BASIC.image.model_copy(update={
-        "default_refdata_mount_point": "/reffyref", "refdata_id": "refid"
+        "default_staged_data_mount_point": "/reffyref", "refdata_id": "refid"
     })
     job = _JOB_BASIC.model_copy(update={"image": im})
     jawsinput = wdl.generate_wdl(job, mapping, relative_refdata_path="some/ref/path")

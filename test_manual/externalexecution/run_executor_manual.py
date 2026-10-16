@@ -154,7 +154,7 @@ async def _setup_mongo(args, s3_path: str, sleep_secs: int) -> str:
                     "-x", str(args.exit_code)
                 ],
                 environment={"PYTHONUNBUFFERED": "1"},
-                refdata_mount_point=None,
+                staged_data_mount_point=None,
             ),
             num_containers=1,
             cpus=1,

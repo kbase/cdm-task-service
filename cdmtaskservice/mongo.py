@@ -246,7 +246,7 @@ class MongoDAO:
                 partialFilterExpression={
                     f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_CLEANED}": False,
                     f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_STATE}": {"$in":
-                        sorted([s.value for s in models.ReferenceDataState.terminal_states()])
+                        sorted([s.value for s in models.StagingState.terminal_states()])
                     },
                 },
             ),
@@ -301,7 +301,9 @@ class MongoDAO:
         """
         _not_falsy(image, "image")
         try:
-            await self._col_images.insert_one(image.model_dump())
+            await self._col_images.insert_one(
+                image.null_deprecated_fields().model_dump(exclude_none=True)
+            )
         except DuplicateKeyError as e:
             if _INDEX_TAG in e.args[0]:
                 raise ImageTagExistsError(f"The tag {image.tag} for image {image.name} "
@@ -380,7 +382,7 @@ class MongoDAO:
     async def save_job(self, job: models.AdminJobDetails):
         """ Save a job. Job IDs are expected to be unique. """
         _not_falsy(job, "job")
-        jobd = job.model_dump(exclude_none=True)
+        jobd = job.null_deprecated_fields().model_dump(exclude_none=True)
         # Could add a check in the job model that jobs have > 0 transitions and the last
         # transition == the job state... probably not necessary.
         jobd[_FLD_UPDATE_TIME] = job.transition_times[-1].time
@@ -1585,7 +1587,7 @@ class MongoDAO:
                 f"A reference data record for S3 path {refdata.file} already exists"
             )
 
-    async def add_refdata_site(self, refdata_id: str, rds: models.AdminReferenceDataStatus):
+    async def add_refdata_site(self, refdata_id: str, rds: models.AdminStagingStatus):
         """
         Add a new site to an existing reference data record.
         
@@ -1690,7 +1692,7 @@ class MongoDAO:
         query = {models.FLD_REFDATA_STATUSES: {"$elemMatch": {
             models.FLD_COMMON_CLEANED: False,
             models.FLD_COMMON_STATE: {"$in": [
-                s.value for s in models.ReferenceDataState.terminal_states()
+                s.value for s in models.StagingState.terminal_states()
             ]},
             _FLD_UPDATE_TIME: {"$lt": older_than},
         }}}
@@ -1702,11 +1704,11 @@ class MongoDAO:
         self,
         cluster: sites.Cluster,
         refdata_id: str,
-        state: models.ReferenceDataState,
+        state: models.StagingState,
         time: datetime.datetime,
         push: dict[str, Any] | None = None,
         set_: dict[str, Any] | None = None,
-        current_state: models.ReferenceDataState | None = None,
+        current_state: models.StagingState | None = None,
     ):
         elemquery = {models.FLD_REFDATA_CLUSTER: _not_falsy(cluster, "cluster").value}
         if current_state:
