@@ -211,14 +211,48 @@ wrappers around `huggingface_hub`:
   `HfApi().model_info(repo_id, revision=revision)` to resolve a repo id + optional branch/tag to
   a commit hash, with no download.
 - `stage_snapshot(repo_id: str, revision_hash: str, dest_dir: Path) -> None` wraps
-  `huggingface_hub.snapshot_download(repo_id, revision=revision_hash, local_dir=dest_dir,
-  local_dir_use_symlinks=False)` (real files, no cache-dir symlink layout). No checksumming —
+  `huggingface_hub.snapshot_download(repo_id, revision=revision_hash, local_dir=dest_dir)` (real
+  files, no cache-dir symlink layout — `local_dir` alone is sufficient as of `huggingface_hub`
+  2.x, which no longer accepts the now-removed `local_dir_use_symlinks` kwarg). No checksumming —
   `snapshot_download` already verifies each file against the hub's recorded hash/ETag on
   download, and nothing here ever touches S3.
 
-Pure, isolated, fully unit-testable by mocking `huggingface_hub`
-(`create_autospec(HfApi, spec_set=True, instance=True)` for `resolve_revision`; `snapshot_download`
-mocked directly for `stage_snapshot`). No live network or cluster dependency.
+**Error translation happens here, at the source, not in a caller.** `resolve_revision` catches
+every `huggingface_hub` exception that means "the caller supplied a bad `(repo_id, revision)`
+pair" and re-raises it as a single new `AIModelResolutionError`, defined in this module — this is
+the only place CTS ever calls into `huggingface_hub` for resolution, so putting the translation
+here means every future caller (today, `AIModelRegistry.register_ai_model`, Chunk 5) gets it for
+free rather than repeating the same `try`/`except` at each call site. Three exception types are
+caught: `huggingface_hub.errors.RepositoryNotFoundError` (a nonexistent or inaccessible repo;
+`GatedRepoError` is a subclass, so a gated repo is covered too), `RevisionNotFoundError` (a repo
+that exists but a `ref` that doesn't), and `huggingface_hub.errors.HFValidationError` (a
+syntactically malformed `repo_id`, rejected by `huggingface_hub` client-side before any HTTP call
+is even made) — the third is included alongside the first two because a malformed `repo_id`
+string is just as much a bad caller input as a well-formed one that happens not to exist; there's
+no principled reason to translate one and not the other. Every other exception `model_info` can
+raise (`HfHubHTTPError` for a 5XX/unexpected HF response, an `httpx2` transport/timeout/connection
+error, HF being otherwise unreachable) is let through unchanged — none of those are the caller's
+fault, and none of them should be reported to the admin as a 400; whatever catches them further up
+the stack (today, `error_mapping.py`'s unmapped-exception fallback) treats them as an opaque 500,
+which is the correct status for an infra failure. `stage_snapshot` does no such translation — by
+the time it runs, `revision_hash` is always an already-resolved, CTS-verified hash (Chunk 5 step
+1), so a not-found error at staging time would indicate a genuine infra problem (the snapshot
+vanished from the hub between resolution and staging), not a bad caller input, and is let through
+unchanged for the same reason.
+
+**Tested against the real huggingface.co service, not mocked** — a tiny (~280kB), stable, public
+test repo (`julien-c/dummy-unknown`) stands in for a real AI model, the same way
+`image_remote_lookup_test.py` already exercises the real ghcr.io/Docker Hub registries rather
+than mocking `crane`. Covers: resolving a bare (HEAD) hash and a branch name (`main`) to the same
+known commit hash, plus a second, older commit hash on the same repo resolving to itself — proving
+`revision` is actually honored rather than the lookup silently always resolving to HEAD;
+`AIModelResolutionError` for a nonexistent repo, a nonexistent revision on a real repo, and a
+syntactically malformed repo id; a genuine network failure (an unreachable HF endpoint, injected by
+constructing `HfApi` with a bogus `endpoint` — the HTTP call itself is real, not mocked) passing
+through unchanged, proving the `except` clause doesn't over-broadly swallow every failure mode; and
+`stage_snapshot` actually placing every expected file from the repo on disk at its expected size,
+as a real (non-symlink) file. Fast and small enough to run as part of the
+normal automated suite rather than `test_manual`.
 
 ### Chunk 1 — Data model + Mongo DAO for registered AI models
 Unlike `ReferenceData`, which gets a synthetic `uuid4` `id` (`refdata.py:100`) because an
@@ -637,25 +671,24 @@ at the provider (an HF branch or git tag) — never a CTS-invented name. Whether
 and what it's called, is *derived* from `ref` itself, not supplied separately:
 1. Resolve `ref` to a version (Chunk 0's `resolve_revision(repo_id=model, revision=ref)` for
    `HUGGINGFACE` — this is the one call site that translates CTS's `ref` into HF's own `revision`
-   kwarg name; see the naming note near the top of this section). **If resolution itself fails**
-   (the repo doesn't exist, the given `ref` isn't a real branch/tag/hash on it, or HF is
-   unreachable) `register_ai_model` fails the request before any Mongo write — no `AIModel` doc,
-   no per-cluster `CREATED` statuses, no tag pointer — the same "fail before persisting anything"
-   shape as every other precondition check in this step. This is a new error distinct from
-   refdata's own errors (an unresolvable HF ref has no refdata analogue), surfaced as a single new
-   `AIModelResolutionError` (this chunk) mapped via `error_mapping.py` to a new
-   `ErrorType.AI_MODEL_RESOLUTION_FAILED` and `HTTP_400_BAD_REQUEST` for all three cases above —
-   matching the existing `image_remote_lookup.py::ImageInfoFetchError`/`ErrorType.IMAGE_FETCH`
-   precedent, which itself already collapses "not found," "unauthorized," and an unparseable/failed
-   `crane` invocation (including a genuinely unreachable registry) into one 400. This is a
-   simplification carried over from that precedent, not a claim that every case here is actually
-   the admin's own mistake — HF being unreachable is a CTS/network-side condition, not a bad `ref`.
-   Distinguishing a truly bad `(model, ref)` pair from a transient infra failure (which would
-   arguably warrant a 502/503 and a retry rather than a 400) is explicitly not attempted here,
-   consistent with how image lookup already behaves. Add a `TODO ERROR HANDLING` for both
-   image lookup and AI model resolution such that they should eventually
-   distinguish operator error (400) from upstream/infra failures (502/503) rather than collapsing
-   them into one code as they do today.
+   kwarg name; see the naming note near the top of this section). **If resolution itself fails
+   because the repo doesn't exist or the given `ref` isn't a real branch/tag/hash on it**,
+   `register_ai_model` fails the request before any Mongo write — no `AIModel` doc, no per-cluster
+   `CREATED` statuses, no tag pointer — the same "fail before persisting anything" shape as every
+   other precondition check in this step. `resolve_revision` itself (Chunk 0) is what raises this
+   as a single `AIModelResolutionError`, since that's the one place CTS calls into
+   `huggingface_hub` for resolution — `register_ai_model` doesn't catch any HF-specific exception
+   itself, it just lets `AIModelResolutionError` propagate. `error_mapping.py` maps
+   `AIModelResolutionError` to a new `ErrorType.AI_MODEL_RESOLUTION_FAILED` and
+   `HTTP_400_BAD_REQUEST`, mirroring the existing
+   `image_remote_lookup.py::ImageInfoFetchError`/`ErrorType.IMAGE_FETCH` precedent for a bad image
+   reference. **If HF itself is unreachable, or returns an unexpected error, resolution instead
+   raises unchanged** (an `httpx2` transport/timeout error, or `huggingface_hub`'s own
+   `HfHubHTTPError` for anything that isn't "repo not found"/"revision not found") — that's a
+   CTS/network-side condition, not a bad `ref`, so there's nothing to translate: it propagates
+   through `register_ai_model` and out to `error_mapping.py`'s unmapped-exception fallback, which
+   already reports an opaque `HTTP_500_INTERNAL_SERVER_ERROR` for any exception with no entry in
+   its map — the correct status for an infra failure, with no new code needed to get it.
 2. Determine whether `ref` was already a bare hash or a named ref: compare the resolved
    version against the literal `ref` string (case-insensitive). If they match, `ref` was
    already the hash — nothing to tag. If they differ, `ref` was a named ref (branch/tag) that
