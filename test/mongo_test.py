@@ -29,7 +29,7 @@ from cdmtaskservice.update_state import (
     recovering,
     submitted_download,
     submitted_jaws_job,
-    submitted_nersc_refdata_download,
+    submitted_nersc_staging_download,
     submitting_job,
     submitting_upload,
     submitting_upload_with_exit_code,
@@ -1631,7 +1631,7 @@ async def test_refdata_redundant_update_time(mondb):
     await mc.update_refdata_state(
         sites.Cluster.PERLMUTTER_JAWS,
         "foo",
-        submitted_nersc_refdata_download("ntid"),
+        submitted_nersc_staging_download("ntid"),
         dt,
     )
     got = await mc.get_refdata_by_id("foo", as_admin=True)

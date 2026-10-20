@@ -159,8 +159,8 @@ class JobUpdate(Update[models.JobState]):
     """ An update for a job. """
 
 
-class RefdataUpdate(Update[models.StagingState]):
-    """ An update for a refdata staging process. """
+class StagingUpdate(Update[models.StagingState]):
+    """ An update for a data staging process. """
 
 
 # The ordered sequence of states a job passes through on the happy path, from creation to
@@ -570,26 +570,26 @@ def error(
 
 
 ####################
-### Refdata states
+### Staging states
 ####################
 
 
-def submitted_refdata_download() -> RefdataUpdate:
+def submitted_staging_download() -> StagingUpdate:
     """
-    Update a refdata staging process's state from created to download submitted.
+    Update a staging process's state from created to download submitted.
     """
-    return RefdataUpdate(
+    return StagingUpdate(
         )._set_current_state(models.StagingState.CREATED
         )._set_new_state(models.StagingState.DOWNLOAD_SUBMITTED
     )
 
 
-def submitted_nersc_refdata_download(job_id: str) -> RefdataUpdate:
+def submitted_nersc_staging_download(job_id: str) -> StagingUpdate:
     """
-    Update a refdata staging process's state from created to download submitted and add a NERSC
+    Update a staging process's state from created to download submitted and add a NERSC
     superfacility API download job ID.
     """
-    return RefdataUpdate(
+    return StagingUpdate(
         )._set_current_state(models.StagingState.CREATED
         )._set_new_state(models.StagingState.DOWNLOAD_SUBMITTED
         )._set_fields(
@@ -597,34 +597,34 @@ def submitted_nersc_refdata_download(job_id: str) -> RefdataUpdate:
     )
 
 
-def refdata_complete() -> RefdataUpdate:
+def staging_complete() -> StagingUpdate:
     """
-    Update a refdata staging process's state from download submitted to complete.
+    Update a staging process's state from download submitted to complete.
     """
-    return RefdataUpdate(
+    return StagingUpdate(
         )._set_current_state(models.StagingState.DOWNLOAD_SUBMITTED
         )._set_new_state(models.StagingState.COMPLETE
     )
 
 
-def refdata_error(
+def staging_error(
     user_error: str,
     admin_error: str,
     *,
-    traceback: str = None,
-) -> RefdataUpdate:
+    traceback: str | None = None,
+) -> StagingUpdate:
     """
-    Update a refdata staging process's state to error.
-    
+    Update a staging process's state to error.
+
     user_error - an error message targeted towards a service user.
     admin_error - an error message targeted towards a service admin.
     traceback - the error traceback.
     """
-    return RefdataUpdate(
-        )._set_new_state(models.JobState.ERROR
+    return StagingUpdate(
+        )._set_new_state(models.StagingState.ERROR
         )._set_fields({
-            UpdateField.USER_ERROR:_require_string(user_error, "user_error"), 
-            UpdateField.ADMIN_ERROR:_require_string(admin_error, "admin_error"), 
-            UpdateField.TRACEBACK:traceback, 
+            UpdateField.USER_ERROR: _require_string(user_error, "user_error"),
+            UpdateField.ADMIN_ERROR: _require_string(admin_error, "admin_error"),
+            UpdateField.TRACEBACK: traceback,
         }
     )

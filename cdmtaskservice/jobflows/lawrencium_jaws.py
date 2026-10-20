@@ -18,7 +18,7 @@ from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.s3.client import S3ObjectMeta
 from cdmtaskservice import sites
-from cdmtaskservice.update_state import submitted_refdata_download, refdata_complete
+from cdmtaskservice.update_state import submitted_staging_download, staging_complete
 
 
 class LawrenciumJAWSRunner(NERSCJAWSRunner):
@@ -85,7 +85,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
                 self._callback_root, refdata.id, self.CLUSTER
             )
             await self._nman.setup_refdata_transfer_callback(refdata, self.CLUSTER, callback_url)
-            await self._updates.update_refdata_state(refdata.id, submitted_refdata_download())
+            await self._updates.update_refdata_state(refdata.id, submitted_staging_download())
             # Note on eventual retries - JAWS writes a file to note that the transfer is
             # done, whether it succeeded or failed. The file path is based on the file that the
             # s3 remote code writes when refdata is staged. Therefore on a retry, these files
@@ -114,7 +114,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         await self._get_transfer_result(  # check for errors
             tfunc, refdata.id, "Transfer", "transferring", entity_type=EntityType.REFDATA
         )
-        await self._updates.update_refdata_state(refdata.id, refdata_complete())
+        await self._updates.update_refdata_state(refdata.id, staging_complete())
 
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """

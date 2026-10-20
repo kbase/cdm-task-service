@@ -21,7 +21,7 @@ from cdmtaskservice.arg_checkers import (
 )
 from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError, NoSuchJobError
 from cdmtaskservice.pipelines import models as pipe_models
-from cdmtaskservice.update_state import JobUpdate, UpdateField, RefdataUpdate
+from cdmtaskservice.update_state import JobUpdate, UpdateField, StagingUpdate
 
 
 _INDEX_TAG = "UNIQUE_IMAGE_TAG_INDEX"
@@ -1750,7 +1750,7 @@ class MongoDAO:
         self,
         cluster: sites.Cluster,
         refdata_id: str,
-        update: RefdataUpdate,
+        update: StagingUpdate,
         time: datetime.datetime,
     ):
         """
