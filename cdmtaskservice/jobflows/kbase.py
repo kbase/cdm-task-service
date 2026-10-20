@@ -1174,9 +1174,9 @@ class KBaseRunner(JobFlow):
 
     _COMMON_STATE_TO_UPDATE_REFDATA_FUNC = {
         models.StagingState.DOWNLOAD_SUBMITTED: lambda _:
-            update_state.submitted_refdata_download(),
-        models.StagingState.COMPLETE: lambda _: update_state.refdata_complete(),
-        models.StagingState.ERROR: lambda update: update_state.refdata_error(
+            update_state.submitted_staging_download(),
+        models.StagingState.COMPLETE: lambda _: update_state.staging_complete(),
+        models.StagingState.ERROR: lambda update: update_state.staging_error(
             "An unexpected error occurred", update.admin_error, traceback=update.traceback),
     }
 

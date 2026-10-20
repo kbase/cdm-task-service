@@ -49,8 +49,8 @@ from cdmtaskservice.update_state import (
     submitting_error_processing,
     submitted_nersc_error_processing,
     error,
-    submitted_nersc_refdata_download,
-    refdata_complete,
+    submitted_nersc_staging_download,
+    staging_complete,
 )
 from cdmtaskservice.user import CTSUser
 
@@ -707,7 +707,7 @@ class NERSCJAWSRunner(JobFlow):
                 unpack=refdata.unpack,
             )
             await self._updates.update_refdata_state(
-                refdata.id, submitted_nersc_refdata_download(job_id)
+                refdata.id, submitted_nersc_staging_download(job_id)
             )
         except Exception as e:
             await self._updates.handle_exception(
@@ -736,7 +736,7 @@ class NERSCJAWSRunner(JobFlow):
             entity_type=EntityType.REFDATA,
         )
         # TODO DISKSPACE will need to clean up refdata manifests & d/l result json files
-        await self._updates.update_refdata_state(refdata.id, refdata_complete())
+        await self._updates.update_refdata_state(refdata.id, staging_complete())
         if self._on_refdata_complete:
             # don't wait for this function to run before returning
             await self._coman.run_coroutine(self._on_refdata_complete(refdata))
