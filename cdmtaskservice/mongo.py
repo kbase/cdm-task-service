@@ -4,12 +4,13 @@ DAO for MongoDB.
 # Could make an interface here so that mongo can be swapped out, but the chance that happens
 # low enough to YAGNI the idea.
 
+from dataclasses import dataclass
 import datetime
 from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
 from pymongo import IndexModel, ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from pymongo.results import DeleteResult
-from typing import Any, Awaitable, Callable, Collection, Coroutine, Iterable
+from typing import Any, Awaitable, Callable, Collection, Coroutine, Iterable, NamedTuple
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
@@ -43,6 +44,36 @@ _SUBJOB_ACTIVE_STATES = sorted(s.value for s in models.JobState.active_states())
 _SUBJOB_HTC_STATS_STATES = sorted([s.value for s in models.JobState.terminal_states()])
 
 
+@dataclass(frozen=True)
+class Tag:
+    """ A tag to apply to an AI model as part of registering it, see save_ai_model. """
+    tag: str
+    user: str
+    time: datetime.datetime
+
+    def __post_init__(self):
+        _require_string(self.tag, "tag")
+        _require_string(self.user, "user")
+        _not_falsy(self.time, "time")
+
+
+# Field names for the ai_model_tags collection.
+_FLD_TAG_TAG = "tag"
+_FLD_TAG_TAGGED_BY = "tagged_by"
+_FLD_TAG_TAGGED_ON = "tagged_on"
+
+
+class SaveAIModelResult(NamedTuple):
+    """ The result of a save_ai_model call. """
+    model_created: bool
+    """ True if the ai_models record was newly inserted, False if it already existed. """
+    tag_moved: bool
+    """
+    True if a tag was given and its pointer was newly created or repointed to a different
+    version. False if no tag was given, or the tag's pointer already resolved to this version.
+    """
+
+
 class MongoDAO:
     """
     DAO for MongoDB.
@@ -70,6 +101,8 @@ class MongoDAO:
         self._col_subjobs = self._db.subjobs
         self._col_exitcodes = self._db.exitcodes
         self._col_refdata = self._db.refdata
+        self._col_ai_models = self._db.ai_models
+        self._col_ai_model_tags = self._db.ai_model_tags
         self._setup_field_mappings()
         
     async def _create_indexes(self):
@@ -239,16 +272,59 @@ class MongoDAO:
             # Find refdata that needs cleaning
             IndexModel(
                 [
-                    (f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_CLEANED}", ASCENDING),
-                    (f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_STATE}", ASCENDING),
-                    (f"{models.FLD_REFDATA_STATUSES}.{_FLD_UPDATE_TIME}", ASCENDING)
+                    (f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_CLEANED}", ASCENDING),
+                    (f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_STATE}", ASCENDING),
+                    (f"{models.FLD_COMMON_STATUSES}.{_FLD_UPDATE_TIME}", ASCENDING)
                 ],
                 partialFilterExpression={
-                    f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_CLEANED}": False,
-                    f"{models.FLD_REFDATA_STATUSES}.{models.FLD_COMMON_STATE}": {"$in":
+                    f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_CLEANED}": False,
+                    f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_STATE}": {"$in":
                         sorted([s.value for s in models.StagingState.terminal_states()])
                     },
                 },
+            ),
+        ])
+        await self._col_ai_models.create_indexes([
+            IndexModel(
+                [
+                    (models.FLD_AI_MODEL_SOURCE, ASCENDING),
+                    (models.FLD_AI_MODEL_MODEL, ASCENDING),
+                    (models.FLD_AI_MODEL_VERSION, ASCENDING),
+                ],
+                unique=True,
+            ),
+            # Find AI models that need cleaning
+            IndexModel(
+                [
+                    (f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_CLEANED}", ASCENDING),
+                    (f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_STATE}", ASCENDING),
+                    (f"{models.FLD_COMMON_STATUSES}.{_FLD_UPDATE_TIME}", ASCENDING)
+                ],
+                partialFilterExpression={
+                    f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_CLEANED}": False,
+                    f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_STATE}": {"$in":
+                        sorted([s.value for s in models.StagingState.terminal_states()])
+                    },
+                },
+            ),
+        ])
+        await self._col_ai_model_tags.create_indexes([
+            # Forward direction: resolve a tag to a version
+            IndexModel(
+                [
+                    (models.FLD_AI_MODEL_SOURCE, ASCENDING),
+                    (models.FLD_AI_MODEL_MODEL, ASCENDING),
+                    (_FLD_TAG_TAG, ASCENDING),
+                ],
+                unique=True,
+            ),
+            # Reverse direction: find all tags pointing at a version
+            IndexModel(
+                [
+                    (models.FLD_AI_MODEL_SOURCE, ASCENDING),
+                    (models.FLD_AI_MODEL_MODEL, ASCENDING),
+                    (models.FLD_AI_MODEL_VERSION, ASCENDING),
+                ],
             ),
         ])
 
@@ -854,8 +930,10 @@ class MongoDAO:
             UpdateField.TRACEBACK: (models.FLD_COMMON_TRACEBACK, False),
             UpdateField.LOG_PATH: (models.FLD_JOB_LOGPATH, False),
         }
-        self._REFDATA_FIELD_TO_KEY_AND_PUSH = {
-            UpdateField.NERSC_DOWNLOAD_JOB_ID: (models.FLD_REFDATA_NERSC_DL_JOB_ID, True),
+        # Shared by refdata and AI models - both use the same staging status shape (see
+        # models.StagingStatus/AdminStagingStatus).
+        self._STAGING_FIELD_TO_KEY_AND_PUSH = {
+            UpdateField.NERSC_DOWNLOAD_JOB_ID: (models.FLD_COMMON_NERSC_DL_JOB_ID, True),
             UpdateField.USER_ERROR: (models.FLD_COMMON_ERROR, False),
             UpdateField.ADMIN_ERROR: (models.FLD_COMMON_ADMIN_ERROR, False),
             UpdateField.TRACEBACK: (models.FLD_COMMON_TRACEBACK, False),
@@ -1574,7 +1652,7 @@ class MongoDAO:
         # Could add a check in the refdata model that rds have > 0 statuses,
         # statuses have > 0 transitions and the last
         # transition == the redfdata cluster state... probably not necessary.
-        for c, cm in zip(refdata.statuses, r[models.FLD_REFDATA_STATUSES]):
+        for c, cm in zip(refdata.statuses, r[models.FLD_COMMON_STATUSES]):
             cm[_FLD_UPDATE_TIME] = c.transition_times[-1].time
         res = await self._col_refdata.update_one(
             {"file": _not_falsy(refdata, "refdata").file},
@@ -1657,13 +1735,13 @@ class MongoDAO:
 
     async def set_refdata_clean(self, cluster: sites.Cluster, refdata_id: str):
         """ Set a site's refdata cleaned state to true. """
-        elemquery = {models.FLD_REFDATA_CLUSTER: _not_falsy(cluster, "cluster").value}
+        elemquery = {models.FLD_COMMON_CLUSTER: _not_falsy(cluster, "cluster").value}
         query = {
             models.FLD_COMMON_ID: _require_string(refdata_id, "refdata_id"),
-            models.FLD_REFDATA_STATUSES: {"$elemMatch": elemquery},
+            models.FLD_COMMON_STATUSES: {"$elemMatch": elemquery},
         }
         update = {"$set": {
-            f"{models.FLD_REFDATA_STATUSES}.$.{models.FLD_COMMON_CLEANED}": True
+            f"{models.FLD_COMMON_STATUSES}.$.{models.FLD_COMMON_CLEANED}": True
         }}
         res = await self._col_refdata.update_one(query, update)
         if not res.matched_count:
@@ -1689,7 +1767,7 @@ class MongoDAO:
         """
         _not_falsy(older_than, "older_than")
         _not_falsy(operation, "operation")
-        query = {models.FLD_REFDATA_STATUSES: {"$elemMatch": {
+        query = {models.FLD_COMMON_STATUSES: {"$elemMatch": {
             models.FLD_COMMON_CLEANED: False,
             models.FLD_COMMON_STATE: {"$in": [
                 s.value for s in models.StagingState.terminal_states()
@@ -1700,51 +1778,52 @@ class MongoDAO:
             await operation(self._to_refdata(j, as_admin=True))
 
 
-    async def _update_refdata_state(
+    async def _update_staging_state(
         self,
+        col: AsyncIOMotorCollection,
+        query: dict[str, Any],
+        not_found_errcls: type[Exception],
+        not_found_msg: str,
         cluster: sites.Cluster,
-        refdata_id: str,
-        state: models.StagingState,
+        update: StagingUpdate,
         time: datetime.datetime,
-        push: dict[str, Any] | None = None,
-        set_: dict[str, Any] | None = None,
-        current_state: models.StagingState | None = None,
     ):
-        elemquery = {models.FLD_REFDATA_CLUSTER: _not_falsy(cluster, "cluster").value}
+        set_ = {}
+        push = {}
+        for fld, val in _not_falsy(update, "update").update_fields.items():
+            stfld, ispush = self._STAGING_FIELD_TO_KEY_AND_PUSH[fld]
+            target = push if ispush else set_
+            target[stfld] = val
+        current_state = update.current_state
+        elemquery = {models.FLD_COMMON_CLUSTER: _not_falsy(cluster, "cluster").value}
         if current_state:
             elemquery[models.FLD_COMMON_STATE] = current_state.value
-        query = {
-            models.FLD_COMMON_ID: _require_string(refdata_id, "refdata_id"),
-            models.FLD_REFDATA_STATUSES: {"$elemMatch": elemquery},
-        }
-        subs = f"{models.FLD_REFDATA_STATUSES}.$[elem]."
-        set_ = {f"{subs}{k}": v for k, v in set_.items()} if set_ else {}
-        push = {f"{subs}{k}": v for k, v in push.items()} if push else {}
-        res = await self._col_refdata.update_one(
+        query = dict(query, **{models.FLD_COMMON_STATUSES: {"$elemMatch": elemquery}})
+        subs = f"{models.FLD_COMMON_STATUSES}.$[elem]."
+        set_ = {f"{subs}{k}": v for k, v in set_.items()}
+        push = {f"{subs}{k}": v for k, v in push.items()}
+        res = await col.update_one(
             query,
             {
                 "$push": push | {f"{subs}{models.FLD_COMMON_TRANS_TIMES}":
                     {
-                        models.FLD_COMMON_STATE_TRANSITION_STATE:
-                           _not_falsy(state, "state").value,
+                        models.FLD_COMMON_STATE_TRANSITION_STATE: update.new_state.value,
                         models.FLD_COMMON_STATE_TRANSITION_TIME: _not_falsy(time, "time"),
                     }
                 },
                 "$set": set_ | {
-                    f"{subs}{models.FLD_COMMON_STATE}": state.value,
+                    f"{subs}{models.FLD_COMMON_STATE}": update.new_state.value,
                     # for indexing last state change time. Unused currently
                     f"{subs}{_FLD_UPDATE_TIME}": time,
                 }
             },
             array_filters=[{
-                f"elem.{models.FLD_REFDATA_CLUSTER}": cluster.value}
+                f"elem.{models.FLD_COMMON_CLUSTER}": cluster.value}
             ],
         )
         if not res.matched_count:
             cs = f"in state {current_state.value} " if current_state else ""
-            raise NoSuchReferenceDataError(
-                f"No reference data with ID '{refdata_id}' for cluster {cluster.value} {cs}exists"
-            )
+            raise not_found_errcls(f"{not_found_msg} for cluster {cluster.value} {cs}exists")
 
     async def update_refdata_state(
         self,
@@ -1755,27 +1834,211 @@ class MongoDAO:
     ):
         """
         Update the reference data process state.
-        
+
         cluster - the cluster to which this update applies.
         refdata_id - the reference data ID.
         update - the update to apply to the process.
         time - the time at which the process transitioned to the new state.
         """
-        # Could merge this and and the above method...? Seems ok as is though
-        set_ = {}
-        push = {}
-        for fld, val in update.update_fields.items():
-            rffld, ispush = self._REFDATA_FIELD_TO_KEY_AND_PUSH[fld]
-            target = push if ispush else set_
-            target[rffld] = val
-        await self._update_refdata_state(
+        _require_string(refdata_id, "refdata_id")
+        await self._update_staging_state(
+            self._col_refdata,
+            {models.FLD_COMMON_ID: refdata_id},
+            NoSuchReferenceDataError,
+            f"No reference data with ID '{refdata_id}'",
             cluster,
-            refdata_id,
-            update.new_state,
+            update,
             time,
-            current_state=update.current_state,
-            set_=set_,
-            push=push
+        )
+
+    async def save_ai_model(
+        self, ai_model: models.AdminAIModel, tag: Tag | None = None
+    ) -> SaveAIModelResult:
+        """
+        Save an AI model record. Tolerates being called against an already-registered
+        (source, model, version) triple - in that case the ai_models write is a no-op (the
+        original registered_by/registered_on are never overwritten).
+
+        ai_model - the AI model to save.
+        tag - if provided, also upsert a tag pointer for {source, model, tag.tag} to resolve
+            to ai_model's version. If the pointer already resolves to this version, it (and its
+            tagged_by/tagged_on fields) are left untouched. If it's new or resolves elsewhere,
+            it's repointed and tagged_by/tagged_on are set to tag.user/tag.time.
+
+        Returns a SaveAIModelResult indicating whether the ai_models record was newly
+        inserted and, if a tag was given, whether its pointer was newly created or moved.
+        """
+        _not_falsy(ai_model, "ai_model")
+        a = ai_model.model_dump(exclude_none=True, exclude={"tags"})
+        for c, cm in zip(ai_model.statuses, a[models.FLD_COMMON_STATUSES]):
+            cm[_FLD_UPDATE_TIME] = c.transition_times[-1].time
+        res = await self._col_ai_models.update_one(
+            {
+                models.FLD_AI_MODEL_SOURCE: ai_model.source.value,
+                models.FLD_AI_MODEL_MODEL: ai_model.model,
+                models.FLD_AI_MODEL_VERSION: ai_model.version,
+            },
+            # do nothing if the document already exists
+            {"$setOnInsert": a},
+            upsert=True,
+        )
+        tag_moved = False
+        if tag:
+            tagres = await self._col_ai_model_tags.update_one(
+                {
+                    models.FLD_AI_MODEL_SOURCE: ai_model.source.value,
+                    models.FLD_AI_MODEL_MODEL: ai_model.model,
+                    _FLD_TAG_TAG: tag.tag,
+                },
+                [{"$set": {
+                    models.FLD_AI_MODEL_SOURCE: ai_model.source.value,
+                    models.FLD_AI_MODEL_MODEL: ai_model.model,
+                    _FLD_TAG_TAG: tag.tag,
+                    models.FLD_AI_MODEL_VERSION: ai_model.version,
+                    _FLD_TAG_TAGGED_BY: {"$cond": [
+                        {"$eq": [f"${models.FLD_AI_MODEL_VERSION}", ai_model.version]},
+                        f"${_FLD_TAG_TAGGED_BY}",
+                        tag.user,
+                    ]},
+                    _FLD_TAG_TAGGED_ON: {"$cond": [
+                        {"$eq": [f"${models.FLD_AI_MODEL_VERSION}", ai_model.version]},
+                        f"${_FLD_TAG_TAGGED_ON}",
+                        tag.time,
+                    ]},
+                }}],
+                upsert=True,
+            )
+            tag_moved = tagres.did_upsert or tagres.modified_count > 0
+        return SaveAIModelResult(model_created=res.did_upsert, tag_moved=tag_moved)
+
+    async def get_ai_model(
+        self,
+        source: models.AIModelSource,
+        model: str,
+        ref: str,
+        resolve_tag: bool = False,
+        populate_tags: bool = False,
+        as_admin: bool = False,
+    ) -> models.AIModel | models.AdminAIModel:
+        """
+        Get an AI model.
+
+        source - the source of the AI model.
+        model - the AI model identifier. See AIModel.model for the meaning of this field.
+        ref - a version (an exact, resolved triple match is attempted first) or, if
+            resolve_tag is True and no exact match is found, a tag.
+        resolve_tag - if the given ref doesn't match a version exactly, fall back to resolving
+            it as a tag.
+        populate_tags - also look up and populate the tags field on the returned AI model.
+        as_admin - get additional details about the AI model.
+        """
+        _not_falsy(source, "source")
+        model = _require_string(model, "model")
+        ref = _require_string(ref, "ref")
+        doc = await self._col_ai_models.find_one({
+            models.FLD_AI_MODEL_SOURCE: source.value,
+            models.FLD_AI_MODEL_MODEL: model,
+            models.FLD_AI_MODEL_VERSION: ref,
+        })
+        if not doc and resolve_tag:
+            tagdoc = await self._col_ai_model_tags.find_one({
+                models.FLD_AI_MODEL_SOURCE: source.value,
+                models.FLD_AI_MODEL_MODEL: model,
+                _FLD_TAG_TAG: ref,
+            })
+            if tagdoc:
+                doc = await self._col_ai_models.find_one({
+                    models.FLD_AI_MODEL_SOURCE: source.value,
+                    models.FLD_AI_MODEL_MODEL: model,
+                    models.FLD_AI_MODEL_VERSION: tagdoc[models.FLD_AI_MODEL_VERSION],
+                })
+        if not doc:
+            raise NoSuchAIModelError(
+                f"No AI model with source {source.value}, model '{model}', and ref '{ref}' exists"
+            )
+        tags = await self._get_ai_model_tags(source, model, doc[models.FLD_AI_MODEL_VERSION]
+            ) if populate_tags else None
+        return self._to_ai_model(doc, tags=tags, as_admin=as_admin)
+
+    async def get_ai_models(self) -> list[models.AIModel]:
+        """
+        Get AI models in the service in no particular order, with tags populated. At most
+        1000 are returned.
+        """
+        # TODO AI_MODEL once the catalog grows past the point this in-process join is cheap
+        #               enough, this will likely need real pagination, not just a higher limit.
+        docs = await self._col_ai_models.find().limit(1000).to_list()
+        tagdocs = await self._col_ai_model_tags.find({
+            "$or": [
+                {
+                    models.FLD_AI_MODEL_SOURCE: d[models.FLD_AI_MODEL_SOURCE],
+                    models.FLD_AI_MODEL_MODEL: d[models.FLD_AI_MODEL_MODEL],
+                } for d in docs
+            ]
+        }).to_list() if docs else []
+        tagmap: dict[tuple[str, str, str], list[str]] = {}
+        for t in tagdocs:
+            key = (
+                t[models.FLD_AI_MODEL_SOURCE],
+                t[models.FLD_AI_MODEL_MODEL],
+                t[models.FLD_AI_MODEL_VERSION],
+            )
+            tagmap.setdefault(key, []).append(t[_FLD_TAG_TAG])
+        return [
+            self._to_ai_model(d, tags=tagmap.get((
+                d[models.FLD_AI_MODEL_SOURCE],
+                d[models.FLD_AI_MODEL_MODEL],
+                d[models.FLD_AI_MODEL_VERSION],
+            ), []))
+            for d in docs
+        ]
+
+    async def _get_ai_model_tags(
+        self, source: models.AIModelSource, model: str, version: str
+    ) -> list[str]:
+        tagdocs = await self._col_ai_model_tags.find({
+            models.FLD_AI_MODEL_SOURCE: source.value,
+            models.FLD_AI_MODEL_MODEL: model,
+            models.FLD_AI_MODEL_VERSION: version,
+        }).to_list()
+        return [t[_FLD_TAG_TAG] for t in tagdocs]
+
+    def _to_ai_model(
+        self, doc: dict[str, Any], tags: list[str] | None, as_admin: bool = False
+    ) -> models.AIModel | models.AdminAIModel:
+        doc = self._clean_doc(doc)
+        if tags is not None:
+            doc = dict(doc, tags=tags)
+        return models.AdminAIModel(**doc) if as_admin else models.AIModel(**doc)
+
+    async def update_ai_model_state(
+        self,
+        cluster: sites.Cluster,
+        key: models.AIModelKey,
+        update: StagingUpdate,
+        time: datetime.datetime,
+    ):
+        """
+        Update an AI model staging process's state.
+
+        cluster - the cluster to which this update applies.
+        key - the AI model key.
+        update - the update to apply to the process.
+        time - the time at which the process transitioned to the new state.
+        """
+        _not_falsy(key, "key")
+        await self._update_staging_state(
+            self._col_ai_models,
+            {
+                models.FLD_AI_MODEL_SOURCE: key.source.value,
+                models.FLD_AI_MODEL_MODEL: key.model,
+                models.FLD_AI_MODEL_VERSION: key.version,
+            },
+            NoSuchAIModelError,
+            f"No AI model with key '{key}'",
+            cluster,
+            update,
+            time,
         )
 
 
@@ -1811,6 +2074,10 @@ class NoSuchReferenceDataError(Exception):
 
 class ReferenceDataExistsError(Exception):
     """ The reference data already exists in the system. """
+
+
+class NoSuchAIModelError(Exception):
+    """ The AI model does not exist in the system. """
 
 
 class ImageTagExistsError(Exception):
