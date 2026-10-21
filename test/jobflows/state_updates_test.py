@@ -17,6 +17,8 @@ from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.update_state import UpdateField
 
 
+_AIM_KEY = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "somehash")
+
 _T = utcdatetime()
 _T1 = datetime.datetime(2025, 3, 31, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
 _T2 = datetime.datetime(2025, 3, 31, 12, 1, 0, 345000, tzinfo=datetime.timezone.utc)
@@ -186,6 +188,26 @@ async def test_update_refdata_state_bad_args():
         await jfsu.update_refdata_state("rid", None)
 
 
+async def test_update_ai_model_state():
+    mongo, kafka, jfsu = _make_jfsu()
+    upd = update_state.submitted_nersc_staging_download("jobid")
+
+    await jfsu.update_ai_model_state(_AIM_KEY, upd)
+
+    mongo.update_ai_model_state.assert_called_once_with(sites.Cluster.KBASE, _AIM_KEY, upd, _T)
+    kafka.update_job_state.assert_not_called()
+
+
+async def test_update_ai_model_state_bad_args():
+    _, _, jfsu = _make_jfsu()
+    upd = update_state.submitted_nersc_staging_download("jobid")
+
+    with pytest.raises(ValueError, match="^key is required$"):
+        await jfsu.update_ai_model_state(None, upd)
+    with pytest.raises(ValueError, match="^update is required$"):
+        await jfsu.update_ai_model_state(_AIM_KEY, None)
+
+
 async def test_save_error_job():
     mongo, kafka, jfsu = _make_jfsu()
 
@@ -255,6 +277,35 @@ async def test_save_error_refdata_with_traceback():
     )
 
 
+async def test_save_error_ai_model():
+    mongo, kafka, jfsu = _make_jfsu()
+
+    await jfsu.save_error(_AIM_KEY, "user err", "admin err", entity_type=EntityType.AI_MODEL)
+
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE,
+        _AIM_KEY,
+        update_state.staging_error("user err", "admin err"),
+        _T,
+    )
+    kafka.update_job_state.assert_not_called()
+
+
+async def test_save_error_ai_model_with_traceback():
+    mongo, _, jfsu = _make_jfsu()
+
+    await jfsu.save_error(
+        _AIM_KEY, "user err", "admin err", traceback="tb", entity_type=EntityType.AI_MODEL
+    )
+
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE,
+        _AIM_KEY,
+        update_state.staging_error("user err", "admin err", traceback="tb"),
+        _T,
+    )
+
+
 async def test_save_error_bad_args():
     _, _, jfsu = _make_jfsu()
 
@@ -319,6 +370,32 @@ async def test_handle_exception_refdata(caplog):
     assert caplog.records[0].levelno == logging.ERROR
     assert caplog.records[0].message == "Error test test testing refdata."
     assert caplog.records[0].__dict__[logfields.REFDATA_ID] == "rid"
+
+
+async def test_handle_exception_ai_model(caplog):
+    mongo, kafka, jfsu = _make_jfsu()
+
+    with caplog.at_level(logging.ERROR, logger="cdmtaskservice.jobflows.state_updates"):
+        try:
+            raise ValueError("ai model error")
+        except ValueError as e:
+            await jfsu.handle_exception(
+                e, _AIM_KEY, "test test testing", entity_type=EntityType.AI_MODEL
+            )
+
+    tb = mongo.update_ai_model_state.call_args.args[2].update_fields[UpdateField.TRACEBACK]
+    assert "ValueError: ai model error" in tb
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE,
+        _AIM_KEY,
+        update_state.staging_error("An unexpected error occurred", "ai model error", traceback=tb),
+        _T,
+    )
+    kafka.update_job_state.assert_not_called()
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.ERROR
+    assert caplog.records[0].message == "Error test test testing AI model."
+    assert caplog.records[0].__dict__[logfields.AI_MODEL_ID] == str(_AIM_KEY)
 
 
 async def test_handle_exception_bad_args():

@@ -60,6 +60,9 @@ class ErrorType(Enum):
     MISSING_ENTRYPOINT =         (30060, "Image has no entrypoint")
     """ The provided image does not have an entrypoint. """
 
+    AI_MODEL_RESOLUTION =        (30070, "AI model resolution error")
+    """ The provided AI model source and ref could not be resolved to a specific snapshot. """
+
     CLIENT_LIFETIME =            (30200, "Client lifetime too short")
     """ The client life time is shorter than requested. """
     
@@ -74,6 +77,9 @@ class ErrorType(Enum):
 
     NO_REFDATA_CLUSTER_STATUS =  (30410, "No cluster status for reference data")
     """ The reference data has no status entry for the requested cluster. """
+
+    INVALID_AI_MODEL_STATE =     (30420, "Invalid AI model state")
+    """ The AI model is not in the correct state for the requested operation. """
 
     NOT_FOUND =                  (40000, "Not Found")
     """ The requested resource was not found. """
@@ -101,6 +107,9 @@ class ErrorType(Enum):
 
     NO_SUCH_PIPELINE =           (40080, "No such pipeline")
     """ The pipeline, or pipeline version, was not found in the system. """
+
+    NO_SUCH_AI_MODEL =           (40090, "No such AI model")
+    """ The AI model was not found in the system. """
 
     IMAGE_TAG_EXISTS =           (50000, "Image tag exists")
     """ The tag for the image already exists in the system. """
