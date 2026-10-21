@@ -11,7 +11,7 @@ import uuid
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice import models
-from cdmtaskservice.models import EntityType
+from cdmtaskservice.models import AIModelKey, EntityType
 from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice import logfields
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
@@ -34,11 +34,33 @@ class ParentJobUpdate:
     """ The time at which the last subjob reached the equivalent state. """
 
 
+def _check_entity_id(entity_id: str | AIModelKey, name: str) -> str | AIModelKey:
+    if isinstance(entity_id, str):
+        return _require_string(entity_id, name)
+    return _not_falsy(entity_id, name)
+
+
+_ENTITY_DESC = {
+    EntityType.JOB: "job",
+    EntityType.PIPELINE_JOB: "pipeline job",
+    EntityType.REFDATA: "refdata",
+    EntityType.AI_MODEL: "AI model",
+}
+
+
+_ENTITY_LOGFIELD = {
+    EntityType.JOB: logfields.JOB_ID,
+    EntityType.PIPELINE_JOB: logfields.JOB_ID,
+    EntityType.REFDATA: logfields.REFDATA_ID,
+    EntityType.AI_MODEL: logfields.AI_MODEL_ID,
+}
+
+
 class JobFlowStateUpdates:
     """
     Performs state updates for job flows.
     """
-    
+
     def __init__(
         self,
         cluster: sites.Cluster,
@@ -63,7 +85,7 @@ class JobFlowStateUpdates:
     async def handle_exception(
         self,
         e: Exception,
-        entity_id: str,
+        entity_id: str | AIModelKey,
         erraction: str,
         entity_type: EntityType = EntityType.JOB,
     ):
@@ -72,23 +94,19 @@ class JobFlowStateUpdates:
         except block only.
 
         e - the exception that occurred.
-        entity_id - the job, pipeline job, or refdata ID.
+        entity_id - the job, pipeline job, or refdata ID, or the AI model key.
         erraction - the action that caused the error. Used in the logging string.  Examples:
            * downloading files for the
            * completing
         entity_type - the kind of entity entity_id refers to.
         """
         _not_falsy(e, "e")
-        _require_string(entity_id, "entity_id")
+        _check_entity_id(entity_id, "entity_id")
         _require_string(erraction, "erraction")
-        entity_desc = {
-            EntityType.JOB: "job",
-            EntityType.PIPELINE_JOB: "pipeline job",
-            EntityType.REFDATA: "refdata",
-        }[entity_type]
-        logfield = logfields.REFDATA_ID if entity_type == EntityType.REFDATA else logfields.JOB_ID
+        entity_desc = _ENTITY_DESC[entity_type]
+        logfield = _ENTITY_LOGFIELD[entity_type]
         logging.getLogger(__name__).exception(
-            f"Error {erraction} {entity_desc}.", extra={logfield: entity_id}
+            f"Error {erraction} {entity_desc}.", extra={logfield: str(entity_id)}
         )
         await self.save_error(
             entity_id,
@@ -103,7 +121,7 @@ class JobFlowStateUpdates:
 
     async def save_error(
         self,
-        entity_id: str,
+        entity_id: str | AIModelKey,
         user_err: str,
         admin_err: str,
         traceback: str = None,
@@ -113,18 +131,22 @@ class JobFlowStateUpdates:
         """
         Save an error to the database.
 
-        entity_id - the job, pipeline job, or refdata ID.
+        entity_id - the job, pipeline job, or refdata ID, or the AI model key.
         user_err - the error to present to users.
         admin_err - the error to present to admins.
         traceback - the error traceback, if any.
         logpath - the path to error logs in an S3 instance, if any.
         entity_type - the kind of entity entity_id refers to.
         """
-        _require_string(entity_id, "entity_id")
+        _check_entity_id(entity_id, "entity_id")
         _require_string(user_err, "user_err")
         _require_string(admin_err, "admin_err")
         # if this fails, well, then we're screwed
-        if entity_type == EntityType.REFDATA:
+        if entity_type == EntityType.AI_MODEL:
+            await self.update_ai_model_state(entity_id, staging_error(
+                user_err, admin_err, traceback=traceback)
+            )
+        elif entity_type == EntityType.REFDATA:
             await self.update_refdata_state(entity_id, staging_error(
                 user_err, admin_err, traceback=traceback)
             )
@@ -189,6 +211,19 @@ class JobFlowStateUpdates:
         _not_falsy(update, "update")
         await self._mongo.update_refdata_state(
             self._cluster, refdata_id, update, self._timestamp_fn()
+        )
+
+    async def update_ai_model_state(self, key: AIModelKey, update: StagingUpdate):
+        """
+        Update the state of an AI model staging operation.
+
+        key - the key of the AI model whose staging state is being updated.
+        update - the update to apply.
+        """
+        _not_falsy(key, "key")
+        _not_falsy(update, "update")
+        await self._mongo.update_ai_model_state(
+            self._cluster, key, update, self._timestamp_fn()
         )
 
 
