@@ -321,3 +321,85 @@ def test_job_null_deprecated_fields():
     # the original instance is unmodified
     assert job.job_input.params.refdata_mount_point == "/params"
     assert job.image.default_refdata_mount_point == "/image"
+
+
+_SAFE_TIME = "2024-10-24T22:35:40Z"
+
+
+def test_ai_model_key_str():
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    assert str(key) == "huggingface/org/name/abc123def456"
+
+
+def test_ai_model_key_property():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert am.key == models.AIModelKey(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456"
+    )
+    adm = models.AdminAIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert adm.key == models.AIModelKey(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456"
+    )
+
+
+def test_ai_model_entity_type_and_is_pipeline():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert am.get_entity_type() == models.EntityType.AI_MODEL
+    assert am.is_pipeline() is False
+    adm = models.AdminAIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert adm.get_entity_type() == models.EntityType.AI_MODEL
+    assert adm.is_pipeline() is False
+
+
+def test_ai_model_tags_unset_by_default():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert am.tags is None
+    assert "tags" not in am.model_dump(exclude_none=True)
+
+
+def test_ai_model_tags_populated():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+        tags=["main", "latest"],
+    )
+    assert am.tags == ["main", "latest"]
