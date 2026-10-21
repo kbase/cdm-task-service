@@ -17,6 +17,7 @@ from cdmtaskservice.callback_url_paths import (
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
+    InvalidAIModelStateError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     IllegalParameterError,
@@ -68,6 +69,20 @@ _JAWS_RESULT_TO_EXTERNAL = {
     jaws_client.JAWSResult.FAILED:       models.ExternalRunnerState.ERROR,
     jaws_client.JAWSResult.CANCELED:     models.ExternalRunnerState.CANCELED,
     jaws_client.JAWSResult.SYSTEM_ERROR: models.ExternalRunnerState.ERROR,
+}
+
+_TRANSFER_ERRCLS = {
+    EntityType.JOB: InvalidJobStateError,
+    EntityType.PIPELINE_JOB: InvalidJobStateError,
+    EntityType.REFDATA: InvalidReferenceDataStateError,
+    EntityType.AI_MODEL: InvalidAIModelStateError,
+}
+
+_TRANSFER_LOGFIELD = {
+    EntityType.JOB: logfields.JOB_ID,
+    EntityType.PIPELINE_JOB: logfields.JOB_ID,
+    EntityType.REFDATA: logfields.REFDATA_ID,
+    EntityType.AI_MODEL: logfields.AI_MODEL_ID,
 }
 
 
@@ -128,7 +143,7 @@ class NERSCJAWSRunner(JobFlow):
     async def _get_transfer_result(
         self,
         trans_func: Callable[[], Awaitable[tuple[TransferResult, Any]]],
-        entity_id: str,
+        entity_id: str | models.AIModelKey,
         op: str,
         err_type: str,
         entity_type: EntityType = EntityType.JOB,
@@ -142,18 +157,13 @@ class NERSCJAWSRunner(JobFlow):
             await self._updates.handle_exception(e, entity_id, err_type, entity_type=entity_type)
             raise
         if res.state == TransferState.INCOMPLETE:
-            errcls = (
-                InvalidReferenceDataStateError
-                if entity_type == EntityType.REFDATA
-                else InvalidJobStateError
-            )
+            errcls = _TRANSFER_ERRCLS[entity_type]
             raise errcls(f"{op} task is not complete")
         elif res.state == TransferState.FAIL:
             self._logr.error(
                 f"{op} failed for {entity_type.value}.",
                 extra={
-                    logfields.REFDATA_ID if entity_type == EntityType.REFDATA
-                        else logfields.JOB_ID: entity_id,
+                    _TRANSFER_LOGFIELD[entity_type]: str(entity_id),
                     logfields.REMOTE_ERROR: res.message,
                     logfields.REMOTE_TRACEBACK: res.traceback
                 }
