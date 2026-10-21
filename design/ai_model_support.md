@@ -174,7 +174,7 @@ sibling path-building helpers/methods (not edits to the existing ones) in `nersc
 | Runner method | `stage_ai_model(...)` |
 | Completion callback | `ai_model_complete(key: AIModelKey)` — own route and payload shape, **not** shared with `refdata_complete`/`refdata_download_complete` (see Chunk 3) |
 | NERSC path helpers | `_AI_MODEL_ROOT_DIR = "_ai_models"` (DTN-root subdirectory, `self._ai_model_root_loc`, `_get_relative_ai_model_loc(key: AIModelKey)`) and `_AI_MODEL_SCRATCH_DIR = "ai_models"` (Perlmutter-local scratch subdirectory, `_get_ai_model_scratch(key: AIModelKey)`) — two distinct directories, not one shared name; both take `AIModelKey` rather than three loose strings (see Chunk 3) |
-| Shared job-flow state-update plumbing (extended, shared with refdata) | `EntityType.AI_MODEL` added alongside `JOB`/`PIPELINE_JOB`/`REFDATA`; `JobFlowStateUpdates.handle_exception`/`save_error`'s `entity_id` widens to `str \| AIModelKey`; new `JobFlowStateUpdates.update_ai_model_state(key: AIModelKey, update: AIModelUpdate)` and `mongo.update_ai_model_state(cluster, key: AIModelKey, update, time)`; new `update_state.AIModelUpdate` (an `Update[StagingState]`, parallel to `RefdataUpdate`) plus `ai_model_error`/`ai_model_complete`/`submitted_nersc_ai_model_download` factories; new `InvalidAIModelStateError` (`exceptions.py`) mapped to new `ErrorType.INVALID_AI_MODEL_STATE`, used as `NERSCJAWSRunner._get_transfer_result`'s `errcls` for the `AI_MODEL` case alongside `InvalidJobStateError`/`InvalidReferenceDataStateError`; new `logfields.AI_MODEL_ID` (see Chunk 2) |
+| Shared job-flow state-update plumbing (extended, shared with refdata) | `EntityType.AI_MODEL` added alongside `JOB`/`PIPELINE_JOB`/`REFDATA`; `JobFlowStateUpdates.handle_exception`/`save_error`'s `entity_id` widens to `str \| AIModelKey`; new `JobFlowStateUpdates.update_ai_model_state(key: AIModelKey, update: StagingUpdate)` and `mongo.update_ai_model_state(cluster, key: AIModelKey, update, time)`, using `update_state.StagingUpdate` and `submitted_nersc_staging_download`/`staging_complete`/`staging_error` factories; new `InvalidAIModelStateError` (`exceptions.py`) mapped to new `ErrorType.INVALID_AI_MODEL_STATE`, used as `NERSCJAWSRunner._get_transfer_result`'s `errcls` for the `AI_MODEL` case alongside `InvalidJobStateError`/`InvalidReferenceDataStateError`; new `logfields.AI_MODEL_ID` (see Chunk 2) |
 | Job input method (derived, not stored) | `JobInput.uses_ai_model_store()` (`bool(job_input.params.get_ai_model_parameters())`) |
 | Image field (renamed, shared with refdata) | `JobImage.default_staged_data_mount_point` (was `default_refdata_mount_point`, kept as a deprecated alias) |
 | Parameter field (renamed, shared with refdata) | `Parameters.staged_data_mount_point` (was `refdata_mount_point`, kept as a deprecated alias) |
@@ -470,13 +470,10 @@ shape, using Chunk 1's `AIModelKey` and `StagingState`:
   `EntityType.AI_MODEL: "AI model"` alongside the existing `"job"`/`"pipeline job"`/`"refdata"`
   entries. `save_error`'s dispatch gains a third arm: `EntityType.AI_MODEL` routes to a new
   `update_ai_model_state` (below) instead of `update_refdata_state`/`update_job_state`.
-- New `JobFlowStateUpdates.update_ai_model_state(key: AIModelKey, update: AIModelUpdate)`, parallel
+- New `JobFlowStateUpdates.update_ai_model_state(key: AIModelKey, update: StagingUpdate)`, parallel
   to `update_refdata_state`, forwarding to a new `mongo.update_ai_model_state(cluster, key, update,
   time)` (the DAO method Chunk 1's naming table and later chunks already call for, now specified to
   take `AIModelKey` rather than three positional strings).
-- New `update_state.AIModelUpdate(Update[models.StagingState])`, parallel to `RefdataUpdate`, plus
-  factory functions mirroring the refdata ones: `ai_model_error(user_error, admin_error, *,
-  traceback=None)`, `ai_model_complete()`, `submitted_nersc_ai_model_download(job_id)`.
 - `logfields.py` gains `AI_MODEL_ID = "ai_model_id"`, selected alongside `REFDATA_ID`/`JOB_ID`
   wherever `handle_exception`/`NERSCJAWSRunner._get_transfer_result` pick a logfield based on
   `entity_type`.
@@ -556,9 +553,8 @@ remote `xfer`-QOS Slurm job (via the existing `_process_manifest` submission pat
 for this new task instead of a file-manifest download) that runs `huggingface_client.stage_snapshot`
 directly against huggingface.co on the Perlmutter login node in a temporary location and syncs to
 the dtns in the same way as refdata, then transitions state via
-`submitted_nersc_ai_model_download` → (on the resulting callback) `ai_model_complete`. New
-`update_state.py` factories analogous to the refdata ones, operating on `StagingState`
-(renamed from `ReferenceDataState` and shared with refdata per Chunk 1 — see naming table).
+`update_state.submitted_nersc_staging_download` → (on the resulting callback)
+`ai_model_complete` (which itself calls `update_state.staging_complete`).
 
 **Completion callback is a new, dedicated route, not a reuse of refdata's.** Refdata's callback
 (`get_refdata_download_complete_callback`, `callback_url_paths.py`) bakes a single opaque

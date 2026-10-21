@@ -18,7 +18,7 @@ from pydantic import (
     StringConstraints,
 )
 import re
-from typing import Annotated, Self
+from typing import Annotated, NamedTuple, Self
 
 from cdmtaskservice.arg_checkers import (
     contains_control_characters as _contains_control_characters,
@@ -70,14 +70,17 @@ FLD_SUBJOB_RUNTIME = "runtime_seconds"
 FLD_SUBJOB_HEARTBEAT = "heartbeat"
 FLD_SUBJOB_HTC_STATS_MISSING = "stats_missing"
 FLD_REFDATA_FILE = "file"
-FLD_REFDATA_STATUSES = "statuses"
-FLD_REFDATA_CLUSTER = "cluster"
-FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"  # deprecated, see FLD_REFDATA_NERSC_DL_JOB_ID
-FLD_REFDATA_NERSC_DL_JOB_ID = "nersc_download_job_id"
+FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"  # deprecated, see FLD_COMMON_NERSC_DL_JOB_ID
+FLD_AI_MODEL_SOURCE = "source"
+FLD_AI_MODEL_MODEL = "model"
+FLD_AI_MODEL_VERSION = "version"
 # Fields that are shared between multiple models for consistency
-# Currently refdata, jobs, and subjobs
+# Currently refdata, jobs, ai models, and subjobs
 FLD_COMMON_ID = "id"
 FLD_COMMON_STATE = "state"
+FLD_COMMON_STATUSES = "statuses"
+FLD_COMMON_CLUSTER = "cluster"
+FLD_COMMON_NERSC_DL_JOB_ID = "nersc_download_job_id"
 FLD_COMMON_TRANS_TIMES = "transition_times"
 FLD_COMMON_TRANS_HISTORY = "trans_history"
 FLD_COMMON_CPU_HOURS = "cpu_hours"
@@ -982,11 +985,14 @@ class JobState(str, Enum):
 
 
 class EntityType(Enum):
-    """ The kind of entity - job, pipeline job, or reference data - being operated on. """
+    """
+    The kind of entity - job, pipeline job, reference data, or AI model - being operated on.
+    """
 
     JOB = "job"
     PIPELINE_JOB = "pipeline_job"
     REFDATA = "refdata"
+    AI_MODEL = "ai_model"
 
 
 class ExternalRunnerState(str, Enum):
@@ -1630,3 +1636,79 @@ class RefdataUpdate(BaseModel):
 
 class NoRefdataClusterStatusError(Exception):
     """ Raised when reference data has no status entry for a requested cluster. """
+
+
+class AIModelSource(str, Enum):
+    """
+    The source from which an AI model's bytes are fetched.
+    """
+    HUGGINGFACE = "huggingface"
+
+
+class AIModelKey(NamedTuple):
+    """ Uniquely identifies a registered AI model snapshot. """
+    source: AIModelSource
+    model: str
+    version: str
+
+    def __str__(self) -> str:
+        return f"{self.source.value}/{self.model}/{self.version}"
+
+
+class _AIModelRoot(RegistrationInfo):
+    # This is an outgoing structure only so we don't add validators
+    source: Annotated[AIModelSource, Field(
+        examples=[AIModelSource.HUGGINGFACE.value],
+        description="The source from which the AI model's bytes are fetched. The meaning of "
+            + "the model and version fields depends on this value."
+    )]
+    model: Annotated[str, Field(
+        examples=["org/name"],
+        description="An identifier for the AI model, meaningful only in combination with "
+            + "source. For source 'huggingface', this is the org/name repo ID."
+    )]
+    version: Annotated[str, Field(
+        examples=["abc123def456"],
+        description="An immutable identifier for a specific, resolved snapshot of the AI "
+            + "model, meaningful only in combination with source. For source 'huggingface', "
+            + "this is a resolved git commit hash."
+    )]
+    tags: Annotated[list[str] | None, Field(
+        examples=[["main", "latest"]],
+        description="Mutable tags currently pointing at this AI model snapshot."
+    )] = None
+
+    @property
+    def key(self) -> AIModelKey:
+        """ Get the natural key for this AI model. """
+        return AIModelKey(self.source, self.model, self.version)
+
+    def get_entity_type(self) -> EntityType:
+        """ Get the entity type for this AI model. """
+        return EntityType.AI_MODEL
+
+    def is_pipeline(self) -> bool:
+        """ Return True if this entity is a pipeline job. Always False for AI models. """
+        return False
+
+
+class AIModel(_AIModelRoot):
+    """
+    Information about a registered AI model snapshot that is, or will be, available for
+    containers.
+    """
+    # This is an outgoing structure only so we don't add validators
+    statuses: Annotated[list[StagingStatus], Field(
+        description="The states of AI model staging processes at remote compute locations.",
+    )]
+
+
+class AdminAIModel(_AIModelRoot):
+    """
+    Information about a registered AI model snapshot that is, or will be, available for
+    containers, with added details of interest to service administrators.
+    """
+    # This is an outgoing structure only so we don't add validators
+    statuses: Annotated[list[AdminStagingStatus], Field(
+        description="The states of AI model staging processes at remote compute locations.",
+    )]
