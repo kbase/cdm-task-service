@@ -60,6 +60,12 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
             service_root_url,
         )
     
+    # TODO AI_MODEL if Lawrencium is reactivated, add a stage_ai_model override here mirroring
+    #      whatever mechanism stage_refdata/nersc_refdata_complete/refdata_complete use for
+    #      refdata at that time (today that's the generic JAWS Globus-transfer primitives,
+    #      parametrized by the AI model's snapshot subdirectory instead of a refdata id's path) -
+    #      i.e. keep AI model sync content-agnostic and consistent with however refdata sync
+    #      works when LRC comes back, rather than deciding that mechanism now.
     async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):
         """
         Do nothing. This method is overidden as LRC refdata staging depends on the completion

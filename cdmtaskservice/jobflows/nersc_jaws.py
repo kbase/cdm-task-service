@@ -13,6 +13,7 @@ from cdmtaskservice.callback_url_paths import (
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
     get_refdata_download_complete_callback,
+    get_ai_model_download_complete_callback,
 )
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
@@ -765,9 +766,9 @@ class NERSCJAWSRunner(JobFlow):
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """
         Clean up refdata staging files at the remote compute site.
-        
+
         If any files do not exist they are silently ignored.
-        
+
         refdata - the refdata to clean up.
         force - perform the clean up even if the refdata staging isn't in a terminal state.
             This may cause undefined behavior.
@@ -779,3 +780,51 @@ class NERSCJAWSRunner(JobFlow):
         if not force and not refstate.state.is_terminal():
             raise IllegalParameterError("Refdata is not in a terminal state and cannot be cleaned")
         await self._nman.clean_refdata(refdata)
+
+    async def stage_ai_model(self, ai_model: models.AdminAIModel):
+        """
+        Start staging an AI model snapshot. It is expected that the AI model has been persisted
+        to the data storage system and is in the created state.
+
+        ai_model - the AI model to stage.
+        """
+        aistate = _not_falsy(ai_model, "ai_model").get_status_for_cluster(self.CLUSTER)
+        if aistate.state != models.StagingState.CREATED:
+            raise InvalidAIModelStateError("AI model must be in the created state")
+        try:
+            callback_url = get_ai_model_download_complete_callback(
+                self._callback_root, ai_model.key, self.CLUSTER
+            )
+            job_id = await self._nman.stage_ai_model(ai_model, callback_url)
+            await self._updates.update_ai_model_state(
+                ai_model.key, submitted_nersc_staging_download(job_id)
+            )
+        except Exception as e:
+            await self._updates.handle_exception(
+                e, ai_model.key, "starting staging for",
+                entity_type=EntityType.AI_MODEL,
+            )
+
+    async def ai_model_complete(self, key: models.AIModelKey):
+        """
+        Complete an AI model staging task. The AI model is expected to be in the download
+        submitted state for the cluster.
+        """
+        ai_model = await self._mongo.get_ai_model(
+            _not_falsy(key, "key").source, key.model, key.version
+        )
+        aistate = ai_model.get_status_for_cluster(self.CLUSTER)
+        if aistate.state != models.StagingState.DOWNLOAD_SUBMITTED:
+            raise InvalidAIModelStateError(
+                "AI model must be in the download submitted state for "
+                + f"cluster {aistate.cluster.value}"
+            )
+        async def tfunc():
+            return await self._nman.get_ai_model_staging_result(key), None
+        await self._get_transfer_result(  # check for errors
+            tfunc,
+            key,
+            "Download", "getting download results for",
+            entity_type=EntityType.AI_MODEL,
+        )
+        await self._updates.update_ai_model_state(key, staging_complete())
