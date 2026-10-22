@@ -987,8 +987,47 @@ shape, added to that same `ROUTER_ADMIN`, placed directly after the existing ref
 - `DELETE /admin/ai-models/{source}/{model:path}/{version}/{cluster}/clean` — cleans up staging
   intermediate files for a cluster, mirroring `DELETE /admin/refdata/{refdata_id}/{cluster}/clean`
   (`routes.py:1026`) via a new `flow_cleaner.clean_ai_model(ai_model, cluster, user, force=...)`
-  (mirroring `flow_cleaner.clean_refdata`), which in turn calls the `_get_ai_model_scratch`-based
-  cleanup NERSC Chunk 3 adds (parallel to `NERSCManager.clean_refdata`, `nersc/manager.py:1276`).
+  (mirroring `flow_cleaner.clean_refdata`), which in turn calls a new
+  `NERSCManager.clean_ai_model(key: AIModelKey)` (parallel to `NERSCManager.clean_refdata`,
+  `nersc/manager.py:1409`).
+
+  **Unlike `clean_refdata`, this must also prune now-empty ancestor directories.** Refdata's
+  `_get_refdata_scratch(refdata_id)` is a single flat segment directly under the scratch root, so
+  deleting it leaves nothing behind. An AI model's scratch path
+  (`_get_ai_model_scratch(key)`, Chunk 3) nests three levels — `<source>/<model>/<version>/` — and
+  `<model>` can itself contain further path segments (e.g. `org/name`) shared by every other
+  version ever staged for that model, so deleting just the leaf `<version>` directory the way
+  `clean_refdata` deletes its leaf would leave `<source>/<model>/` (and any intermediate
+  `org/`-style segments) sitting empty afterward. Recursively deleting those parents outright is
+  not safe either: a sibling version of the same model could be mid-staging in a sibling
+  `<version>` directory at the same time, so naively `rm -rf`-ing `<model>` on one version's
+  cleanup could destroy another version's in-progress scratch content.
+
+  The fix is a new `_delete_path_and_prune_empty_ancestors(self, path: Path, stop_at: Path)`
+  method on `NERSCManager`, sibling to `_delete_paths` (`nersc/manager.py:524`) but distinct from
+  it rather than a parameter added to it, since pruning is AI-model-specific and every other
+  caller of `_delete_paths` (`clean_job`, `clean_refdata`) has nothing to prune. It extends
+  `_delete_paths`'s existing single-shell-snippet-per-path approach (one `perlmutter.run()` call,
+  no Python-side sequencing) with a new `_REMOVE_PATH_AND_PRUNE_TEMPLATE` sibling to
+  `_REMOVE_PATH_TEMPLATE` (`nersc/manager.py:224`): after the existing `rm -rf -- "{path}"`, the
+  script walks upward via repeated `dirname`, calling `rmdir` on each ancestor and stopping at the
+  first failure (a `rmdir` on a non-empty directory fails harmlessly, so this naturally stops
+  exactly when a sibling version/model's content is still present) or at `{stop_at}` (exclusive),
+  whichever comes first. `clean_ai_model` calls this with `path=self._get_ai_model_scratch(key)`
+  and `stop_at` equal to the AI-model scratch root one level above the `<source>/<model>/<version>`
+  nesting (pulled out as its own `_get_ai_model_scratch_root()` helper, with
+  `_get_ai_model_scratch(key)` becoming `self._get_ai_model_scratch_root() / key.source.value /
+  key.model / key.version`, mirroring how `_get_relative_ai_model_loc` already builds on
+  `self._ai_model_root_loc`), so pruning never walks up past the point where AI-model-specific
+  nesting begins.
+
+  This only addresses the Perlmutter-scratch side. The DTN-root final store
+  (`_get_ai_model_loc`/`_get_relative_ai_model_loc`) is never touched by `clean_ai_model` at all,
+  matching `clean_refdata`'s own scope (it also only ever deletes scratch, never
+  `_get_refdata_loc`) — store garbage collection/retention for the ever-growing final store
+  remains explicitly out of scope for this plan (see "Explicitly deferred"), so empty
+  `<source>/<model>/` directories left behind there after every version of a model is eventually
+  retired are an accepted consequence of that deferral, not a gap this chunk fixes.
 
 All four admin routes above use `(source, model, version)` directly rather than the combined
 `model_ref:path` form, except the admin GET — consistent with the registry/`update_ai_model_state`

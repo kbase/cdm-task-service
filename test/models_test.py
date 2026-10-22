@@ -2,6 +2,7 @@
 
 from pydantic import ValidationError
 import pytest
+import re
 from pytest import raises
 
 from cdmtaskservice import models
@@ -336,6 +337,7 @@ def test_ai_model_key_property():
         source=models.AIModelSource.HUGGINGFACE,
         model="org/name",
         version="abc123def456",
+        size_bytes=123456,
         registered_by="someuser",
         registered_on=_SAFE_TIME,
         statuses=[],
@@ -347,6 +349,7 @@ def test_ai_model_key_property():
         source=models.AIModelSource.HUGGINGFACE,
         model="org/name",
         version="abc123def456",
+        size_bytes=123456,
         registered_by="someuser",
         registered_on=_SAFE_TIME,
         statuses=[],
@@ -361,6 +364,7 @@ def test_ai_model_entity_type_and_is_pipeline():
         source=models.AIModelSource.HUGGINGFACE,
         model="org/name",
         version="abc123def456",
+        size_bytes=123456,
         registered_by="someuser",
         registered_on=_SAFE_TIME,
         statuses=[],
@@ -371,6 +375,7 @@ def test_ai_model_entity_type_and_is_pipeline():
         source=models.AIModelSource.HUGGINGFACE,
         model="org/name",
         version="abc123def456",
+        size_bytes=123456,
         registered_by="someuser",
         registered_on=_SAFE_TIME,
         statuses=[],
@@ -384,6 +389,7 @@ def test_ai_model_tags_unset_by_default():
         source=models.AIModelSource.HUGGINGFACE,
         model="org/name",
         version="abc123def456",
+        size_bytes=123456,
         registered_by="someuser",
         registered_on=_SAFE_TIME,
         statuses=[],
@@ -397,9 +403,52 @@ def test_ai_model_tags_populated():
         source=models.AIModelSource.HUGGINGFACE,
         model="org/name",
         version="abc123def456",
+        size_bytes=123456,
         registered_by="someuser",
         registered_on=_SAFE_TIME,
         statuses=[],
         tags=["main", "latest"],
     )
     assert am.tags == ["main", "latest"]
+
+
+def _ai_model_status(cluster: sites.Cluster, state: models.StagingState) -> models.StagingStatus:
+    return models.StagingStatus(
+        cluster=cluster,
+        state=state,
+        transition_times=[models.StagingStateTransition(state=state, time=_SAFE_TIME)],
+    )
+
+
+def test_ai_model_get_status_for_cluster():
+    perl_status = _ai_model_status(sites.Cluster.PERLMUTTER_JAWS, models.StagingState.CREATED)
+    kbase_status = _ai_model_status(sites.Cluster.KBASE, models.StagingState.COMPLETE)
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[perl_status, kbase_status],
+    )
+    assert am.get_status_for_cluster(sites.Cluster.PERLMUTTER_JAWS) == perl_status
+    assert am.get_status_for_cluster(sites.Cluster.KBASE) == kbase_status
+
+
+def test_ai_model_get_status_for_cluster_fail_no_status():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[_ai_model_status(sites.Cluster.KBASE, models.StagingState.COMPLETE)],
+    )
+    with raises(models.NoAIModelClusterStatusError, match=(
+        "^No status for cluster perlmutter-jaws for AI model "
+        + re.escape("huggingface/org/name/abc123def456")
+        + "$"
+    )):
+        am.get_status_for_cluster(sites.Cluster.PERLMUTTER_JAWS)

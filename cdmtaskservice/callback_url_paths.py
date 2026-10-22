@@ -4,6 +4,7 @@ A module for determining paths for callback URLs for the service.
 
 import os
 
+from cdmtaskservice import models
 from cdmtaskservice import sites
 
 _CALLBACK = "callback"
@@ -12,6 +13,7 @@ _JOB_COMPLETE = "job"
 _UPLOAD_COMPLETE = "upload"
 _ERROR_LOG_UPLOAD_COMPLETE = "errlogs"
 _REFDATA_DOWNLOAD_COMPLETE ="refdata_download"
+_AI_MODEL_DOWNLOAD_COMPLETE = "ai_model_download"
 
 
 def get_download_complete_callback(root_url: str = None, job_id: str = None) -> str:
@@ -67,6 +69,20 @@ def get_refdata_download_complete_callback(
     cluster - suffix the path with the remote cluster.
     """
     return _get_callback(_REFDATA_DOWNLOAD_COMPLETE, root_url, refdata_id, cluster)
+
+
+def get_ai_model_download_complete_callback(
+        root_url: str = None, key: models.AIModelKey = None, cluster: sites.Cluster = None
+    ) -> str:
+    """
+    Get a url or path for a service callback to communicate that an AI model download
+    is complete.
+
+    root_url - prepend the path with the given root url.
+    key - suffix the path with the AI model's source, model, and version.
+    cluster - suffix the path with the remote cluster.
+    """
+    return _get_callback(_AI_MODEL_DOWNLOAD_COMPLETE, root_url, str(key) if key else None, cluster)
 
 
 def _get_callback(

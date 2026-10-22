@@ -1634,10 +1634,6 @@ class RefdataUpdate(BaseModel):
     )] = None
 
 
-class NoRefdataClusterStatusError(Exception):
-    """ Raised when reference data has no status entry for a requested cluster. """
-
-
 class AIModelSource(str, Enum):
     """
     The source from which an AI model's bytes are fetched.
@@ -1673,6 +1669,11 @@ class _AIModelRoot(RegistrationInfo):
             + "model, meaningful only in combination with source. For source 'huggingface', "
             + "this is a resolved git commit hash."
     )]
+    size_bytes: Annotated[int, Field(
+        examples=[123456789],
+        description="The total size, in bytes, of the AI model snapshot's files, as reported "
+            + "by the source at registration time."
+    )]
     tags: Annotated[list[str] | None, Field(
         examples=[["main", "latest"]],
         description="Mutable tags currently pointing at this AI model snapshot."
@@ -1682,6 +1683,18 @@ class _AIModelRoot(RegistrationInfo):
     def key(self) -> AIModelKey:
         """ Get the natural key for this AI model. """
         return AIModelKey(self.source, self.model, self.version)
+
+    def get_status_for_cluster(self, cluster: sites.Cluster) -> StagingStatus:
+        """
+        Get the status of a cluster for this AI model.
+        """
+        _not_falsy(cluster, "cluster")
+        for s in self.statuses:
+            if s.cluster == cluster:
+                return s
+        raise NoAIModelClusterStatusError(
+            f"No status for cluster {cluster.value} for AI model {self.key}"
+        )
 
     def get_entity_type(self) -> EntityType:
         """ Get the entity type for this AI model. """
@@ -1712,3 +1725,11 @@ class AdminAIModel(_AIModelRoot):
     statuses: Annotated[list[AdminStagingStatus], Field(
         description="The states of AI model staging processes at remote compute locations.",
     )]
+
+
+class NoRefdataClusterStatusError(Exception):
+    """ Raised when reference data has no status entry for a requested cluster. """
+
+
+class NoAIModelClusterStatusError(Exception):
+    """ Raised when an AI model has no status entry for a requested cluster. """
