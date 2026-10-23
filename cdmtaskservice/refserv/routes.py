@@ -14,6 +14,7 @@ from fastapi import (
 )
 
 from cdmtaskservice import app_state
+from cdmtaskservice import models as cts_models
 from cdmtaskservice.exceptions import UnauthorizedError
 from cdmtaskservice.http_bearer import KBaseHTTPBearer
 from cdmtaskservice import sites
@@ -21,6 +22,7 @@ from cdmtaskservice.refserv import models
 from cdmtaskservice.user import CTSUser
 
 
+ROUTER_AI_MODELS = APIRouter(tags=["AI Models - Experimental"], prefix="/ai-models")
 ROUTER_REFDATA = APIRouter(tags=["Refdata"], prefix="/refdata")
 
 # TODO CODE this is duplicated in the standard routes.py. Make a common class?
@@ -45,6 +47,30 @@ _ANN_REFDATA_ID = Annotated[str, FastPath(
     min_length=1,
     max_length=50,
 )]
+
+
+@ROUTER_AI_MODELS.post(
+    "/{source}/{model:path}/{version}/{cluster}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Stage an AI model",
+    description="Stage an AI model snapshot from a record in the CDM task service.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def create_ai_model(
+    r: Request,
+    source: cts_models.AIModelSource,
+    model: Annotated[str, FastPath(description="The AI model identifier.")],
+    version: Annotated[str, FastPath(description="The resolved AI model version.")],
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which the AI model should be staged."
+    )],
+    user: CTSUser=Depends(_AUTH)
+):
+    _ensure_cts(user, "Only the CTS service can stage AI models.")
+    key = cts_models.AIModelKey(source, model, version)
+    refman = app_state.get_app_state(r).refdata_manager
+    await refman.stage_ai_model(key, cluster)
 
 
 @ROUTER_REFDATA.post(

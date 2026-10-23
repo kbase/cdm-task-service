@@ -66,6 +66,7 @@ ROUTER_SITES = APIRouter(tags=["Sites"])
 ROUTER_JOBS = APIRouter(tags=["Jobs"], prefix="/jobs")
 ROUTER_IMAGES = APIRouter(tags=["Images"], prefix="/images")
 ROUTER_REFDATA = APIRouter(tags=["Reference Data"], prefix="/refdata")
+ROUTER_AI_MODELS = APIRouter(tags=["AI Models - Experimental"], prefix="/ai-models")
 ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
 ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 ROUTER_EXTERNAL_EXEC = APIRouter(tags=["External Execution"])
@@ -589,6 +590,34 @@ async def get_refdata_by_path(
 
 
 # TODO CHECKSUM FEATURE add get refdata by crc64nvme if needed... YAGNI
+
+
+@ROUTER_AI_MODELS.get(
+    "/{source}/{model_ref:path}",
+    response_model=models.AIModel,
+    response_model_exclude_none=True,
+    summary="Get AI model information",
+    description="Get information about a registered AI model snapshot, including its staging "
+        + "status, by its source and combined model@ref reference.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model_ref: Annotated[str, FastPath(
+        openapi_examples={"model ref": {"value": "org/name@main"}},
+        description="The AI model's combined model@ref reference.",
+    )],
+    resolve_tag: Annotated[bool, Query(
+        description="If the ref doesn't match a version exactly, fall back to resolving it as "
+            + "a tag. Set to false when the ref is already known to be a resolved version, to "
+            + "avoid silently matching an unrelated tag of the same name."
+    )] = True,
+) -> models.AIModel:
+    registry = app_state.get_app_state(r).ai_model_registry
+    return await registry.get_ai_model(
+        source, model_ref, resolve_tag=resolve_tag, populate_tags=True
+    )
 
 @ROUTER_ADMIN.post(
     "/images/{image_id:path}",
@@ -1362,6 +1391,37 @@ async def container_heartbeat(
     _ensure_executor(user, "Only external job executors can send heartbeats.")
     job, flow = await _get_job_and_flow(r, job_id, user, as_admin=True)
     await flow.update_subjob_heartbeat(job.id, container_num)
+
+
+@ROUTER_EXTERNAL_EXEC.put(
+    "/external_exec/ai-models/{source}/{model:path}/{version}/{cluster}/update/{new_state}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Update AI model state",
+    description="Not for general use.\n\nUpdate AI model staging state for a cluster.",
+)
+async def update_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model: Annotated[str, FastPath(description="The AI model identifier.")],
+    version: Annotated[str, FastPath(description="The resolved AI model version.")],
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which the AI model should be updated."
+    )],
+    new_state: Annotated[models.StagingState, FastPath(
+        openapi_examples={"download_submitted": {
+            "value": models.StagingState.DOWNLOAD_SUBMITTED
+        }},
+        description="The new state for the AI model.",
+    )],
+    update: models.StagingStateUpdate | None = None,
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_refdata_service(user, "Only refdata services can update AI model state.")
+    key = models.AIModelKey(source, model, version)
+    appstate = app_state.get_app_state(r)
+    flow = await appstate.jobflow_manager.get_flow(cluster)
+    await flow.update_ai_model_state(key, new_state, update)
 
 
 @ROUTER_EXTERNAL_EXEC.put(

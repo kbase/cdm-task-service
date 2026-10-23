@@ -72,10 +72,27 @@ class CTSRefdataClient:
         Get refdata information from the CTS based on its ID.
         """
         _require_string(refdata_id, "refdata_id")
-        url = f"{self._url}/refdata/id/{refdata_id}"
+        res = await self._get(f"{self._url}/refdata/id/{refdata_id}", "Failed staging refdata")
+        return models.ReferenceData.model_validate(res)
+
+    async def get_ai_model(self, key: models.AIModelKey) -> models.AIModel:
+        """
+        Get AI model information from the CTS based on its key.
+        """
+        _not_falsy(key, "key")
+        # resolve_tag=false: key.version is always an already-resolved version, never a tag, so
+        # a miss should be an error rather than silently matching an unrelated tag of the same
+        # name.
+        url = (
+            f"{self._url}/ai-models/{key.source.value}/{key.model}@{key.version}"
+            + "?resolve_tag=false"
+        )
+        res = await self._get(url, "Failed staging AI model")
+        return models.AIModel.model_validate(res)
+
+    async def _get(self, url: str, action: str) -> dict[str, Any] | None:
         async with self._sess.get(url) as resp:
-            res = await self._check_resp(resp, "Failed staging refdata")
-        return models.ReferenceData.parse_obj(res)
+            return await self._check_resp(resp, action)
 
     async def update_refdata_state(
         self,
@@ -87,7 +104,7 @@ class CTSRefdataClient:
     ):
         """
         Update refdata state in the CDM Task Service.
-        
+
         refdata_id - the ID of the refdata to update.
         cluster - the cluster to update.
         new_state - the new state for the refdata.
@@ -95,17 +112,51 @@ class CTSRefdataClient:
         traceback - the error traceback if the new state is error.
         """
         _require_string(refdata_id, "refdata_id")
+        await self._update_staging_state(
+            f"refdata/{refdata_id}",
+            cluster, new_state, "Failed updating refdata state", admin_error, traceback
+        )
+
+    async def update_ai_model_state(
+        self,
+        key: models.AIModelKey,
+        cluster: sites.Cluster,
+        new_state: models.StagingState,
+        admin_error: str | None = None,
+        traceback: str | None = None,
+    ):
+        """
+        Update AI model staging state in the CDM Task Service.
+
+        key - the key of the AI model to update.
+        cluster - the cluster to update.
+        new_state - the new state for the AI model.
+        admin_error - an error suitable for display to service admins if the new state is error.
+        traceback - the error traceback if the new state is error.
+        """
+        _not_falsy(key, "key")
+        await self._update_staging_state(
+            f"ai-models/{key.source.value}/{key.model}/{key.version}",
+            cluster, new_state, "Failed updating AI model state", admin_error, traceback
+        )
+
+    async def _update_staging_state(
+        self,
+        entity_path: str,
+        cluster: sites.Cluster,
+        new_state: models.StagingState,
+        action: str,
+        admin_error: str | None,
+        traceback: str | None,
+    ):
         _not_falsy(cluster, "cluster")
         _not_falsy(new_state, "new_state")
-        url = (
-            f"{self._url}/external_exec/refdata/{refdata_id}/{cluster.value}/"
-            + f"update/{new_state.value}"
-        )
+        url = f"{self._url}/external_exec/{entity_path}/{cluster.value}/update/{new_state.value}"
         payload = None
         if new_state == models.StagingState.ERROR:
-            payload = {"admin_error":admin_error, "traceback":traceback}
+            payload = {"admin_error": admin_error, "traceback": traceback}
         async with self._sess.put(url, json=payload) as resp:
-            await self._check_resp(resp, "Failed updating refdata state")
+            await self._check_resp(resp, action)
 
     async def close(self):
         """

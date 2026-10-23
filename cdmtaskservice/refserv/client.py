@@ -12,6 +12,7 @@ import logging
 from typing import Self, Any
 
 from cdmtaskservice.arg_checkers import require_string as _require_string, not_falsy as _not_falsy
+from cdmtaskservice import models
 from cdmtaskservice import sites
 
 
@@ -73,15 +74,32 @@ class RefdataServiceClient:
     async def stage_refdata(self, refdata_id: str, cluster: sites.Cluster):
         """
         Start the refdata staging process.
-        
+
         refdata_id - the ID of the refdata in the CDM Task Service.
         cluster - the cluter for which the refdata is being deployed.
         """
         _require_string(refdata_id, "refdata_id")
         _not_falsy(cluster, "cluster")
         url = f"{self._url}/refdata/{refdata_id}/{cluster.value}"
+        await self._post(url, "Failed staging refdata")
+
+    async def stage_ai_model(self, key: models.AIModelKey, cluster: sites.Cluster):
+        """
+        Start the AI model staging process.
+
+        key - the key of the AI model to stage.
+        cluster - the cluster for which the AI model is being staged.
+        """
+        _not_falsy(key, "key")
+        _not_falsy(cluster, "cluster")
+        url = (
+            f"{self._url}/ai-models/{key.source.value}/{key.model}/{key.version}/{cluster.value}"
+        )
+        await self._post(url, "Failed staging AI model")
+
+    async def _post(self, url: str, action: str):
         async with self._sess.post(url) as resp:
-            await self._check_resp(resp, "Failed staging refdata")
+            await self._check_resp(resp, action)
 
     async def close(self):
         """

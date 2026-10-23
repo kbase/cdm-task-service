@@ -9,7 +9,11 @@ from cdmtaskservice.condor.client import CondorClient, ProcDetails, ProcState, P
 from cdmtaskservice import sites
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.exceptions import (
-    InvalidJobStateError, JobRecoveryError, UnsupportedOperationError
+    InvalidAIModelStateError,
+    InvalidJobStateError,
+    InvalidReferenceDataStateError,
+    JobRecoveryError,
+    UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.kbase import (
     KBaseRunner, KBaseSubjobMonitor, ExternalRunnerTimeoutError
@@ -97,6 +101,44 @@ def _recovery_job(state=models.JobState.ERROR, cluster_ids=_UNSET, num_container
 
 
 _JOB = _job()
+
+
+def _refdata(state=models.StagingState.CREATED):
+    return models.ReferenceData(
+        id="refdata-id",
+        file="bucket/refdata.tgz",
+        unpack=False,
+        registered_by="someuser",
+        registered_on=_T,
+        statuses=[models.StagingStatus(
+            cluster=sites.Cluster.KBASE,
+            state=state,
+            transition_times=[models.StagingStateTransition(
+                state=state,
+                time=_T,
+            )],
+        )],
+    )
+
+
+def _ai_model(state=models.StagingState.CREATED):
+    return models.AdminAIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_T,
+        statuses=[models.AdminStagingStatus(
+            cluster=sites.Cluster.KBASE,
+            state=state,
+            transition_times=[models.StagingStateTransition(
+                state=state,
+                time=_T,
+            )],
+            cleaned=False,
+        )],
+    )
 
 
 def _update(admin_error=None, exit_code=None, outputs=None, traceback=None,
@@ -3068,3 +3110,214 @@ async def test_backfill_htcondor_stats_save_error_continues(caplog):
     assert "HTC stats backfill: failed to save stats for subjob 0 of job jid" in caplog.text
     assert "db down" in caplog.text
     assert "subjob 1" not in caplog.text
+
+
+######
+# stage_refdata tests
+######
+
+
+async def test_stage_refdata_bad_args():
+    # objmeta is not used by stage_refdata in kbase, just NERSC
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^refdata is required$"):
+        await runner.stage_refdata(None, None)
+
+
+async def test_stage_refdata_wrong_state():
+    runner, _, _, _, _ = _make_runner()
+    refdata = _refdata(state=models.StagingState.DOWNLOAD_SUBMITTED)
+    with pytest.raises(
+        InvalidReferenceDataStateError, match="^Reference data must be in the created state$"
+    ):
+        await runner.stage_refdata(refdata, None)
+
+
+async def test_stage_refdata():
+    runner, _, _, updates, _ = _make_runner()
+    refdata = _refdata()
+    await runner.stage_refdata(refdata, None)
+    runner._refcli.stage_refdata.assert_called_once_with(refdata.id, sites.Cluster.KBASE)
+    updates.handle_exception.assert_not_called()
+
+
+async def test_stage_refdata_refcli_error():
+    runner, _, _, updates, _ = _make_runner()
+    refdata = _refdata()
+    err = IOError("connection refused")
+    runner._refcli.stage_refdata.side_effect = err
+    await runner.stage_refdata(refdata, None)
+    runner._refcli.stage_refdata.assert_called_once_with(refdata.id, sites.Cluster.KBASE)
+    updates.handle_exception.assert_called_once_with(
+        err, refdata.id, "starting staging for", entity_type=models.EntityType.REFDATA
+    )
+
+
+######
+# refdata_complete tests
+######
+
+
+async def test_refdata_complete_unsupported():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(
+        UnsupportedOperationError, match="^This method is not supported for the kbase job flow$"
+    ):
+        await runner.refdata_complete("refdata-id")
+
+
+######
+# update_refdata_state tests
+######
+
+
+@pytest.mark.parametrize("bad_refdata_id", [None, "", "   "])
+async def test_update_refdata_state_bad_args(bad_refdata_id):
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^refdata_id is required$"):
+        await runner.update_refdata_state(bad_refdata_id, models.StagingState.COMPLETE)
+    with pytest.raises(ValueError, match="^new_state is required$"):
+        await runner.update_refdata_state("refdata-id", None)
+
+
+async def test_update_refdata_state_unsupported_state():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(
+        UnsupportedOperationError, match="^Cannot update refdata to state created$"
+    ):
+        await runner.update_refdata_state("refdata-id", models.StagingState.CREATED)
+
+
+async def test_update_refdata_state_download_submitted():
+    runner, mongo, _, _, _ = _make_runner()
+    await runner.update_refdata_state("refdata-id", models.StagingState.DOWNLOAD_SUBMITTED)
+    mongo.update_refdata_state.assert_called_once_with(
+        sites.Cluster.KBASE, "refdata-id", update_state.submitted_staging_download(), _T
+    )
+
+
+async def test_update_refdata_state_complete():
+    runner, mongo, _, _, _ = _make_runner()
+    await runner.update_refdata_state("refdata-id", models.StagingState.COMPLETE)
+    mongo.update_refdata_state.assert_called_once_with(
+        sites.Cluster.KBASE, "refdata-id", update_state.staging_complete(), _T
+    )
+
+
+async def test_update_refdata_state_error():
+    runner, mongo, _, _, _ = _make_runner()
+    update = models.StagingStateUpdate(admin_error="boom", traceback="tb")
+    await runner.update_refdata_state("refdata-id", models.StagingState.ERROR, update)
+    mongo.update_refdata_state.assert_called_once_with(
+        sites.Cluster.KBASE,
+        "refdata-id",
+        update_state.staging_error("An unexpected error occurred", "boom", traceback="tb"),
+        _T,
+    )
+
+
+######
+# stage_ai_model tests
+######
+
+
+async def test_stage_ai_model_bad_args():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^ai_model is required$"):
+        await runner.stage_ai_model(None)
+
+
+async def test_stage_ai_model_wrong_state():
+    runner, _, _, _, _ = _make_runner()
+    ai_model = _ai_model(state=models.StagingState.DOWNLOAD_SUBMITTED)
+    with pytest.raises(InvalidAIModelStateError, match="^AI model must be in the created state$"):
+        await runner.stage_ai_model(ai_model)
+
+
+async def test_stage_ai_model():
+    runner, _, _, updates, _ = _make_runner()
+    ai_model = _ai_model()
+    await runner.stage_ai_model(ai_model)
+    runner._refcli.stage_ai_model.assert_called_once_with(ai_model.key, sites.Cluster.KBASE)
+    updates.handle_exception.assert_not_called()
+
+
+async def test_stage_ai_model_refcli_error():
+    runner, _, _, updates, _ = _make_runner()
+    ai_model = _ai_model()
+    err = IOError("connection refused")
+    runner._refcli.stage_ai_model.side_effect = err
+    await runner.stage_ai_model(ai_model)
+    runner._refcli.stage_ai_model.assert_called_once_with(ai_model.key, sites.Cluster.KBASE)
+    updates.handle_exception.assert_called_once_with(
+        err, ai_model.key, "starting staging for", entity_type=models.EntityType.AI_MODEL
+    )
+
+
+######
+# ai_model_complete tests
+######
+
+
+async def test_ai_model_complete_unsupported():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(
+        UnsupportedOperationError, match="^This method is not supported for the kbase job flow$"
+    ):
+        await runner.ai_model_complete(
+            models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+        )
+
+
+######
+# update_ai_model_state tests
+######
+
+
+async def test_update_ai_model_state_bad_args():
+    runner, _, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    with pytest.raises(ValueError, match="^key is required$"):
+        await runner.update_ai_model_state(None, models.StagingState.COMPLETE)
+    with pytest.raises(ValueError, match="^new_state is required$"):
+        await runner.update_ai_model_state(key, None)
+
+
+async def test_update_ai_model_state_unsupported_state():
+    runner, _, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    with pytest.raises(
+        UnsupportedOperationError, match="^Cannot update AI model to state created$"
+    ):
+        await runner.update_ai_model_state(key, models.StagingState.CREATED)
+
+
+async def test_update_ai_model_state_download_submitted():
+    runner, mongo, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    await runner.update_ai_model_state(key, models.StagingState.DOWNLOAD_SUBMITTED)
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE, key, update_state.submitted_staging_download(), _T
+    )
+
+
+async def test_update_ai_model_state_complete():
+    runner, mongo, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    await runner.update_ai_model_state(key, models.StagingState.COMPLETE)
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE, key, update_state.staging_complete(), _T
+    )
+
+
+async def test_update_ai_model_state_error():
+    runner, mongo, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    update = models.StagingStateUpdate(admin_error="boom", traceback="tb")
+    await runner.update_ai_model_state(key, models.StagingState.ERROR, update)
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE,
+        key,
+        update_state.staging_error("An unexpected error occurred", "boom", traceback="tb"),
+        _T,
+    )
