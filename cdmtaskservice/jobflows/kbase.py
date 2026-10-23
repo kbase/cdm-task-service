@@ -1184,18 +1184,18 @@ class KBaseRunner(JobFlow):
         self,
         refdata_id: str,
         new_state: models.StagingState,
-        update: models.RefdataUpdate | None = None
+        update: models.StagingStateUpdate | None = None
     ):
         """
         Update refdata state for the KBase site.
-        
+
         refdata_id - the reference data's ID.
         new_state - the new state for the reference data.
         update - the update to apply.
         """
         _require_string(refdata_id, "refdata_id")
         _not_falsy(new_state, "new_state")
-        update = update or models.RefdataUpdate()
+        update = update or models.StagingStateUpdate()
         if new_state not in self._COMMON_STATE_TO_UPDATE_REFDATA_FUNC:
             raise UnsupportedOperationError(
                 f"Cannot update refdatqa to state {new_state.value}"

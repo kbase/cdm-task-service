@@ -1620,12 +1620,12 @@ class AdminReferenceData(_ReferenceDataRoot):
     )]
 
 
-class RefdataUpdate(BaseModel):
-    """ An update to the state of a reference data staging process. """
-    
+class StagingStateUpdate(BaseModel):
+    """ An update to the state of a data staging process. """
+
     admin_error: Annotated[str | None, Field(
         examples=["The middle fell off"],
-        description="The error that occurred when staging refdata, suitable for displaying to a "
+        description="The error that occurred during staging, suitable for displaying to a "
             + "service admin.\n"
             + "Ignored if the new state isn't the error state."
     )] = None

@@ -1383,7 +1383,7 @@ async def update_refdata(
         }},
         description="The new state for the refdata.",
     )],
-    update: models.RefdataUpdate | None = None,
+    update: models.StagingStateUpdate | None = None,
     user: CTSUser=Depends(_AUTH),
 ):
     _ensure_refdata_service(user, "Only refdata services can update refdata state.")
