@@ -182,7 +182,7 @@ sibling path-building helpers/methods (not edits to the existing ones) in `nersc
 | Parameter fields (new) | `Parameter.ai_model_source` (`AIModelSource \| None`) + `Parameter.ai_model` (`str \| None`, the `model@ref` part only), both required when `type is AI_MODEL` — same two-part split as the GET routes' `{source}/{model_ref:path}` (Chunk 10); `ai_model` is rewritten in place to the resolved `model@<version>` form at submission time (`ref` before resolution, `version` after — same distinction as Chunk 5's registration) |
 | Parameter type | `ParameterType.AI_MODEL` — unlike `INPUT_FILES`/`MANIFEST_FILE`, multiple `AI_MODEL` `Parameter`s may appear in one job's `args`/`environment` (e.g. separate env vars for a cheap/medium/high-reasoning model), each resolving independently |
 | `Parameters` method (new) | `get_ai_model_parameters(self) -> list[Parameter]` — collects every `AI_MODEL`-typed `Parameter` across `args`/`environment`, analogous to `get_file_parameter()` but multi-valued (`CONTAINTER_NUMBER`-style exemption from the "at most one" check in `_check_parameter`) |
-| Routes | Admin routes on the existing shared `ROUTER_ADMIN`, no dedicated admin router — `POST /admin/ai-models/{source}/{model_ref:path}` (registration, `model_ref` here is `model@ref`, no request body), `GET /admin/ai-models/{source}/{model_ref:path}`, `PUT /admin/ai-models/{source}/{model:path}/{version}/{cluster}/recover`, `DELETE /admin/ai-models/{source}/{model:path}/{version}/{cluster}/clean` (mirroring refdata's `routes.py:670,986,1004,1026`; recover/clean's bare `{version}` segment is always a resolved hash, never `ref` — see Chunk 3's safety note). Public routes get their own new `ROUTER_AI_MODELS` (`tags=["AI Models - Experimental"]`, `prefix="/ai-models"`), `include_router`'d directly after `ROUTER_REFDATA` in `app.py` so the OpenAPI UI section lands right after "Reference Data" — `GET /ai-models` and `GET /ai-models/{source}/{model_ref:path}` (mirroring `GET /images/{image_id:path}`); see Chunk 10 |
+| Routes | Admin routes on the existing shared `ROUTER_ADMIN`, no dedicated admin router — `POST /admin/ai-models/{source}/{model_ref:path}` (registration, `model_ref` here is `model@ref`, no request body), `GET /admin/ai-models/{source}/{model_ref:path}`, `PUT /admin/ai-models/{source}/{model:path}/{version}/{cluster}/recover`, `DELETE /admin/ai-models/{source}/{model:path}/{version}/{cluster}/clean` (mirroring refdata's `routes.py:670,986,1004,1026`; recover/clean's bare `{version}` segment is always a resolved hash, never `ref` — see Chunk 3's safety note). Public routes get their own new `ROUTER_AI_MODELS` (`tags=["AI Models - Experimental"]`, `prefix="/ai-models"`), `include_router`'d directly after `ROUTER_IMAGES` and before `ROUTER_REFDATA` in `app.py` so the OpenAPI UI section lands between "Images" and "Reference Data" — `GET /ai-models` and `GET /ai-models/{source}/{model_ref:path}` (mirroring `GET /images/{image_id:path}`); see Chunk 10 |
 
 ---
 
@@ -1041,10 +1041,10 @@ caller only has a possibly-ambiguous user-supplied string (the two GETs).
 the router-level tag is both this router's OpenAPI grouping label and (via the `- Experimental`
 suffix) its experimental marking, the same mechanism `pipelines/routes.py`'s
 `ROUTER_PIPELINES`/`ROUTER_ADMIN_PIPELINES` already use. In `app.py`, `app.include_router(
-routes.ROUTER_AI_MODELS)` is added **directly after** `app.include_router(routes.ROUTER_REFDATA)`
-(`app.py:244`) and before `ROUTER_PIPELINES` (`app.py:245`) — `include_router` call order is what
-determines section order in the OpenAPI UI, so this places the new "AI Models" section immediately
-after "Reference Data", keeping the two related, mutually-exclusive-mount concepts adjacent in the
+routes.ROUTER_AI_MODELS)` is added **directly after** `app.include_router(routes.ROUTER_IMAGES)`
+and before `app.include_router(routes.ROUTER_REFDATA)` — `include_router` call order is what
+determines section order in the OpenAPI UI, so this places the new "AI Models" section between
+"Images" and "Reference Data", keeping the two related, mutually-exclusive-mount concepts adjacent in the
 docs:
 - `GET /ai-models` (mirrors `GET /refdata`, `routes.py:552`) for catalog browsing — this one stays
   public since the catalog itself (which models exist, their staging status) isn't sensitive,

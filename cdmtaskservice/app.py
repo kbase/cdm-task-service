@@ -241,6 +241,7 @@ def create_app():
     app.include_router(routes.ROUTER_SITES)
     app.include_router(routes.ROUTER_JOBS)
     app.include_router(routes.ROUTER_IMAGES)
+    app.include_router(routes.ROUTER_AI_MODELS)
     app.include_router(routes.ROUTER_REFDATA)
     app.include_router(pipeline_routes.ROUTER_PIPELINES)
     app.include_router(routes.ROUTER_ADMIN)
@@ -291,6 +292,7 @@ def create_refdata_app():
     app.add_middleware(_AppMiddleWare)
     # This server is not expected to be exposed to the world so no CORS middleware
     app.include_router(routes.ROUTER_GENERAL)
+    app.include_router(refroutes.ROUTER_AI_MODELS)
     app.include_router(refroutes.ROUTER_REFDATA)
 
     return app

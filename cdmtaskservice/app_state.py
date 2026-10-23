@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from typing import NamedTuple, Callable
 
+from cdmtaskservice.ai_models.registry import AIModelRegistry
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.config import CDMTaskServiceConfig
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
@@ -83,6 +84,8 @@ class CTSAppState(AppState):
     """ The job state manager class. """
     refdata: Refdata
     """ The refdata manager class. """
+    ai_model_registry: AIModelRegistry
+    """ The AI model registry class. """
     images: Images
     """ The Docker images manager class. """
     pipeline_registry: PipelineRegistry
@@ -251,6 +254,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         logr.info("Done")
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
+        ai_model_registry = AIModelRegistry(mongodao)
         images = Images(mongodao, imginfo, refdata)
         job_state = JobState(  # this also has a lot of required args, yech
             mongodao,
@@ -275,6 +279,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
             sfapi_client_provider=sfcliprov,
             job_state=job_state,
             refdata=refdata,
+            ai_model_registry=ai_model_registry,
             images=images,
             pipeline_registry=pipeline_registry,
             jobflow_manager=flowman,
