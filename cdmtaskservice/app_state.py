@@ -157,6 +157,12 @@ async def build_refdata_app(app: FastAPI, cfg: CDMRefdataServiceConfig, service_
         await s3cfg.initialize_clients()
         dest.register("S3 clients", s3cfg.close())
         logr.info("Done")
+        logr.info("Checking CTS refdata token... ")
+        # Can't ask the CTS to validate the token instead, since the CTS depends on this
+        # service being up to start, so checking in with the CTS here could cause a deadlock
+        # at startup if the CTS is waiting on this service while this service waits on the CTS.
+        await kbauth.get_user(cfg.cts_refdata_token)
+        logr.info("Done")
         logr.info("Initializing CTS refdata client... ")
         refcli = await CTSRefdataClient.create(cfg.cts_root_url, cfg.cts_refdata_token)
         dest.register("CTS refdata client", refcli.close())

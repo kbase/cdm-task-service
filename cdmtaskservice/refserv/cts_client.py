@@ -23,12 +23,12 @@ class CTSRefdataClient:
     async def create(cls, url: str, token: str) -> Self:
         """
         Create the client
-        
+
         url - the url of the CTS.
         token - the token to use to contact the  CTS.
         """
         c = cls(url, token)
-        # We deliberately don't call the CTS here to avoid a deadlock, as it's trying to 
+        # We deliberately don't call the CTS here to avoid a deadlock, as it's trying to
         # do the same thing
         # TDOO CODE at some point will need a way of checking CTS <-> refdata connectivity
         return c
