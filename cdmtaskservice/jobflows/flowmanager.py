@@ -2,21 +2,142 @@
 Handles what job flows are available to users and their current state.
 """
 
+from abc import ABC, abstractmethod
 import asyncio
 from async_lru import alru_cache
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
+from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
+from cdmtaskservice.pipelines import models as pipe_models
+from cdmtaskservice.s3.client import S3ObjectMeta
 from cdmtaskservice import sites
+from cdmtaskservice.user import CTSUser
 
 
-class JobFlow:
+class JobFlow(ABC):
     """
     A super class for job flows.
     """
-    # This could be developed into an abstract class if we want to be strict about typing.
+
+    @abstractmethod
+    async def preflight(self, user: CTSUser, job_id: str, job_input: models.JobInput):
+        """ Check that a job can be run prior to submission. """
+
+    @abstractmethod
+    async def preflight_pipeline(self, user: CTSUser, job_id: str):
+        """ Check that a pipeline job can be run prior to submission. """
+
+    @abstractmethod
+    async def get_subjobs(
+        self, job_id: str, container_num: int = None
+    ) -> models.SubJob | list[models.SubJob]:
+        """ Get the subjob(s) for a job. """
+
+    @abstractmethod
+    async def get_job_external_runner_details(
+        self,
+        job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
+        container_number: int | None = None,
+    ) -> dict[str, Any]:
+        """ Get details about the external runner for a job. """
+
+    @abstractmethod
+    async def get_job_external_runner_status(
+        self,
+        job: models.AdminJobDetails | pipe_models.AdminPipelineJob,
+    ) -> models.ExternalRunnerStatus:
+        """ Get the status of the external runner for a job. """
+
+    @abstractmethod
+    async def start_job(
+        self, job: models.Job | pipe_models.AdminPipelineJob, objmeta: list[S3ObjectMeta]
+    ):
+        """ Start a job running. """
+
+    @abstractmethod
+    async def download_complete(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
+        """ Continue a job after its input files have finished downloading. """
+
+    @abstractmethod
+    async def job_complete(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
+        """ Continue a job after it has finished running. """
+
+    @abstractmethod
+    async def upload_complete(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
+        """ Continue a job after its output files have finished uploading. """
+
+    @abstractmethod
+    async def error_log_upload_complete(self, job: models.AdminJobDetails):
+        """ Continue a job after its error logs have finished uploading. """
+
+    @abstractmethod
+    async def update_subjob_heartbeat(self, job_id: str, container_num: int):
+        """ Update the heartbeat for a subjob. """
+
+    @abstractmethod
+    async def update_container_state(
+        self,
+        job: models.AdminJobDetails,
+        container_num: int,
+        new_state: models.JobState,
+        update: models.ContainerUpdate,
+    ):
+        """ Update the state of a container (subjob). """
+
+    @abstractmethod
+    async def cancel_job(self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob):
+        """ Cancel a running job. """
+
+    @abstractmethod
+    async def clean_job(
+        self, job: models.AdminJobDetails | pipe_models.AdminPipelineJob, force: bool = False
+    ):
+        """ Clean up any intermediate data for a job. """
+
+    @abstractmethod
+    async def recover_job(self, job: models.AdminJobDetails, force: bool = False):
+        """ Attempt to recover a job that may be stuck. """
+
+    @abstractmethod
+    async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):
+        """ Start staging reference data at this job flow's cluster. """
+
+    @abstractmethod
+    async def refdata_complete(self, refdata_id: str):
+        """ Continue a refdata staging process after its download has completed. """
+
+    @abstractmethod
+    async def update_refdata_state(
+        self,
+        refdata_id: str,
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None = None,
+    ):
+        """ Update the staging state of reference data for this job flow's cluster. """
+
+    @abstractmethod
+    async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
+        """ Clean up any intermediate staging data for reference data. """
+
+    @abstractmethod
+    async def stage_ai_model(self, ai_model: models.AdminAIModel):
+        """ Start staging an AI model snapshot at this job flow's cluster. """
+
+    @abstractmethod
+    async def ai_model_complete(self, key: models.AIModelKey):
+        """ Continue an AI model staging process after its download has completed. """
+
+    @abstractmethod
+    async def update_ai_model_state(
+        self,
+        key: models.AIModelKey,
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None = None,
+    ):
+        """ Update the staging state of an AI model for this job flow's cluster. """
 
 
 @dataclass(frozen=True)

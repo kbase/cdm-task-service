@@ -260,7 +260,7 @@ async def build_app(app: FastAPI, cfg: CDMTaskServiceConfig, service_name: str):
         logr.info("Done")
         imginfo = await DockerImageInfo.create(Path(cfg.crane_path).expanduser().absolute())
         refdata = Refdata(mongodao, s3cfg.get_internal_client(), coman, flowman)
-        ai_model_registry = AIModelRegistry(mongodao)
+        ai_model_registry = AIModelRegistry(mongodao, coman, flowman)
         images = Images(mongodao, imginfo, refdata)
         job_state = JobState(  # this also has a lot of required args, yech
             mongodao,
