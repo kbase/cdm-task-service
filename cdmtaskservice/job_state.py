@@ -282,16 +282,32 @@ class JobState:
         return new_input, meta
 
     async def _check_refdata(self, job_input: models.JobInput, image: models.Image):
-        if not image.refdata_id:
+        uses_ai_models = job_input.uses_ai_model_store()
+        if not image.refdata_id and not uses_ai_models:
             return
-        if (
-            not job_input.params.staged_data_mount_point
-            and not image.default_staged_data_mount_point
-        ):
+        if image.refdata_id and uses_ai_models:
             raise IllegalParameterError(
-                "Image for job requires reference data but no refdata mount point "
+                "A job may not request both reference data and AI model support"
+        )
+        mount_point = models.resolve_staged_data_mount_point(
+            job_input.params, image.default_staged_data_mount_point
+        )
+        if not mount_point:
+            # Only reachable for the refdata case - the AI model case always has a mount
+            # point, defaulting to DEFAULT_AI_MODEL_MOUNT_POINT if nothing else is specified.
+            raise IllegalParameterError(
+                "Image for job requires reference data but no staged data mount point "
                 + "is specified in the job input parameters or the image details"
         )
+        if mount_point in (
+            job_input.params.input_mount_point, job_input.params.output_mount_point
+        ):
+            raise IllegalParameterError(
+                f"The staged data mount point '{mount_point}' conflicts with the job's input "
+                + "or output mount point"
+        )
+        if not image.refdata_id:
+            return
         refdata = await self._ref.get_refdata_by_id(image.refdata_id)
         refstatus = refdata.get_status_for_cluster(job_input.cluster)
         if refstatus.state != models.StagingState.COMPLETE:

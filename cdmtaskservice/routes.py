@@ -643,10 +643,13 @@ async def approve_image(
     )] = None,
     default_staged_data_mount_point: Annotated[str, Query(
         openapi_examples={"mount_point": {"value": "/reference_data"}},
-        description="The default mount point for the image's reference data "
-            + "in the container. Overridden by the mount point in a job submission if provided "
-            + "there. If a default mount point is provided, then providing a mount point in "
-            + "the job submission is optional. Must be an absolute path.",
+        description="The default mount point for the image's reference data, or for the AI "
+            + "model store in a job that requests AI models, in the container. Overridden by "
+            + "the mount point in a job submission if provided there. If a default mount "
+            + "point is provided, then providing a mount point in the job submission is "
+            + "optional. Must be an absolute path. A job requesting AI models gets a mount "
+            + "point regardless, defaulting to '/ai_models' if none is specified here or in "
+            + "the job submission - there is no equivalent default for reference data.",
         pattern=models.ABSOLUTE_PATH_REGEX,
         min_length=1,
         max_length=1024,

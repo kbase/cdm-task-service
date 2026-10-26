@@ -108,12 +108,10 @@ class AIModelRegistry:
     @staticmethod
     def _split_model_ref(model_ref: str) -> tuple[str, str]:
         model_ref = _require_string(model_ref, "model_ref")
-        model, sep, ref = model_ref.rpartition("@")
-        if not sep or not model or not ref:
-            raise IllegalParameterError(
-                f"Invalid AI model reference '{model_ref}'; expected the form model@ref"
-            )
-        return model, ref
+        try:
+            return models.split_ai_model_ref(model_ref)
+        except ValueError as e:
+            raise IllegalParameterError(str(e)) from e
 
     @staticmethod
     def _resolve_ref(source: models.AIModelSource, model: str, ref: str) -> ResolvedRevision:
