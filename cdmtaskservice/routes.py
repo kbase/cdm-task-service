@@ -598,11 +598,32 @@ _ANN_AI_MODEL_REF = Annotated[str, FastPath(
 )]
 
 
+class AIModels(BaseModel):
+    """ The response to a request to get AI model information in the system. """
+    data: Annotated[list[models.AIModel], Field(description="The AI models.")]
+    # if we add paging / sorting / filtering, could add more info here
+
+
+@ROUTER_AI_MODELS.get(
+    "",
+    response_model=AIModels,
+    response_model_exclude_none=True,
+    summary="Get AI models",
+    description="Get information about registered AI models in the system, including their "
+        + "staging status, in no particular order. Returns at most 1000 records.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_ai_models(r: Request) -> AIModels:
+    registry = app_state.get_app_state(r).ai_model_registry
+    ai_models = await registry.get_ai_models()
+    return AIModels(data=ai_models)
+
+
 @ROUTER_AI_MODELS.get(
     "/{source}/{model_ref:path}",
     response_model=models.AIModel,
     response_model_exclude_none=True,
-    summary="Get AI model information",
+    summary="Get an AI model by model and ref",
     description="Get information about a registered AI model snapshot, including its staging "
         + "status, by its source and combined model@ref reference.\n\n"
         + "This is an experimental API and is subject to change without notice."

@@ -152,6 +152,13 @@ class AIModelRegistry:
             statuses=statuses,
         )
 
+    async def get_ai_models(self) -> list[models.AIModel]:
+        """
+        Get AI models in the system in no particular order. Returns at most 1000 records.
+        """
+        # pass through method, don't want the routes talking directly to mongo
+        return await self._mongo.get_ai_models()
+
     async def get_ai_model(
         self,
         source: models.AIModelSource,

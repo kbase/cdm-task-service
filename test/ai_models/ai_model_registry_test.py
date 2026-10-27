@@ -343,3 +343,12 @@ async def test_get_ai_model_non_default_args():
         models.AIModelSource.HUGGINGFACE, "org/name", "main",
         resolve_tag=True, populate_tags=True, as_admin=True,
     )
+
+
+async def test_get_ai_models():
+    registry, mongo, _ = _make_registry()
+    expected = [models.AIModel.model_construct(), models.AIModel.model_construct()]
+    mongo.get_ai_models.return_value = expected
+    res = await registry.get_ai_models()
+    assert res == expected
+    mongo.get_ai_models.assert_called_once_with()
