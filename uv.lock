@@ -380,7 +380,7 @@ requires-dist = [
     { name = "python-json-logger", specifier = "==4.2.0" },
     { name = "requests", specifier = "==2.34.2" },
     { name = "semver", specifier = "==3.1.0" },
-    { name = "sfapi-client", specifier = "==0.6.0" },
+    { name = "sfapi-client", specifier = "==0.7.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.54.0" },
     { name = "yarl", specifier = "==1.25.1" },
 ]
@@ -1782,7 +1782,7 @@ wheels = [
 
 [[package]]
 name = "sfapi-client"
-version = "0.6.0"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -1791,9 +1791,9 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/26/6b/d7fc942cd5fef285c27b2545d867fedbacb491126c92c83ddcc62a4b9002/sfapi_client-0.6.0.tar.gz", hash = "sha256:122ac4e2d0688a4af4c7328e0e82449f2378507f4a39bf06d3840337c89a758c", size = 62097, upload-time = "2026-07-14T21:35:56.56Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/cb/fb789118953f01ad20024ca17899cb4ca109a49aab35c19314e202dc379b/sfapi_client-0.7.0.tar.gz", hash = "sha256:c456e9b694641b69e2af8469cddbafdbee26c9309dae02f99dc2793824cc01c9", size = 63861, upload-time = "2026-10-28T17:17:26.205Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/ad/631cb3b7466682f53eb495608d23ac63826029cd525da7e43c0f9058387b/sfapi_client-0.6.0-py3-none-any.whl", hash = "sha256:14396215c662508e2de132357d289bade07f9abb8df2c2a74dc407cc551eacb8", size = 50571, upload-time = "2026-07-14T21:35:55.139Z" },
+    { url = "https://files.pythonhosted.org/packages/11/fe/3b358f6a0f370da58915dd77dc32e9c1b5e59ee171a76a76e4554f6b7705/sfapi_client-0.7.0-py3-none-any.whl", hash = "sha256:4fe04aa9f931f21dcfea203c5c0b35753d39de8a51b70606a12cfda19b1e0a52", size = 51039, upload-time = "2026-10-28T17:17:24.719Z" },
 ]
 
 [[package]]
