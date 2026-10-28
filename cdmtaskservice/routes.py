@@ -595,6 +595,24 @@ async def get_refdata_by_path(
 _ANN_AI_MODEL_REF = Annotated[str, FastPath(
     openapi_examples={"model ref": {"value": "org/name@main"}},
     description="The AI model's combined model@ref reference.",
+    min_length=1,
+    max_length=1000,
+)]
+
+
+_ANN_AI_MODEL_MODEL = Annotated[str, FastPath(
+    openapi_examples={"model": {"value": "org/name"}},
+    description="The AI model identifier.",
+    min_length=1,
+    max_length=500,
+)]
+
+
+_ANN_AI_MODEL_VERSION = Annotated[str, FastPath(
+    openapi_examples={"version": {"value": "abc123def456"}},
+    description="The resolved AI model version.",
+    min_length=1,
+    max_length=200,
 )]
 
 
@@ -1152,6 +1170,31 @@ async def clean_refdata(
 
 
 @ROUTER_ADMIN.put(
+    "/ai-models/{source}/{model:path}/{version}/{cluster}/recover",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Recover stalled AI model staging",
+    description="Recover an AI model staging process. Currently only handles the "
+        + "case where a site does not exist in the AI model's staging data structure. May be "
+        + "extended in the future to cover other cases.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def recover_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model: _ANN_AI_MODEL_MODEL,
+    version: _ANN_AI_MODEL_VERSION,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which recovery will be attempted."
+    )],
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can recover AI models.")
+    registry = app_state.get_app_state(r).ai_model_registry
+    await registry.recover_ai_model(models.AIModelKey(source, model, version), cluster)
+
+
+@ROUTER_ADMIN.put(
     "/sites/{site}/active",
     summary="Activate a site",
     description="Set a site to active, allowing submission of jobs and other activities "
@@ -1312,6 +1355,33 @@ async def download_complete(
 
 
 @ROUTER_CALLBACKS.get(
+    f"/{get_ai_model_download_complete_callback()}/{{source}}/{{model:path}}/{{version}}"
+        + "/{cluster}",
+    summary="Report AI model data download complete",
+    description="Report that data download for an AI model is complete. This method is not "
+        + "expected to be called by users.",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def ai_model_download_complete(
+    r: Request,
+    source: models.AIModelSource,
+    model: _ANN_AI_MODEL_MODEL,
+    version: _ANN_AI_MODEL_VERSION,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which the AI model download is complete."
+    )],
+):
+    key = models.AIModelKey(source, model, version)
+    logging.getLogger(__name__).info(
+        f"Download reported as complete for AI model {key} on cluster {cluster.value}",
+        extra={logfields.AI_MODEL_ID: str(key), logfields.CLUSTER: cluster.value},
+    )
+    runner = await app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
+    await runner.ai_model_complete(key)
+
+
+@ROUTER_CALLBACKS.get(
     f"/{get_refdata_download_complete_callback()}/{{refdata_id}}/{{cluster}}",
     summary="Report refdata data download complete",
     description="Report that data download for refdata is complete. This method is not expected "
@@ -1332,33 +1402,6 @@ async def refdata_download_complete(
     )
     runner = await app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
     await runner.refdata_complete(refdata_id)
-
-
-@ROUTER_CALLBACKS.get(
-    f"/{get_ai_model_download_complete_callback()}/{{source}}/{{model:path}}/{{version}}"
-        + "/{cluster}",
-    summary="Report AI model data download complete",
-    description="Report that data download for an AI model is complete. This method is not "
-        + "expected to be called by users.",
-    status_code=status.HTTP_204_NO_CONTENT,
-    response_class=Response,
-)
-async def ai_model_download_complete(
-    r: Request,
-    source: models.AIModelSource,
-    model: Annotated[str, FastPath(description="The AI model identifier.")],
-    version: Annotated[str, FastPath(description="The resolved AI model version.")],
-    cluster: Annotated[sites.Cluster, FastPath(
-        description="The cluster for which the AI model download is complete."
-    )],
-):
-    key = models.AIModelKey(source, model, version)
-    logging.getLogger(__name__).info(
-        f"Download reported as complete for AI model {key} on cluster {cluster.value}",
-        extra={logfields.AI_MODEL_ID: str(key), logfields.CLUSTER: cluster.value},
-    )
-    runner = await app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
-    await runner.ai_model_complete(key)
 
 
 @ROUTER_CALLBACKS.get(
@@ -1473,8 +1516,8 @@ async def container_heartbeat(
 async def update_ai_model(
     r: Request,
     source: models.AIModelSource,
-    model: Annotated[str, FastPath(description="The AI model identifier.")],
-    version: Annotated[str, FastPath(description="The resolved AI model version.")],
+    model: _ANN_AI_MODEL_MODEL,
+    version: _ANN_AI_MODEL_VERSION,
     cluster: Annotated[sites.Cluster, FastPath(
         description="The cluster for which the AI model should be updated."
     )],

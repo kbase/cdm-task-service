@@ -2765,3 +2765,84 @@ async def test_update_ai_model_state_fail_inputs(mondb):
         await mc.update_ai_model_state(sites.Cluster.KBASE, key, None, _SAFE_TIME)
     with pytest.raises(ValueError, match="^time is required$"):
         await mc.update_ai_model_state(sites.Cluster.KBASE, key, update, None)
+
+
+async def test_add_ai_model_site(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()  # existing site's update time is _SAFE_TIME
+    await mc.save_ai_model(am)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    status = models.AdminStagingStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=dt,
+        )],
+    )
+    await mc.add_ai_model_site(am.key, status)
+
+    am.statuses.append(status)
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert got == am
+
+    # check that the internal update time is set independently for both sites
+    raw = await mondb.ai_models.find_one({"source": "huggingface", "model": "org/name"})
+    assert raw["statuses"][0]["_update_time"] == _SAFE_TIME
+    assert raw["statuses"][1]["_update_time"] == dt
+
+
+async def test_add_ai_model_site_fail_no_such_model(mondb):
+    mc = await MongoDAO.create(mondb)
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    status = models.AdminStagingStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=_SAFE_TIME,
+        )],
+    )
+    with pytest.raises(
+        NoSuchAIModelError,
+        match=re.escape(f"No AI model with key '{key}' without cluster kbase exists"),
+    ):
+        await mc.add_ai_model_site(key, status)
+
+
+async def test_add_ai_model_site_fail_cluster_already_exists(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    await mc.save_ai_model(am)
+
+    status = models.AdminStagingStatus(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,  # already present from _ai_model()'s default
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=_SAFE_TIME,
+        )],
+    )
+    with pytest.raises(
+        NoSuchAIModelError,
+        match=re.escape(
+            f"No AI model with key '{am.key}' without cluster perlmutter-jaws exists"
+        ),
+    ):
+        await mc.add_ai_model_site(am.key, status)
+
+
+async def test_add_ai_model_site_fail_inputs(mondb):
+    mc = await MongoDAO.create(mondb)
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    status = models.AdminStagingStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=_SAFE_TIME,
+        )],
+    )
+    with pytest.raises(ValueError, match="^key is required$"):
+        await mc.add_ai_model_site(None, status)
+    with pytest.raises(ValueError, match="^status is required$"):
+        await mc.add_ai_model_site(key, None)

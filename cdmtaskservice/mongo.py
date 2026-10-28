@@ -1678,9 +1678,10 @@ class MongoDAO:
             {
                 "id": _require_string(refdata_id, "refdata_id"),
                 # Only match if cluster doesn't exist
-                "statuses.cluster": {"$ne": rds.cluster.value}
+                f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_CLUSTER}":
+                    {"$ne": rds.cluster.value}
             },
-            {"$push": {"statuses": s}}
+            {"$push": {models.FLD_COMMON_STATUSES: s}}
         )
         if not result.matched_count:
             raise NoSuchReferenceDataError(
@@ -2040,6 +2041,32 @@ class MongoDAO:
             update,
             time,
         )
+
+    async def add_ai_model_site(self, key: models.AIModelKey, status: models.AdminStagingStatus):
+        """
+        Add a new site to an existing AI model record.
+
+        key - the key of the AI model to modify.
+        status - the staging status for the new site.
+        """
+        _not_falsy(key, "key")
+        s = _not_falsy(status, "status").model_dump(exclude_none=True)
+        s[_FLD_UPDATE_TIME] = status.transition_times[-1].time
+        result = await self._col_ai_models.update_one(
+            {
+                models.FLD_AI_MODEL_SOURCE: key.source.value,
+                models.FLD_AI_MODEL_MODEL: key.model,
+                models.FLD_AI_MODEL_VERSION: key.version,
+                # Only match if cluster doesn't exist
+                f"{models.FLD_COMMON_STATUSES}.{models.FLD_COMMON_CLUSTER}":
+                    {"$ne": status.cluster.value}
+            },
+            {"$push": {models.FLD_COMMON_STATUSES: s}}
+        )
+        if not result.matched_count:
+            raise NoSuchAIModelError(
+                f"No AI model with key '{key}' without cluster {status.cluster.value} exists"
+            )
 
 
 class NoSuchImageError(Exception):
