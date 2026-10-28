@@ -202,7 +202,9 @@ depends on 3 and 4 (needs the NERSC/KBase mount wiring in place) and defines
 `ParameterType.AI_MODEL`/`Parameter.ai_model_source`/`Parameter.ai_model`/
 `get_ai_model_parameters()`/`uses_ai_model_store()`; 8 depends on 7 (resolves and rewrites the
 `AI_MODEL` `Parameter`s 7
-defines); 9 depends on 7 and 8; 10 depends on 1 and 5.
+defines); 9 depends on 7 and 8; 10 depends on 1 and 5; 10.1 depends on 10 (it reuses Chunk 10's
+`clean_ai_model` plumbing on the job flows and `FlowCleaner`, just reached via the existing
+automatic cleanup scheduler instead of the admin route).
 
 ### Chunk 0 — Shared HuggingFace client (resolve + stage)
 New module `cdmtaskservice/ai_models/huggingface_client.py` with two functions, both thin
@@ -1117,6 +1119,56 @@ matching how the pipelines routes are already marked experimental while live.
 
 Thin routing layer; testable via existing FastAPI TestClient + mocked-service-layer route test
 conventions.
+
+### Chunk 10.1 — Automatic cleanup of AI model staging files
+Chunk 10's `DELETE .../clean` route only covers admin-triggered, on-demand cleanup. Refdata also
+has a second, automatic path: `FlowCleaner._run` (`flow_cleaner.py:228`), run on an
+`AsyncIOScheduler` interval, calls `mongo.process_dirty_refdata(older_than, self._process_refdata)`
+(`mongo.py:1753`), which finds every refdata document with at least one site that is
+`cleaned: False`, in a terminal `StagingState`, and whose status last updated more than
+`minimum_age` ago, and passes each matching document to `FlowCleaner._process_refdata`
+(`flow_cleaner.py:200`). `_process_refdata` then re-checks each site's own
+`cleaned`/`state`/`transition_times` (since `process_dirty_refdata` only guarantees *at least one*
+site qualifies, not that every site in the returned document does), skips any site whose cluster
+isn't currently usable, and otherwise calls `flow.clean_refdata(refdata)` followed by
+`mongo.set_refdata_clean(cluster, refdata.id)` for each qualifying site, logging and swallowing any
+per-site exception so one bad site doesn't block the rest of the sweep. AI models get the identical
+automatic mechanism, not a separate scheduled job or a different polling strategy, since the
+underlying staging-status shape (`StagingState`, `AdminStagingStatus.cleaned`/`transition_times`)
+is already shared between refdata and AI models (Chunk 1) and Chunk 10 already added the manual
+`clean_ai_model` plumbing this automatic path reuses end-to-end.
+
+New `MongoDAO.process_dirty_ai_models(older_than, operation)`, parallel to
+`process_dirty_refdata`: same `$elemMatch` query shape (`FLD_COMMON_CLEANED: False`,
+`FLD_COMMON_STATE` in `StagingState.terminal_states()`, the internal per-site update timestamp
+older than `older_than`) run against the `ai_models` collection instead of `refdata`, passing each
+matching document to `operation` as an `AdminAIModel` (via `_to_ai_model(doc, tags=None,
+as_admin=True)` — `tags` is left unpopulated here for the same reason `get_ai_model`'s
+`populate_tags` defaults to `False` elsewhere (Chunk 1): this sweep only needs `statuses`, so
+there's no reason to pay for the reverse tag-pointer lookup on every dirty document found).
+
+New `FlowCleaner._process_ai_model(ai_model: models.AdminAIModel)`, parallel to `_process_refdata`:
+iterates `ai_model.statuses`, skips any site that's already `cleaned`, not in a terminal state, or
+whose last transition is more recent than `older_than`, skips any site whose cluster isn't
+currently usable, and otherwise calls `flow.clean_ai_model(ai_model)` (Chunk 10's NERSC/KBase/LRC
+implementations, force defaulting to `False`) followed by `mongo.set_ai_model_clean(cluster,
+ai_model.key)`, logging and swallowing per-site exceptions exactly as `_process_refdata` does.
+
+`FlowCleaner._run` gains a third `try`/`except` block, sibling to the existing refdata and job
+blocks, calling `self._mongo.process_dirty_ai_models(older_than, self._process_ai_model)` — same
+independent-failure-isolation shape as the other two sweeps, so an exception raised while sweeping
+AI models can't prevent the job or refdata sweeps from running, and vice versa.
+
+No change to `FlowCleaner.clean_ai_model` (Chunk 10) itself, or to the `minimum_age`/`frequency`
+configuration — both the manual route and this automatic sweep ultimately converge on the same
+per-cluster `flow.clean_ai_model`/`mongo.set_ai_model_clean` calls, just reached via different
+triggers (an admin request vs. the scheduler finding a stale, uncleaned, terminal-state site).
+
+Testable against the existing Mongo test fixture (`process_dirty_ai_models`, mirroring
+`process_dirty_refdata`'s existing test conventions) and with a mocked `flow_manager`/`MongoDAO`
+for `_process_ai_model` (mirroring `_process_refdata`'s equivalent, if/when one is added — today
+neither `_process_refdata` nor `FlowCleaner` in general has automated test coverage, so
+`_process_ai_model` isn't held to a different bar than its refdata sibling).
 
 ---
 

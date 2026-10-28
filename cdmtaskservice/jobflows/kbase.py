@@ -1226,6 +1226,12 @@ class KBaseRunner(JobFlow):
         """
         pass # Intentionally do nothing
 
+    async def clean_ai_model(self, ai_model: models.AdminAIModel, force: bool = False):
+        """
+        Do nothing. There's nothing to clean up.
+        """
+        pass # Intentionally do nothing
+
     async def stage_ai_model(self, ai_model: models.AdminAIModel):
         """
         Start staging an AI model snapshot. It is expected that the AI model has been persisted

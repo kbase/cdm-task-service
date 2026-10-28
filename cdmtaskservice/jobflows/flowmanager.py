@@ -123,6 +123,10 @@ class JobFlow(ABC):
         """ Clean up any intermediate staging data for reference data. """
 
     @abstractmethod
+    async def clean_ai_model(self, ai_model: models.AdminAIModel, force: bool = False):
+        """ Clean up any intermediate staging data for an AI model snapshot. """
+
+    @abstractmethod
     async def stage_ai_model(self, ai_model: models.AdminAIModel):
         """ Start staging an AI model snapshot at this job flow's cluster. """
 

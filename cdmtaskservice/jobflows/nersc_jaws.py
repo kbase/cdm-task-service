@@ -792,6 +792,23 @@ class NERSCJAWSRunner(JobFlow):
             raise IllegalParameterError("Refdata is not in a terminal state and cannot be cleaned")
         await self._nman.clean_refdata(refdata)
 
+    async def clean_ai_model(self, ai_model: models.AdminAIModel, force: bool = False):
+        """
+        Clean up AI model staging files at the remote compute site.
+
+        If any files do not exist they are silently ignored.
+
+        ai_model - the AI model to clean up.
+        force - perform the clean up even if the AI model staging isn't in a terminal state.
+            This may cause undefined behavior.
+        """
+        aistate = _not_falsy(ai_model, "ai_model").get_status_for_cluster(self.CLUSTER)
+        if not force and not aistate.state.is_terminal():
+            raise IllegalParameterError(
+                "AI model is not in a terminal state and cannot be cleaned"
+            )
+        await self._nman.clean_ai_model(ai_model.key)
+
     async def stage_ai_model(self, ai_model: models.AdminAIModel):
         """
         Start staging an AI model snapshot. It is expected that the AI model has been persisted
