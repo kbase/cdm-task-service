@@ -303,12 +303,11 @@ class NERSCJAWSRunner(JobFlow):
             # TODO PERF config / set concurrency
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
             nersc_job_id = await self._nman.download_s3_files(
-                job.id,
+                job,
                 objmeta,
                 presigned,
                 callback_url,
                 insecure_ssl=self._s3insecure,
-                pipeline=job.pipeline_input.get_pipeline_spec() if pipeline else None,
             )
             # Hmm. really this should go through job state but that seems pointless right now.
             # May need to refactor this and the mongo method later to be more generic to
@@ -709,13 +708,11 @@ class NERSCJAWSRunner(JobFlow):
             # TODO DISKSPACE clean up no longer used refdata @ NERSC
             #                keep the refdata mongo record so it can be restaged if necessary
             job_id = await self._nman.download_s3_files(
-                refdata.id,
+                refdata,
                 [objmeta],
                 presigned,
                 callback_url,
                 insecure_ssl=self._s3insecure,
-                refdata=True,
-                unpack=refdata.unpack,
             )
             await self._updates.update_refdata_state(
                 refdata.id, submitted_nersc_staging_download(job_id)
