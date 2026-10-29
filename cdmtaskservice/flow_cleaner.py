@@ -269,9 +269,11 @@ class FlowCleaner:
         except Exception as e:
             # Nothing really to be done. Something is very wrong. Maybe fixed on next attempt
             self._logr.exception(f"Failed processing refdata for cleanup: {e}")
-        # TODO AI_MODEL wire up an analogous mongo.process_dirty_ai_models(older_than,
-        #      self._process_staged_entity) call here once that mongo method is added -
-        #      _process_staged_entity is already AI-model-ready (Chunk 10.1).
+        try:
+            await self._mongo.process_dirty_ai_models(older_than, self._process_staged_entity)
+        except Exception as e:
+            # Nothing really to be done. Something is very wrong. Maybe fixed on next attempt
+            self._logr.exception(f"Failed processing AI models for cleanup: {e}")
     
     def close(self):
         """Shutdown the scheduler."""
