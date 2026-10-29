@@ -167,7 +167,7 @@ async def test_update_job_state_bad_args():
 
 async def test_update_refdata_state():
     mongo, kafka, jfsu = _make_jfsu()
-    upd = update_state.submitted_refdata_download()
+    upd = update_state.submitted_staging_download()
 
     await jfsu.update_refdata_state("rid", upd)
 
@@ -177,7 +177,7 @@ async def test_update_refdata_state():
 
 async def test_update_refdata_state_bad_args():
     _, _, jfsu = _make_jfsu()
-    upd = update_state.submitted_refdata_download()
+    upd = update_state.submitted_staging_download()
 
     for bad in [None, "   \t  "]:
         with pytest.raises(ValueError, match="^refdata_id is required$"):
@@ -234,7 +234,7 @@ async def test_save_error_refdata():
     mongo.update_refdata_state.assert_called_once_with(
         sites.Cluster.KBASE,
         "rid",
-        update_state.refdata_error("user err", "admin err"),
+        update_state.staging_error("user err", "admin err"),
         _T,
     )
     kafka.update_job_state.assert_not_called()
@@ -250,7 +250,7 @@ async def test_save_error_refdata_with_traceback():
     mongo.update_refdata_state.assert_called_once_with(
         sites.Cluster.KBASE,
         "rid",
-        update_state.refdata_error("user err", "admin err", traceback="tb"),
+        update_state.staging_error("user err", "admin err", traceback="tb"),
         _T,
     )
 
@@ -311,7 +311,7 @@ async def test_handle_exception_refdata(caplog):
     mongo.update_refdata_state.assert_called_once_with(
         sites.Cluster.KBASE,
         "rid",
-        update_state.refdata_error("An unexpected error occurred", "refdata error", traceback=tb),
+        update_state.staging_error("An unexpected error occurred", "refdata error", traceback=tb),
         _T,
     )
     kafka.update_job_state.assert_not_called()

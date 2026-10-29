@@ -17,7 +17,7 @@ from cdmtaskservice import logfields
 from cdmtaskservice.notifications.kafka_notifications import KafkaNotifier
 from cdmtaskservice import sites
 from cdmtaskservice import timestamp
-from cdmtaskservice.update_state import refdata_error, error, JobUpdate, RefdataUpdate
+from cdmtaskservice.update_state import staging_error, error, JobUpdate, StagingUpdate
 
 
 @dataclass
@@ -125,7 +125,7 @@ class JobFlowStateUpdates:
         _require_string(admin_err, "admin_err")
         # if this fails, well, then we're screwed
         if entity_type == EntityType.REFDATA:
-            await self.update_refdata_state(entity_id, refdata_error(
+            await self.update_refdata_state(entity_id, staging_error(
                 user_err, admin_err, traceback=traceback)
             )
         else:
@@ -178,7 +178,7 @@ class JobFlowStateUpdates:
             job_id, update.new_state, update_time, trans_id, callback=cb()
         )
 
-    async def update_refdata_state(self, refdata_id: str, update: RefdataUpdate):
+    async def update_refdata_state(self, refdata_id: str, update: StagingUpdate):
         """
         Update the state of a refdata operation.
 
