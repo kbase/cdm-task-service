@@ -77,7 +77,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         """
         try:
             refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
-            if refstate.state != models.ReferenceDataState.CREATED:
+            if refstate.state != models.StagingState.CREATED:
                 raise InvalidReferenceDataStateError(
                     f"Reference data must be in the created state for cluster {self.CLUSTER}"
                 )
@@ -104,7 +104,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         """
         refdata = await self._mongo.get_refdata_by_id(_require_string(refdata_id, "refdata_id"))
         refstate = refdata.get_status_for_cluster(self.CLUSTER)
-        if refstate.state != models.ReferenceDataState.DOWNLOAD_SUBMITTED:
+        if refstate.state != models.StagingState.DOWNLOAD_SUBMITTED:
             raise InvalidReferenceDataStateError(
                 "Reference data must be in the download submitted state for "
                 + f"cluster {refstate.cluster.value}"

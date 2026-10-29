@@ -1156,7 +1156,7 @@ class KBaseRunner(JobFlow):
             is required.
         """
         refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
-        if refstate.state != models.ReferenceDataState.CREATED:
+        if refstate.state != models.StagingState.CREATED:
             raise InvalidReferenceDataStateError("Reference data must be in the created state")
         # Could check that the s3 and refdata path / etag match... YAGNI
         try: 
@@ -1173,17 +1173,17 @@ class KBaseRunner(JobFlow):
         )
 
     _COMMON_STATE_TO_UPDATE_REFDATA_FUNC = {
-        models.ReferenceDataState.DOWNLOAD_SUBMITTED: lambda _:
+        models.StagingState.DOWNLOAD_SUBMITTED: lambda _:
             update_state.submitted_refdata_download(),
-        models.ReferenceDataState.COMPLETE: lambda _: update_state.refdata_complete(),
-        models.ReferenceDataState.ERROR: lambda update: update_state.refdata_error(
+        models.StagingState.COMPLETE: lambda _: update_state.refdata_complete(),
+        models.StagingState.ERROR: lambda update: update_state.refdata_error(
             "An unexpected error occurred", update.admin_error, traceback=update.traceback),
     }
 
     async def update_refdata_state(
         self,
         refdata_id: str,
-        new_state: models.ReferenceDataState,
+        new_state: models.StagingState,
         update: models.RefdataUpdate | None = None
     ):
         """

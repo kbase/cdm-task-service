@@ -373,13 +373,22 @@ class Parameters(BaseModel):
             + "by use of a container number parameter when specifying the output directory "
             + "in the arguments or environment."
     )] = False
+    staged_data_mount_point: Annotated[str | None, Field(
+        examples=["/reference_data"],
+        description="Where reference data files should be placed in the container. "
+            + "Must start from the container root and include at least one directory "
+            + "when resolved. Required if the job image requires reference data "
+            + "and a default mount point isn't specified for the image. If a default is "
+            + "provided, this setting overrides it.",
+        min_length=1,
+        max_length=1024,
+        pattern=ABSOLUTE_PATH_REGEX,
+    )] = None
     refdata_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
-        description="Where reference data files should be pleased in the container. "
-            + "Must start from the container root and include at least one directory "
-            + "when resolved. Required if the job image requires reference data and a default "
-            + "reference data mount point isn't specified for the image. If a default is "
-            + "provided, this setting overrides it.",
+        deprecated="Replaced by staged_data_mount_point.",
+        description="Where reference data files should be placed in the container. "
+            + "Deprecated - see staged_data_mount_point.",
         min_length=1,
         max_length=1024,
         pattern=ABSOLUTE_PATH_REGEX,
@@ -413,12 +422,32 @@ class Parameters(BaseModel):
         description="A dictionary of environment variables to be inserted into the container. "
             + "String values are treated as literals."
     )] = None
-    
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_refdata_mount_point(cls, v):
+        if (
+            isinstance(v, dict)
+            and v.get("refdata_mount_point")
+            and not v.get("staged_data_mount_point")
+        ):
+            v = dict(v) # don't mutate caller's copy
+            v["staged_data_mount_point"] = v["refdata_mount_point"]
+        return v
+
     @model_validator(mode="after")
     def _check_parameters(self) -> Self:
         self.get_file_parameter()
+        self.refdata_mount_point = self.staged_data_mount_point
         return self
-    
+
+    def null_deprecated_fields(self) -> Self:
+        """
+        Return a copy of this instance with deprecated fields set to None, suitable for
+        persistence without redundantly storing data available in the fields that replaced them.
+        """
+        return self.model_copy(update={"refdata_mount_point": None})
+
     def get_file_parameter(self) -> Parameter | None:
         """
         If a file specification parameter is present in the arguments, get it.
@@ -711,6 +740,14 @@ class JobInput(JobInputPreview):
             )
         return self
 
+    def null_deprecated_fields(self) -> Self:
+        """
+        Return a copy of this instance with deprecated fields, including those in nested
+        structures, set to None, suitable for persistence without redundantly storing data
+        available in the fields that replaced them.
+        """
+        return self.model_copy(update={"params": self.params.null_deprecated_fields()})
+
     def get_files_per_container(self) -> list[list[S3FileWithDataID]]:
         """
         Returns the input files split up by container.
@@ -770,14 +807,44 @@ class JobImage(RegistrationInfo):
             + "this reference data to run, and it will be mounted into the image container at "
             + "the refdata mount point."
     )] = None
+    default_staged_data_mount_point: Annotated[str | None, Field(
+        examples=["/reference_data"],
+        description="The default mount point for the image's reference data "
+            + "in the container. Overridden by the mount point in a job submission if provided "
+            + "there. If a default mount point is provided, then providing a mount point in "
+            + "the job submission is optional. Must be an absolute path.",
+    )] = None
     default_refdata_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
-        description="The default mount point for the image refdata in the container. Overridden "
-            + "by the refdata mount point in a job submission if provided there. If a default "
-            + "mount point is provided, then providing a mount point in the job submission "
-            + "is optional. Must be an absolute path.",
+        deprecated="Replaced by default_staged_data_mount_point.",
+        description="The default mount point for the image refdata in the container. "
+            + "Deprecated - see default_staged_data_mount_point.",
     )] = None
-    
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_default_refdata_mount_point(cls, v):
+        if (
+            isinstance(v, dict)
+            and v.get("default_refdata_mount_point")
+            and not v.get("default_staged_data_mount_point")
+        ):
+            v = dict(v)  # don't mutate caller's copy
+            v["default_staged_data_mount_point"] = v["default_refdata_mount_point"]
+        return v
+
+    @model_validator(mode="after")
+    def _sync_default_refdata_mount_point(self) -> Self:
+        self.default_refdata_mount_point = self.default_staged_data_mount_point
+        return self
+
+    def null_deprecated_fields(self) -> Self:
+        """
+        Return a copy of this instance with deprecated fields set to None, suitable for
+        persistence without redundantly storing data available in the fields that replaced them.
+        """
+        return self.model_copy(update={"default_refdata_mount_point": None})
+
     @property
     def name_with_digest(self):
         """
@@ -1076,11 +1143,10 @@ class JobStatus(_JobBase):
     # This is an outgoing data structure only so we don't add validators
     user: Annotated[str, Field(examples=["myuserid"], description="The user that ran the job.")]
     admin_meta: Annotated[dict[str, str | int | float], Field(
-        default_factory=dict,
         examples=[{"name": "Getrude", "children": 31619}],
         description="Metadata for the job set by service administrators. This metadata is mutable "
             + "and arbitrary from the point of view of the service."
-    )]
+    )] = Field(default_factory=dict)
 
 
 class InternalJobCommonPreviewFields(BaseModel):
@@ -1139,12 +1205,15 @@ class JobPreview(JobStatus, InternalJobCommonPreviewFields):
         description="A location in S3 where the logfiles for the job containers can be viewed."
     )] = None
     
-    def get_refdata_mount_point(self) -> str | None:
+    def get_staged_data_mount_point(self) -> str | None:
         """
-        Get the in-container mount point for reference data or None if there is no reference
-        data for this job.
+        Get the in-container mount point for reference data or None if
+        there is no mount point for this job.
         """
-        return self.job_input.params.refdata_mount_point or self.image.default_refdata_mount_point
+        return (
+            self.job_input.params.staged_data_mount_point
+            or self.image.default_staged_data_mount_point
+        )
 
     def get_entity_type(self) -> EntityType:
         """ Get the entity type for this job. """
@@ -1182,6 +1251,17 @@ class Job(JobPreview, InternalJobNonPreviewFields):
     # This is an outgoing data structure only so we don't add validators
     job_input: JobInput
 
+    def null_deprecated_fields(self) -> Self:
+        """
+        Return a copy of this job with deprecated fields, including those in nested
+        structures, set to None, suitable for persistence without redundantly storing data
+        available in the fields that replaced them.
+        """
+        return self.model_copy(update={
+            "job_input": self.job_input.null_deprecated_fields(),
+            "image": self.image.null_deprecated_fields(),
+        })
+
 
 class NERSCDetails(BaseModel):
     """
@@ -1193,39 +1273,39 @@ class NERSCDetails(BaseModel):
         deprecated="Replaced by download_job_id. Only present on records created before NERSC "
             + "downloads were migrated from SFAPI async tasks to Slurm jobs.",
         description="IDs for SFAPI download tasks. Deprecated - see download_job_id."
-    )]
+    )] = None
     download_job_id: Annotated[list[str] | None, Field(
         default=None,
         description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to download files from "
             + "an S3 instance to NERSC. Multiple job IDs indicate job retries after failures. "
             + "Missing if the record predates the migration to Slurm jobs, see download_task_id."
-    )]
+    )] = None
     upload_task_id: Annotated[list[str] | None, Field(
         default=None,
         deprecated="Replaced by upload_job_id. Only present on records created before NERSC "
             + "uploads were migrated from SFAPI async tasks to Slurm jobs.",
         description="IDs for SFAPI upload tasks. Deprecated - see upload_job_id."
-    )]
+    )] = None
     upload_job_id: Annotated[list[str] | None, Field(
         default=None,
         description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to upload files to an S3 "
             + "instance from NERSC. Multiple job IDs indicate job retries after failures. "
             + "Missing if an upload job has not yet been submitted to NERSC, or if the record "
             + "predates the migration to Slurm jobs, see upload_task_id."
-    )]
+    )] = None
     log_upload_task_id: Annotated[list[str] | None, Field(
         default=None,
         deprecated="Replaced by log_upload_job_id. Only present on records created before NERSC "
             + "log uploads were migrated from SFAPI async tasks to Slurm jobs.",
         description="IDs for SFAPI log upload tasks. Deprecated - see log_upload_job_id."
-    )]
+    )] = None
     log_upload_job_id: Annotated[list[str] | None, Field(
         default=None,
         description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to upload log files to "
             + "an S3 instance from NERSC. Multiple job IDs indicate job retries after failures. "
             + "Missing if a log upload job has not yet been submitted to NERSC, or if the record "
             + "predates the migration to Slurm jobs, see log_upload_task_id."
-    )]
+    )] = None
 
 
 class JAWSDetails(BaseModel):
@@ -1385,7 +1465,7 @@ class ContainerUpdate(BaseModel):
     )] = None
 
 
-class ReferenceDataState(str, Enum):
+class StagingState(str, Enum):
     """
     The state of a reference data staging process.
     """
@@ -1404,33 +1484,33 @@ class ReferenceDataState(str, Enum):
         return self in self.terminal_states()
 
 
-class RefDataStateTransition(BaseModel):
+class StagingStateTransition(BaseModel):
     """
     Denotes the new state and the entry time when a state change occurs.
     """
     # outgoing only, no validators
-    state: ReferenceDataState
+    state: StagingState
     time: Annotated[datetime.datetime, Field(
         examples=["2024-10-24T22:35:40Z"],
         description="The time at which the new state was entered."
     )]
 
 
-class ReferenceDataStatus(BaseModel):
+class StagingStatus(BaseModel):
     """
     Status of a reference data staging process at a particular remote compute location.
     """
     # This is an outgoing structure only so we don't add validators
     cluster: Annotated[sites.Cluster, Field(examples=[sites.Cluster.PERLMUTTER_JAWS.value])]
-    state: Annotated[ReferenceDataState, Field(
-        examples=[ReferenceDataState.COMPLETE.value],
+    state: Annotated[StagingState, Field(
+        examples=[StagingState.COMPLETE.value],
         description="The state of the reference data staging process."
     )]
-    transition_times: Annotated[list[RefDataStateTransition], Field(
+    transition_times: Annotated[list[StagingStateTransition], Field(
             examples=[[
-                {"state": ReferenceDataState.CREATED.value, "time": "2024-10-24T22:35:40Z"},
+                {"state": StagingState.CREATED.value, "time": "2024-10-24T22:35:40Z"},
                 {
-                    "state": ReferenceDataState.DOWNLOAD_SUBMITTED.value,
+                    "state": StagingState.DOWNLOAD_SUBMITTED.value,
                     "time": "2024-10-24T22:35:41Z"
                 },
             ]],
@@ -1447,7 +1527,7 @@ class ReferenceDataStatus(BaseModel):
         return self.cluster
 
 
-class AdminReferenceDataStatus(ReferenceDataStatus):
+class AdminStagingStatus(StagingStatus):
     """
     Information about reference data status with added details of interest to service
     administrators.
@@ -1462,14 +1542,14 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
         deprecated="Replaced by nersc_download_job_id. Only present on records created before "
             + "NERSC refdata downloads were migrated from SFAPI async tasks to Slurm jobs.",
         description="IDs for SFAPI download tasks. Deprecated - see nersc_download_job_id."
-    )]
+    )] = None
     nersc_download_job_id: Annotated[list[str] | None, Field(
         default=None,
         description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to download files from "
             + "an S3 instance to NERSC. Multiple job IDs indicate job retries after failures. "
             + "Only present if the refdata is being downloaded to NERSC via a Slurm job, i.e. "
             + "the record postdates the migration to Slurm jobs, see nersc_download_task_id."
-    )]
+    )] = None
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
@@ -1489,7 +1569,7 @@ class _ReferenceDataRoot(S3File, RegistrationInfo):
             + "files are supported."
     )] = False
     
-    def get_status_for_cluster(self, cluster: sites.Cluster) -> ReferenceDataStatus:
+    def get_status_for_cluster(self, cluster: sites.Cluster) -> StagingStatus:
         """
         Get the status of a cluster for this reference data.
         """
@@ -1517,7 +1597,7 @@ class ReferenceData(_ReferenceDataRoot):
     # This is an outgoing structure only so we don't add validators
     # TODO FUTURESITES will need to be able to stage to sites that don't exist currently
     #                  ... if that ever happens
-    statuses: Annotated[list[ReferenceDataStatus], Field(
+    statuses: Annotated[list[StagingStatus], Field(
         description="The states of reference data staging processes at remote compute locations.",
     )]
 
@@ -1529,7 +1609,7 @@ class AdminReferenceData(_ReferenceDataRoot):
     # This is an outgoing structure only so we don't add validators
     # TODO FUTURESITES will need to be able to stage to sites that don't exist currently
     #                  ... if that ever happens
-    statuses: Annotated[list[AdminReferenceDataStatus], Field(
+    statuses: Annotated[list[AdminStagingStatus], Field(
         description="The states of reference data staging processes at remote compute locations.",
     )]
 

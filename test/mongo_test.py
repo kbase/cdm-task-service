@@ -43,6 +43,12 @@ from conftest import (
 
 # TODO TEST add more tests
 
+# These tests deliberately read deprecated fields (refdata_mount_point /
+# default_refdata_mount_point) to confirm their backwards compatible behavior, so the
+# resulting DeprecationWarning is expected rather than a signal of accidental deprecated
+# field use elsewhere in the code.
+_IGNORE_MOUNT_POINT_DEPRECATION = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 # Mongo only has millisecond precision
 _SAFE_TIME = datetime.datetime(2025, 3, 31, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
 _BASEJOB = models.AdminJobDetails(
@@ -253,6 +259,52 @@ async def test_job_basic_roundtrip(mondb):
 
     got = await mc.get_job("foo", as_admin=True)
     assert got == _BASEJOB
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+async def test_job_staged_data_mount_point_does_not_persist_deprecated_fields(mondb):
+    # The deprecated refdata_mount_point / default_refdata_mount_point fields are kept in
+    # sync on the in-memory model for backwards compatible API responses, but should not be
+    # redundantly written to new Mongo documents.
+    job = _BASEJOB.model_copy(deep=True)
+    job.job_input.params.staged_data_mount_point = "/params_mount"
+    job.image.default_staged_data_mount_point = "/image_mount"
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(job)
+
+    raw = await mondb.jobs.find_one({"id": "foo"})
+    assert "refdata_mount_point" not in raw["job_input"]["params"]
+    assert raw["job_input"]["params"]["staged_data_mount_point"] == "/params_mount"
+    assert "default_refdata_mount_point" not in raw["image"]
+    assert raw["image"]["default_staged_data_mount_point"] == "/image_mount"
+
+    # the deprecated fields are nevertheless populated on read for backwards compatible clients
+    got = await mc.get_job("foo", as_admin=True)
+    assert got.job_input.params.refdata_mount_point == "/params_mount"
+    assert got.image.default_refdata_mount_point == "/image_mount"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+async def test_image_does_not_persist_deprecated_staged_data_mount_point_field(mondb):
+    image = models.Image(
+        name="some_image",
+        digest="digest",
+        entrypoint=["arg1"],
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        refdata_id="someid",
+        default_staged_data_mount_point="/image_mount",
+    )
+    mc = await MongoDAO.create(mondb)
+    await mc.save_image(image)
+
+    raw = await mondb.images.find_one({"name": "some_image"})
+    assert "default_refdata_mount_point" not in raw
+    assert raw["default_staged_data_mount_point"] == "/image_mount"
+
+    # the deprecated field is nevertheless populated on read for backwards compatible clients
+    got = await mc.get_image("some_image", digest="digest")
+    assert got.default_refdata_mount_point == "/image_mount"
 
 
 async def test_pipeline_job_basic_roundtrip(mondb):
@@ -1555,11 +1607,11 @@ async def test_refdata_redundant_update_time(mondb):
         id="foo",
         file="bucket/key",
         unpack=False,
-        statuses=[models.AdminReferenceDataStatus(
+        statuses=[models.AdminStagingStatus(
             cluster=sites.Cluster.PERLMUTTER_JAWS,
-            state=models.ReferenceDataState.CREATED,
-            transition_times=[models.RefDataStateTransition(
-                state=models.ReferenceDataState.CREATED,
+            state=models.StagingState.CREATED,
+            transition_times=[models.StagingStateTransition(
+                state=models.StagingState.CREATED,
                 time=_SAFE_TIME
             )],
         )]
@@ -1585,9 +1637,9 @@ async def test_refdata_redundant_update_time(mondb):
     got = await mc.get_refdata_by_id("foo", as_admin=True)
     
     # check expected refdata structure
-    rd.statuses[0].state = models.ReferenceDataState.DOWNLOAD_SUBMITTED
-    rd.statuses[0].transition_times.append(models.RefDataStateTransition(
-        state=models.ReferenceDataState.DOWNLOAD_SUBMITTED,
+    rd.statuses[0].state = models.StagingState.DOWNLOAD_SUBMITTED
+    rd.statuses[0].transition_times.append(models.StagingStateTransition(
+        state=models.StagingState.DOWNLOAD_SUBMITTED,
         time=dt,
     ))
     rd.statuses[0].nersc_download_job_id = ["ntid"]
@@ -1598,11 +1650,11 @@ async def test_refdata_redundant_update_time(mondb):
     assert refd["statuses"][0]["_update_time"] == dt
     
     # check that adding a new site to refdata adds the update time correctly
-    rds = models.AdminReferenceDataStatus(
+    rds = models.AdminStagingStatus(
         cluster=sites.Cluster.KBASE,
-        state=models.ReferenceDataState.CREATED,
-        transition_times=[models.RefDataStateTransition(
-            state=models.ReferenceDataState.CREATED,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED,
             time=_SAFE_TIME
         )],
     )
@@ -1837,26 +1889,26 @@ async def test_set_refdata_clean(mondb):
         file="bucket/key",
         unpack=False,
         statuses=[
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.PERLMUTTER_JAWS,
-                state=models.ReferenceDataState.CREATED,
+                state=models.StagingState.CREATED,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.CREATED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.CREATED,
                         time=_SAFE_TIME
                     ),
                 ],
             ),
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.KBASE,
-                state=models.ReferenceDataState.ERROR,
+                state=models.StagingState.ERROR,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.CREATED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.CREATED,
                         time=_SAFE_TIME
                     ),
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.ERROR,
+                    models.StagingStateTransition(
+                        state=models.StagingState.ERROR,
                         time=_SAFE_TIME
                     ),
                 ],
@@ -1888,12 +1940,12 @@ async def test_set_refdata_clean_fail(mondb):
         file="bucket/key",
         unpack=False,
         statuses=[
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.PERLMUTTER_JAWS,
-                state=models.ReferenceDataState.CREATED,
+                state=models.StagingState.CREATED,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.CREATED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.CREATED,
                         time=_SAFE_TIME
                     ),
                 ],
@@ -1935,22 +1987,22 @@ async def test_process_dirty_refdata(mondb):
         file="bucket/key",
         unpack=False,
         statuses=[
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.PERLMUTTER_JAWS,
-                state=models.ReferenceDataState.ERROR,
+                state=models.StagingState.ERROR,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.CREATED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.CREATED,
                         time=older_than
                     ),
                 ],
             ),
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.KBASE,
-                state=models.ReferenceDataState.COMPLETE,
+                state=models.StagingState.COMPLETE,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.DOWNLOAD_SUBMITTED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.DOWNLOAD_SUBMITTED,
                         time=older_than
                     ),
                 ],
@@ -1962,7 +2014,7 @@ async def test_process_dirty_refdata(mondb):
     await mc.save_refdata(rd)  # shouldn't be found due to date = older_than
     
     # Shouldn't be found due to non-terminal states
-    for state in set(models.ReferenceDataState) - models.ReferenceDataState.terminal_states():
+    for state in set(models.StagingState) - models.StagingState.terminal_states():
         rd = rd.model_copy(deep=True, update={"id": state.value, "file": "bucket/" + state.value})
         rd.statuses[0].state=state
         rd.statuses[0].transition_times[0].time = _SAFE_TIME

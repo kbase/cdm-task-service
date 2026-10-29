@@ -110,7 +110,7 @@ def _make_job_json(
         j["job_input"]["params"]["declobber"] = True
     if refdata_id:
         j["image"]["refdata_id"] = refdata_id
-        j["image"]["default_refdata_mount_point"] = "/refdata"
+        j["image"]["default_staged_data_mount_point"] = "/refdata"
     if gpus is not None:
         j["job_input"]["gpus"] = gpus
     if script:

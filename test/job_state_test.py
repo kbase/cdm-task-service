@@ -275,7 +275,7 @@ _TEST_IMAGE = models.Image.model_construct(
     entrypoint=["run"],
     tag="0.1.0",
     refdata_id=None,
-    default_refdata_mount_point=None,
+    default_staged_data_mount_point=None,
     urls=None,
     usage_notes=None,
 )
@@ -287,7 +287,7 @@ _TEST_JOB_IMAGE = models.JobImage(
     entrypoint=["run"],
     tag="0.1.0",
     refdata_id=None,
-    default_refdata_mount_point=None,
+    default_staged_data_mount_point=None,
 )
 
 

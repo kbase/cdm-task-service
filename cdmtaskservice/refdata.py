@@ -85,11 +85,11 @@ class Refdata:
         # TDOO REFDATA if a cluster isn't available, need a way to start staging later
         clusters = await self._flowman.list_usable_clusters()
         for c in  clusters:
-            statuses.append(models.AdminReferenceDataStatus(
+            statuses.append(models.AdminStagingStatus(
                 cluster=c,
-                state=models.ReferenceDataState.CREATED,
-                transition_times=[models.RefDataStateTransition(
-                    state=models.ReferenceDataState.CREATED, time=utcdatetime()
+                state=models.StagingState.CREATED,
+                transition_times=[models.StagingStateTransition(
+                    state=models.StagingState.CREATED, time=utcdatetime()
                 )]
             ))
         if not statuses:
@@ -123,11 +123,11 @@ class Refdata:
         cluster - the site to recover.
         """
         _require_string(refdata_id, "refdata_id")
-        update = models.AdminReferenceDataStatus(
+        update = models.AdminStagingStatus(
             cluster=_not_falsy(cluster, "cluster"),
-            state=models.ReferenceDataState.CREATED,
-            transition_times=[models.RefDataStateTransition(
-                state=models.ReferenceDataState.CREATED, time=utcdatetime()
+            state=models.StagingState.CREATED,
+            transition_times=[models.StagingStateTransition(
+                state=models.StagingState.CREATED, time=utcdatetime()
             )],
         )
         rd = await self.get_refdata_by_id(refdata_id)
