@@ -13,6 +13,7 @@ from cdmtaskservice.exceptions import (
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     JobRecoveryError,
+    MismatchedJobStateError,
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.kbase import (
@@ -873,7 +874,7 @@ async def test_update_container_state_recovering_ignored_nonterminal():
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.JOB_SUBMITTING, _T
     )
-    updates.update_job_state.side_effect = InvalidJobStateError(
+    updates.update_job_state.side_effect = MismatchedJobStateError(
         "job is recovering", actual_state=models.JobState.RECOVERING
     )
 
@@ -896,7 +897,7 @@ async def test_update_container_state_recovering_ignored_terminal():
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     mongo.get_exit_codes_for_subjobs.return_value = [1, 1]
     condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
-    updates.update_job_state.side_effect = InvalidJobStateError(
+    updates.update_job_state.side_effect = MismatchedJobStateError(
         "job is recovering", actual_state=models.JobState.RECOVERING
     )
 
@@ -934,12 +935,12 @@ async def test_update_container_state_recovering_ignored_terminal():
 
 
 async def test_update_container_state_invalid_state_error_nonterminal():
-    """InvalidJobStateError with non-RECOVERING actual_state is forwarded to handle_exception."""
+    """MismatchedJobStateError with non-RECOVERING actual_state is forwarded to handle_exception."""
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.JOB_SUBMITTING, _T
     )
-    err = InvalidJobStateError("wrong state", actual_state=models.JobState.ERROR)
+    err = MismatchedJobStateError("wrong state", actual_state=models.JobState.ERROR)
     updates.update_job_state.side_effect = err
 
     await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())

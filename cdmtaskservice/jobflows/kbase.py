@@ -32,6 +32,7 @@ from cdmtaskservice.exceptions import (
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     JobRecoveryError,
+    MismatchedJobStateError,
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
@@ -469,7 +470,7 @@ class KBaseRunner(JobFlow):
             await self._handle_parent_update_error(e, job.id)
 
     async def _handle_parent_update_error(self, e: Exception, job_id: str):
-        if isinstance(e, InvalidJobStateError) and e.actual_state == models.JobState.RECOVERING:
+        if isinstance(e, MismatchedJobStateError) and e.actual_state == models.JobState.RECOVERING:
             # Job is being recovered — parent updates are expected to fail while the recovery
             # lock is held. The executor should keep running.
             return
