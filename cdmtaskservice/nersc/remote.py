@@ -18,6 +18,7 @@ import sys
 import traceback
 from typing import Callable
 
+from cdmtaskservice.ai_models import huggingface_client
 from cdmtaskservice.jaws.remote import (
     parse_errors_json,
     parse_outputs_json,
@@ -162,7 +163,7 @@ def process_data_transfer_manifest(manifest_file_path: str, checksum_manifest_fi
     return None
 
 
-def sync_refdata_to_dtn(
+def _sync_dir_to_dtn(
     staging_dir: str,
     dtn_host: str,
     dest_dir: str,
@@ -170,23 +171,22 @@ def sync_refdata_to_dtn(
     completion_file_contents: str,
 ):
     """
-    Copy reference data downloaded and unpacked into a local staging directory to its final
-    location on a NERSC DTN-mounted filesystem, and write the completion file JAWS watches for.
+    Copy a local directory's contents to its final location on a NERSC DTN-mounted filesystem,
+    then write the JAWS completion file, signaling to JAWS that new content is ready to
+    replicate. This is necessary because the destination filesystem is only writable from NERSC
+    DTNs, but `xfer` QOS Slurm jobs run on Perlmutter login nodes. This relies on the NERSC
+    sshproxy SSH key already present in $HOME being valid and shared between login and DTN
+    nodes, requiring no further authentication.
 
-    This is necessary because reference data lives on a filesystem (/global/dna) that is only
-    writable from NERSC DTNs, but `xfer` QOS Slurm jobs run on Perlmutter login nodes. This
-    relies on the NERSC sshproxy SSH key already present in $HOME being valid and shared between
-    login and DTN nodes, requiring no further authentication.
-
-    staging_dir - the local directory the reference data was downloaded and unpacked into.
+    staging_dir - the local directory to copy.
     dtn_host - the DTN hostname to copy the data to.
-    dest_dir - the final, DTN-only-writable destination directory for the reference data.
+    dest_dir - the final, DTN-only-writable destination directory.
     completion_file - the path, on the DTN host, of the completion file JAWS watches for.
     completion_file_contents - the contents to write to the completion file.
     """
-    # --protect-args: dest_dir / completion_file are always built from a server-generated UUID
-    #     plus fixed config strings, never user input, so this is defense in depth rather than a
-    #     fix for a reachable bug.
+    # --protect-args: destination paths are always built from a server-generated UUID or an
+    #     already-resolved AI model key plus fixed config strings, never raw user input, so this
+    #     is defense in depth rather than a fix for a reachable bug.
     # --timeout / ConnectTimeout: without these a stalled connection hangs until the enclosing
     #     Slurm job's wall-clock limit kills it (up to 48h under the `xfer` QOS).
     # --partial: keep partially-transferred files on interruption so a retry isn't guaranteed to
@@ -217,6 +217,41 @@ def sync_refdata_to_dtn(
     )
 
 
+def stage_and_sync_ai_model(
+    source: str,
+    repo_id: str,
+    revision_hash: str,
+    staging_dir: str,
+    dtn_host: str,
+    dest_dir: str,
+    completion_file: str,
+    completion_file_contents: str,
+):
+    """
+    Downloads an AI model snapshot into a local staging directory, then copies it to its final
+    DTN-only-writable location in the shared AI model store, and writes the JAWS completion file
+    the same way refdata does - JAWS watches this path and will replicate the AI model to LRC
+    when it sees it.
+
+    source - the AI model's source. Only "huggingface" is currently supported.
+    repo_id - the HuggingFace repo id, e.g. `org/name`.
+    revision_hash - the resolved commit hash of the snapshot to stage.
+    staging_dir - the local directory the snapshot will be downloaded into.
+    dtn_host - the DTN hostname to copy the data to.
+    dest_dir - the final, DTN-only-writable destination directory for the snapshot.
+    completion_file - the path, on the DTN host, of the completion file JAWS watches for.
+    completion_file_contents - the contents to write to the completion file.
+    """
+    # Compared against the bare string, not models.AIModelSource, to keep this module's
+    # dependencies minimal (see the module docstring) - CTS_AI_MODEL_SOURCE is a wire-format
+    # value, not a shared Python type.
+    if source != "huggingface":
+        raise ValueError(f"Unsupported AI model source: {source}")
+    huggingface_client.stage_snapshot(repo_id, revision_hash, Path(staging_dir))
+    _sync_dir_to_dtn(staging_dir, dtn_host, dest_dir, completion_file, completion_file_contents)
+    return None
+
+
 def process_refdata_download_manifest(
     manifest_file_path: str,
     staging_dir: str,
@@ -227,7 +262,13 @@ def process_refdata_download_manifest(
 ):
     """
     Downloads reference data files per a transfer manifest into a local staging directory, then
-    copies them to their final DTN-only-writable location and writes the JAWS completion file.
+    copies them to their final location on a NERSC DTN-mounted filesystem and writes the
+    completion file JAWS watches for.
+
+    This copy step is necessary because reference data lives on a filesystem (/global/dna) that
+    is only writable from NERSC DTNs, but `xfer` QOS Slurm jobs run on Perlmutter login nodes.
+    It relies on the NERSC sshproxy SSH key already present in $HOME being valid and shared
+    between login and DTN nodes, requiring no further authentication.
 
     manifest_file_path - the path to the transfer manifest file. Its file entries are expected
         to point into staging_dir.
@@ -238,7 +279,7 @@ def process_refdata_download_manifest(
     completion_file_contents - the contents to write to the completion file.
     """
     process_data_transfer_manifest(manifest_file_path)
-    sync_refdata_to_dtn(staging_dir, dtn_host, dest_dir, completion_file, completion_file_contents)
+    _sync_dir_to_dtn(staging_dir, dtn_host, dest_dir, completion_file, completion_file_contents)
     return None
 
 
@@ -311,6 +352,92 @@ def _error_wrapper(func: Callable, args: list[str], result_file_path: str, callb
         sys.exit(1)
 
 
+def _run_manifest_mode(resfile: str, callback_url: str):
+    _error_wrapper(
+        process_data_transfer_manifest,
+        [
+            os.environ["CTS_MANIFEST_LOCATION"],
+            os.environ.get("CTS_CHECKSUM_MANIFEST_LOCATION"),
+        ],
+        resfile,
+        callback_url
+    )
+
+
+def _run_refdata_manifest_mode(resfile: str, callback_url: str):
+    _error_wrapper(
+        process_refdata_download_manifest,
+        [
+            # TODO CODE staging dir is redundant with the manifest, the file in
+            #           the manifest should be prefixed with the staging dir
+            os.environ["CTS_MANIFEST_LOCATION"],
+            os.environ["CTS_STAGING_DIR"],
+            os.environ["CTS_DTN_HOST"],
+            os.environ["CTS_REFDATA_DEST_DIR"],
+            os.environ["CTS_COMPLETION_FILE_LOCATION"],
+            os.environ["CTS_COMPLETION_FILE_CONTENTS"],
+        ],
+        resfile,
+        callback_url
+    )
+
+
+def _run_ai_model_mode(resfile: str, callback_url: str):
+    _error_wrapper(
+        stage_and_sync_ai_model,
+        [
+            os.environ["CTS_AI_MODEL_SOURCE"],
+            os.environ["CTS_AI_MODEL_MODEL"],
+            os.environ["CTS_AI_MODEL_VERSION"],
+            os.environ["CTS_STAGING_DIR"],
+            os.environ["CTS_DTN_HOST"],
+            os.environ["CTS_AI_MODEL_DEST_DIR"],
+            os.environ["CTS_COMPLETION_FILE_LOCATION"],
+            os.environ["CTS_COMPLETION_FILE_CONTENTS"],
+        ],
+        resfile,
+        callback_url
+    )
+
+
+def _run_errorsjson_mode(resfile: str, callback_url: str):
+    _error_wrapper(
+        process_errorsjson,
+        [
+            os.environ["CTS_ERRORS_JSON_LOCATION"],
+            os.environ["CTS_CONTAINER_LOGS_LOCATION"],
+            os.environ["CTS_MANIFEST_LOCATION"],  # expected to be an upload manifest
+        ],
+        resfile,
+        callback_url
+    )
+
+
+def _run_checksum_mode(resfile: str, callback_url: str):
+    _error_wrapper(
+        calculate_checksums,
+        [
+            os.environ["CTS_JAWS_OUTPUT_DIR"],
+            os.environ["CTS_CHECKSUM_FILE_LOCATION"],
+        ],
+        resfile,
+        None,  # expected to be run by the manager as a blocking task for now
+    )
+
+
+def _run_pipeline_checksum_mode(resfile: str, callback_url: str):
+    _error_wrapper(
+        calculate_pipeline_checksums,
+        [
+            os.environ["CTS_JAWS_OUTPUT_DIR"],
+            os.environ["CTS_OUTPUT_KEYS_LOCATION"],
+            os.environ["CTS_CHECKSUM_FILE_LOCATION"],
+        ],
+        resfile,
+        None,  # expected to be run by the manager as a blocking task for now
+    )
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -320,63 +447,17 @@ def main():
     callback_url = os.environ["CTS_CALLBACK_URL"]
     logging.getLogger(__name__).info(f"Starting remote task in mode {mode}")
     if mode == "manifest":
-        _error_wrapper(
-            process_data_transfer_manifest,
-            [
-                os.environ["CTS_MANIFEST_LOCATION"],
-                os.environ.get("CTS_CHECKSUM_MANIFEST_LOCATION"),
-            ],
-            resfile,
-            callback_url
-        )
+        _run_manifest_mode(resfile, callback_url)
     elif mode == "refdata_manifest":
-        _error_wrapper(
-            process_refdata_download_manifest,
-            [
-                # TODO CODE staging dir is redundant with the manifest, the file in
-                #           the manifest should be prefixed with the staging dir
-                os.environ["CTS_MANIFEST_LOCATION"],
-                os.environ["CTS_STAGING_DIR"],
-                os.environ["CTS_DTN_HOST"],
-                os.environ["CTS_REFDATA_DEST_DIR"],
-                os.environ["CTS_COMPLETION_FILE_LOCATION"],
-                os.environ["CTS_COMPLETION_FILE_CONTENTS"],
-            ],
-            resfile,
-            callback_url
-        )
+        _run_refdata_manifest_mode(resfile, callback_url)
+    elif mode == "ai_model":
+        _run_ai_model_mode(resfile, callback_url)
     elif mode == "errorsjson":
-        _error_wrapper(
-            process_errorsjson,
-            [
-                os.environ["CTS_ERRORS_JSON_LOCATION"],
-                os.environ["CTS_CONTAINER_LOGS_LOCATION"],
-                os.environ["CTS_MANIFEST_LOCATION"],  # expected to be an upload manifest
-            ],
-            resfile,
-            callback_url
-        )
+        _run_errorsjson_mode(resfile, callback_url)
     elif mode == "checksum":
-        _error_wrapper(
-            calculate_checksums,
-            [
-                os.environ["CTS_JAWS_OUTPUT_DIR"],
-                os.environ["CTS_CHECKSUM_FILE_LOCATION"],
-            ],
-            resfile,
-            None,  # expected to be run by the manager as a blocking task for now
-        )
+        _run_checksum_mode(resfile, callback_url)
     elif mode == "pipeline_checksum":
-        _error_wrapper(
-            calculate_pipeline_checksums,
-            [
-                os.environ["CTS_JAWS_OUTPUT_DIR"],
-                os.environ["CTS_OUTPUT_KEYS_LOCATION"],
-                os.environ["CTS_CHECKSUM_FILE_LOCATION"],
-            ],
-            resfile,
-            None,  # expected to be run by the manager as a blocking task for now
-        )
+        _run_pipeline_checksum_mode(resfile, callback_url)
     else:  # Should never happen
         raise ValueError(f"unexpected mode: {mode}")
     logging.getLogger(__name__).info(f"Remote task in mode {mode} complete")

@@ -81,6 +81,9 @@ class ErrorType(Enum):
     INVALID_AI_MODEL_STATE =     (30420, "Invalid AI model state")
     """ The AI model is not in the correct state for the requested operation. """
 
+    NO_AI_MODEL_CLUSTER_STATUS = (30430, "No cluster status for AI model")
+    """ The AI model has no status entry for the requested cluster. """
+
     NOT_FOUND =                  (40000, "Not Found")
     """ The requested resource was not found. """
     

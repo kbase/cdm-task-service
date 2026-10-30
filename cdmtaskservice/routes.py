@@ -27,6 +27,7 @@ from cdmtaskservice import sites
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
     get_refdata_download_complete_callback,
+    get_ai_model_download_complete_callback,
     get_job_complete_callback,
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
@@ -1232,6 +1233,33 @@ async def refdata_download_complete(
     )
     runner = await app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
     await runner.refdata_complete(refdata_id)
+
+
+@ROUTER_CALLBACKS.get(
+    f"/{get_ai_model_download_complete_callback()}/{{source}}/{{model:path}}/{{version}}"
+        + "/{cluster}",
+    summary="Report AI model data download complete",
+    description="Report that data download for an AI model is complete. This method is not "
+        + "expected to be called by users.",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def ai_model_download_complete(
+    r: Request,
+    source: models.AIModelSource,
+    model: Annotated[str, FastPath(description="The AI model identifier.")],
+    version: Annotated[str, FastPath(description="The resolved AI model version.")],
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which the AI model download is complete."
+    )],
+):
+    key = models.AIModelKey(source, model, version)
+    logging.getLogger(__name__).info(
+        f"Download reported as complete for AI model {key} on cluster {cluster.value}",
+        extra={logfields.AI_MODEL_ID: str(key), logfields.CLUSTER: cluster.value},
+    )
+    runner = await app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
+    await runner.ai_model_complete(key)
 
 
 @ROUTER_CALLBACKS.get(
