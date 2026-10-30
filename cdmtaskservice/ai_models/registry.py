@@ -152,6 +152,31 @@ class AIModelRegistry:
             statuses=statuses,
         )
 
+    async def recover_ai_model(self, key: models.AIModelKey, cluster: sites.Cluster):
+        """
+        Recover a stalled AI model staging process.
+        Currently only handles the case where there is no record for a cluster in the AI
+        model's staging status structure.
+
+        key - the AI model's source, model, and resolved version.
+        cluster - the cluster to recover.
+        """
+        _not_falsy(key, "key")
+        update = models.AdminStagingStatus(
+            cluster=_not_falsy(cluster, "cluster"),
+            state=models.StagingState.CREATED,
+            transition_times=[models.StagingStateTransition(
+                state=models.StagingState.CREATED, time=self._timestamp_fn()
+            )],
+        )
+        ai_model = await self._mongo.get_ai_model(
+            key.source, key.model, key.version, as_admin=True
+        )
+        ai_model.statuses.append(update)
+        flow = await self._flowman.get_flow(cluster)  # ensure flow is available before updating db
+        await self._mongo.add_ai_model_site(key, update)
+        await self._coman.run_coroutine(flow.stage_ai_model(ai_model))
+
     async def get_ai_models(self) -> list[models.AIModel]:
         """
         Get AI models in the system in no particular order. Returns at most 1000 records.

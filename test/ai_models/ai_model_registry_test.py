@@ -8,7 +8,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import IllegalParameterError
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowManager
 from cdmtaskservice import models
-from cdmtaskservice.mongo import MongoDAO, SaveAIModelResult, Tag
+from cdmtaskservice.mongo import MongoDAO, NoSuchAIModelError, SaveAIModelResult, Tag
 from cdmtaskservice import sites
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSUser
@@ -343,6 +343,98 @@ async def test_get_ai_model_non_default_args():
         models.AIModelSource.HUGGINGFACE, "org/name", "main",
         resolve_tag=True, populate_tags=True, as_admin=True,
     )
+
+
+async def test_recover_ai_model():
+    registry, mongo, flowman = _make_registry()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    existing_status = models.AdminStagingStatus(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
+        state=models.StagingState.ERROR,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.ERROR, time=_T
+        )],
+        error="boom",
+    )
+    ai_model = models.AdminAIModel(
+        source=key.source,
+        model=key.model,
+        version=key.version,
+        size_bytes=42,
+        registered_by=_USER.user,
+        registered_on=_T,
+        statuses=[existing_status],
+    )
+    mongo.get_ai_model.return_value = ai_model
+    flow = create_autospec(JobFlow, spec_set=True, instance=True)
+    flowman.get_flow.return_value = flow
+
+    await registry.recover_ai_model(key, sites.Cluster.KBASE)
+
+    mongo.get_ai_model.assert_called_once_with(
+        key.source, key.model, key.version, as_admin=True
+    )
+    expected_new_status = models.AdminStagingStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=_T
+        )],
+    )
+    flowman.get_flow.assert_called_once_with(sites.Cluster.KBASE)
+    mongo.add_ai_model_site.assert_called_once_with(key, expected_new_status)
+    # Built independently of `ai_model` (rather than reusing that same, possibly mutated,
+    # reference) so this actually verifies the content staged, not just object identity.
+    expected_staged_ai_model = models.AdminAIModel(
+        source=key.source,
+        model=key.model,
+        version=key.version,
+        size_bytes=42,
+        registered_by=_USER.user,
+        registered_on=_T,
+        statuses=[existing_status, expected_new_status],
+    )
+    flow.stage_ai_model.assert_awaited_once_with(expected_staged_ai_model)
+
+
+async def test_recover_ai_model_fail_inputs():
+    registry, _, _ = _make_registry()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    with pytest.raises(ValueError, match="^key is required$"):
+        await registry.recover_ai_model(None, sites.Cluster.KBASE)
+    with pytest.raises(ValueError, match="^cluster is required$"):
+        await registry.recover_ai_model(key, None)
+
+
+async def test_recover_ai_model_fail_no_such_model():
+    registry, mongo, flowman = _make_registry()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    mongo.get_ai_model.side_effect = NoSuchAIModelError(f"No AI model with key '{key}' exists")
+
+    with pytest.raises(NoSuchAIModelError, match=f"^No AI model with key '{key}' exists$"):
+        await registry.recover_ai_model(key, sites.Cluster.KBASE)
+    flowman.get_flow.assert_not_called()
+    mongo.add_ai_model_site.assert_not_called()
+
+
+async def test_recover_ai_model_fail_no_usable_flow():
+    registry, mongo, flowman = _make_registry()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    ai_model = models.AdminAIModel(
+        source=key.source,
+        model=key.model,
+        version=key.version,
+        size_bytes=42,
+        registered_by=_USER.user,
+        registered_on=_T,
+        statuses=[],
+    )
+    mongo.get_ai_model.return_value = ai_model
+    flowman.get_flow.side_effect = ValueError("no flow available for cluster kbase")
+
+    with pytest.raises(ValueError, match="^no flow available for cluster kbase$"):
+        await registry.recover_ai_model(key, sites.Cluster.KBASE)
+    mongo.add_ai_model_site.assert_not_called()
 
 
 async def test_get_ai_models():
