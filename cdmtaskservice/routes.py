@@ -592,6 +592,12 @@ async def get_refdata_by_path(
 # TODO CHECKSUM FEATURE add get refdata by crc64nvme if needed... YAGNI
 
 
+_ANN_AI_MODEL_REF = Annotated[str, FastPath(
+    openapi_examples={"model ref": {"value": "org/name@main"}},
+    description="The AI model's combined model@ref reference.",
+)]
+
+
 @ROUTER_AI_MODELS.get(
     "/{source}/{model_ref:path}",
     response_model=models.AIModel,
@@ -604,10 +610,7 @@ async def get_refdata_by_path(
 async def get_ai_model(
     r: Request,
     source: models.AIModelSource,
-    model_ref: Annotated[str, FastPath(
-        openapi_examples={"model ref": {"value": "org/name@main"}},
-        description="The AI model's combined model@ref reference.",
-    )],
+    model_ref: _ANN_AI_MODEL_REF,
     resolve_tag: Annotated[bool, Query(
         description="If the ref doesn't match a version exactly, fall back to resolving it as "
             + "a tag. Set to false when the ref is already known to be a resolved version, to "
@@ -740,6 +743,49 @@ async def create_refdata(
     _ensure_admin(user, "Only service administrators can create reference data.")
     refdata = app_state.get_app_state(r).refdata
     return await refdata.create_refdata(refdata_s3_path, user, crc64nvme=crc64nvme, unpack=unpack)
+
+
+@ROUTER_ADMIN.post(
+    "/ai-models/{source}/{model_ref:path}",
+    response_model=models.AdminAIModel,
+    response_model_exclude_none=True,
+    summary="Register an AI model",
+    description="Register an AI model snapshot for use with this service and start its staging "
+        + "process at every usable compute site. If the model snapshot is already registered, "
+        + "this is a no-op other than moving the tag, if any, to the newly resolved version.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def register_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model_ref: _ANN_AI_MODEL_REF,
+    user: CTSUser=Depends(_AUTH),
+) -> models.AdminAIModel:
+    _ensure_admin(user, "Only service administrators can register AI models.")
+    registry = app_state.get_app_state(r).ai_model_registry
+    return await registry.register_ai_model(source, model_ref, user)
+
+
+@ROUTER_ADMIN.get(
+    "/ai-models/{source}/{model_ref:path}",
+    response_model=models.AdminAIModel,
+    response_model_exclude_none=True,
+    summary="Get AI model information as an admin",
+    description="Get information about a registered AI model snapshot, including its staging "
+        + "status, by its source and combined model@ref reference, with additional details.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_ai_model_admin(
+    r: Request,
+    source: models.AIModelSource,
+    model_ref: _ANN_AI_MODEL_REF,
+    user: CTSUser=Depends(_AUTH),
+) -> models.AdminAIModel:
+    _ensure_admin(user, "Only service administrators can get AI models as an admin.")
+    registry = app_state.get_app_state(r).ai_model_registry
+    return await registry.get_ai_model(
+        source, model_ref, resolve_tag=True, populate_tags=True, as_admin=True
+    )
 
 
 @ROUTER_ADMIN.get(
