@@ -756,7 +756,7 @@ class NERSCJAWSRunner(JobFlow):
         self,
         refdata_id: str,
         new_state: models.StagingState,
-        update: models.RefdataUpdate | None = None
+        update: models.StagingStateUpdate | None = None
     ):
         """ Throws an error as this method is unsupported. """
         raise UnsupportedOperationError(
