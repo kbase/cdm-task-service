@@ -763,6 +763,17 @@ class NERSCJAWSRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
+    async def update_ai_model_state(
+        self,
+        key: models.AIModelKey,
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None = None
+    ):
+        """ Throws an error as this method is unsupported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """
         Clean up refdata staging files at the remote compute site.

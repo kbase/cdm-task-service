@@ -28,6 +28,7 @@ from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
     UnauthorizedError,
+    InvalidAIModelStateError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     JobRecoveryError,
@@ -1172,13 +1173,27 @@ class KBaseRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
-    _COMMON_STATE_TO_UPDATE_REFDATA_FUNC = {
+    _COMMON_STATE_TO_STAGING_UPDATE_FUNC = {
         models.StagingState.DOWNLOAD_SUBMITTED: lambda _:
             update_state.submitted_staging_download(),
         models.StagingState.COMPLETE: lambda _: update_state.staging_complete(),
         models.StagingState.ERROR: lambda update: update_state.staging_error(
             "An unexpected error occurred", update.admin_error, traceback=update.traceback),
     }
+
+    def _resolve_staging_update(
+        self,
+        entity_desc: str,
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None,
+    ) -> update_state.StagingUpdate:
+        _not_falsy(new_state, "new_state")
+        update = update or models.StagingStateUpdate()
+        if new_state not in self._COMMON_STATE_TO_STAGING_UPDATE_FUNC:
+            raise UnsupportedOperationError(
+                f"Cannot update {entity_desc} to state {new_state.value}"
+        )
+        return self._COMMON_STATE_TO_STAGING_UPDATE_FUNC[new_state](update)
 
     async def update_refdata_state(
         self,
@@ -1194,13 +1209,7 @@ class KBaseRunner(JobFlow):
         update - the update to apply.
         """
         _require_string(refdata_id, "refdata_id")
-        _not_falsy(new_state, "new_state")
-        update = update or models.StagingStateUpdate()
-        if new_state not in self._COMMON_STATE_TO_UPDATE_REFDATA_FUNC:
-            raise UnsupportedOperationError(
-                f"Cannot update refdatqa to state {new_state.value}"
-        )
-        mongo_update = self._COMMON_STATE_TO_UPDATE_REFDATA_FUNC[new_state](update)
+        mongo_update = self._resolve_staging_update("refdata", new_state, update)
         # Just throw the error, don't error out the refdata staging.
         # If the caller thinks this is an error they can try and set the error state.
         # Theoretically this could be used to transition a complete job to an error state,
@@ -1208,7 +1217,7 @@ class KBaseRunner(JobFlow):
         # Could add a criteria to the mongo query such that
         # if new_state = error current_state != complete
         await self._mongo.update_refdata_state(
-            self.CLUSTER, refdata_id, mongo_update, utcdatetime()
+            self.CLUSTER, refdata_id, mongo_update, self._timestamp_fn()
         )
 
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
@@ -1216,6 +1225,50 @@ class KBaseRunner(JobFlow):
         Do nothing. There's nothing to clean up.
         """
         pass # Intentionally do nothing
+
+    async def stage_ai_model(self, ai_model: models.AdminAIModel):
+        """
+        Start staging an AI model snapshot. It is expected that the AI model has been persisted
+        to the data storage system and is in the created state.
+
+        ai_model - the AI model to stage.
+        """
+        aistate = _not_falsy(ai_model, "ai_model").get_status_for_cluster(self.CLUSTER)
+        if aistate.state != models.StagingState.CREATED:
+            raise InvalidAIModelStateError("AI model must be in the created state")
+        try:
+            await self._refcli.stage_ai_model(ai_model.key, self.CLUSTER)
+        except Exception as e:
+            await self._updates.handle_exception(
+                e, ai_model.key, "starting staging for", entity_type=EntityType.AI_MODEL
+            )
+
+    async def ai_model_complete(self, key: models.AIModelKey):
+        """ Throws an exception as this method is not supported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+
+    async def update_ai_model_state(
+        self,
+        key: models.AIModelKey,
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None = None,
+    ):
+        """
+        Update AI model staging state for the KBase site.
+
+        key - the AI model's key.
+        new_state - the new state for the AI model.
+        update - the update to apply.
+        """
+        _not_falsy(key, "key")
+        mongo_update = self._resolve_staging_update("AI model", new_state, update)
+        # Just throw the error, don't error out the AI model staging.
+        # If the caller thinks this is an error they can try and set the error state.
+        await self._mongo.update_ai_model_state(
+            self.CLUSTER, key, mongo_update, self._timestamp_fn()
+        )
 
 
 class KBaseSubjobMonitor:
