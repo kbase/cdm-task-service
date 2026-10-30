@@ -130,4 +130,13 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         # refdata from NERSC -> LRC and the file JAWS writes when it's done, but they're both tiny
         # and are in the same directory structure as the refdata itself
         # YAGNI for now
-        pass # Intentionally do nothing 
+        pass # Intentionally do nothing
+
+    async def clean_ai_model(self, ai_model: models.AdminAIModel, force: bool = False):
+        """
+        Do nothing. AI models are staged at NERSC; there is nothing to clean up at LRC.
+        """
+        # Same consideration as clean_refdata above - any NERSC -> LRC transfer trigger/complete
+        # files are tiny and sit in the same directory structure as the AI model itself.
+        # YAGNI for now
+        pass # Intentionally do nothing

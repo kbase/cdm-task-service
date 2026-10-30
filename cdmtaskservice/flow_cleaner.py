@@ -10,7 +10,7 @@ import datetime
 import logging
 
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
-from cdmtaskservice.jobflows.flowmanager import JobFlowManager
+from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowManager
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice.mongo import MongoDAO
@@ -18,6 +18,17 @@ from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice import sites
 from cdmtaskservice.timestamp import utcdatetime
 from cdmtaskservice.user import CTSUser
+
+
+# The staged entity types sharing the clean-up logic below (refdata, AI models) differ only in
+# which flow / mongo methods to call and how to describe themselves in logs - everything else
+# (the noop-if-cleaned check, the terminal-state branch, the sweep-all-statuses loop) is
+# identical, so that logic lives once in _clean_staged_entity / _process_staged_entity below and
+# dispatches on get_entity_type() for the handful of points that differ.
+_STAGED_ENTITY_DESC: dict[models.EntityType, tuple[str, str]] = {
+    models.EntityType.REFDATA: ("refdata", logfields.REFDATA_ID),
+    models.EntityType.AI_MODEL: ("AI model", logfields.AI_MODEL_ID),
+}
 
 
 class FlowCleaner:
@@ -128,62 +139,117 @@ class FlowCleaner:
         Clean any transient refdata files for a cluster. If the refdata is already in the
         cleaned state for the cluster this is a noop. If the refdata cluster is not in a terminal
         state the refdata cluster will not be set to cleaned.
-        
-        WARNING: setting force to True may cause undefined behavior. True will 
+
+        WARNING: setting force to True may cause undefined behavior. True will
         cause refdata files to be removed regardless of refdata state.
         """
         _not_falsy(refdata, "refdata")
+        await self._clean_staged_entity(refdata, cluster, user, force=force)
+
+    async def clean_ai_model(
+        self,
+        ai_model: models.AdminAIModel,
+        cluster: sites.Cluster,
+        user: CTSUser,
+        force: bool = False,
+    ):
+        """
+        Clean any transient AI model staging files for a cluster. If the AI model is already
+        in the cleaned state for the cluster this is a noop. If the AI model cluster is not in
+        a terminal state the AI model cluster will not be set to cleaned.
+
+        WARNING: setting force to True may cause undefined behavior. True will
+        cause AI model files to be removed regardless of staging state.
+        """
+        _not_falsy(ai_model, "ai_model")
+        await self._clean_staged_entity(ai_model, cluster, user, force=force)
+
+    async def _clean_staged_entity(
+        self,
+        entity: models.AdminReferenceData | models.AdminAIModel,
+        cluster: sites.Cluster,
+        user: CTSUser,
+        force: bool = False,
+    ):
+        # entity's own non-null check is the caller's responsibility (clean_refdata/clean_ai_model)
+        # so the error message uses the public method's own parameter name (refdata/ai_model),
+        # not the generic "entity" name used here.
         _not_falsy(cluster, "cluster")
         _not_falsy(user, "user")
-        refstate = refdata.get_status_for_cluster(cluster)
-        if refstate.cleaned:
+        status = entity.get_status_for_cluster(cluster)
+        if status.cleaned:
             return
         flow = await self._flowman.get_flow(cluster)
-        await flow.clean_refdata(refdata, force=force)
-        if refstate.state.is_terminal():
-            # if force is True and the refdata isn't in the terminal state
-            # the refdata may produce more dirt later
-            await self._mongo.set_refdata_clean(cluster, refdata.id)
+        await self._flow_clean_staged_entity(flow, entity, force)
+        entity_id = self._staged_entity_id(entity)
+        noun, logfield = _STAGED_ENTITY_DESC[entity.get_entity_type()]
+        if status.state.is_terminal():
+            # if force is True and the entity isn't in the terminal state
+            # the entity may produce more dirt later
+            await self._set_staged_entity_clean(cluster, entity)
             self._logr.info(
-                f"Cleaned refdata '{refdata.id}' for cluster '{cluster.value}' "
+                f"Cleaned {noun} '{entity_id}' for cluster '{cluster.value}' "
                 + f"at user '{user.user}' request",
-                extra={logfields.REFDATA_ID: refdata.id, logfields.CLUSTER: cluster.value}
+                extra={logfield: entity_id, logfields.CLUSTER: cluster.value}
             )
         else:
             self._logr.info(
-                f"{'Force c' if force else 'C'}leaned refdata '{refdata.id}' "
+                f"{'Force c' if force else 'C'}leaned {noun} '{entity_id}' "
                 + f"for cluster '{cluster.value}' at user '{user.user}' "
                 + "request but did not set clean state",
-                extra={logfields.REFDATA_ID: refdata.id, logfields.CLUSTER: cluster.value}
+                extra={logfield: entity_id, logfields.CLUSTER: cluster.value}
             )
-    
-    async def _process_refdata(self, refdata: models.AdminReferenceData):
+
+    async def _process_staged_entity(
+        self, entity: models.AdminReferenceData | models.AdminAIModel
+    ):
         # May need to parallelize this, but YAGNI for now
         older_than = utcdatetime() - self._minage
-        for rd in refdata.statuses:
-            if (rd.cleaned
-                or not rd.state.is_terminal()
-                or rd.transition_times[-1].time >= older_than
-            ):
+        entity_id = self._staged_entity_id(entity)
+        noun, logfield = _STAGED_ENTITY_DESC[entity.get_entity_type()]
+        for s in entity.statuses:
+            if s.cleaned or not s.state.is_terminal() or s.transition_times[-1].time >= older_than:
                 continue
             try:
-                
-                if rd.cluster not in await self._flowman.list_usable_clusters():
+                if s.cluster not in await self._flowman.list_usable_clusters():
                     continue
-                flow = await self._flowman.get_flow(rd.cluster)
-                await flow.clean_refdata(refdata)
-                await self._mongo.set_refdata_clean(rd.cluster, refdata.id)
+                flow = await self._flowman.get_flow(s.cluster)
+                await self._flow_clean_staged_entity(flow, entity, False)
+                await self._set_staged_entity_clean(s.cluster, entity)
                 self._logr.info(
-                    f"Cleaned refdata '{refdata.id}' for cluster '{rd.cluster.value}'",
-                    extra={logfields.REFDATA_ID: refdata.id, logfields.CLUSTER: rd.cluster.value}
+                    f"Cleaned {noun} '{entity_id}' for cluster '{s.cluster.value}'",
+                    extra={logfield: entity_id, logfields.CLUSTER: s.cluster.value}
                 )
             except Exception as e:
                 # Nothing really to be done. Maybe fixed on next attempt
                 self._logr.exception(
-                    f"Failed cleaning refdata '{refdata.id}' "
-                    + f"for cluster '{rd.cluster.value}': {e}",
-                    extra={logfields.REFDATA_ID: refdata.id, logfields.CLUSTER: rd.cluster.value}
+                    f"Failed cleaning {noun} '{entity_id}' "
+                    + f"for cluster '{s.cluster.value}': {e}",
+                    extra={logfield: entity_id, logfields.CLUSTER: s.cluster.value}
                 )
+
+    @staticmethod
+    def _staged_entity_id(entity: models.AdminReferenceData | models.AdminAIModel) -> str:
+        if entity.get_entity_type() == models.EntityType.REFDATA:
+            return entity.id
+        return str(entity.key)
+
+    @staticmethod
+    async def _flow_clean_staged_entity(
+        flow: JobFlow, entity: models.AdminReferenceData | models.AdminAIModel, force: bool
+    ):
+        if entity.get_entity_type() == models.EntityType.REFDATA:
+            await flow.clean_refdata(entity, force=force)
+        else:
+            await flow.clean_ai_model(entity, force=force)
+
+    async def _set_staged_entity_clean(
+        self, cluster: sites.Cluster, entity: models.AdminReferenceData | models.AdminAIModel
+    ):
+        if entity.get_entity_type() == models.EntityType.REFDATA:
+            await self._mongo.set_refdata_clean(cluster, entity.id)
+        else:
+            await self._mongo.set_ai_model_clean(cluster, entity.key)
 
     async def _run(self):
         older_than = utcdatetime() - self._minage
@@ -199,10 +265,13 @@ class FlowCleaner:
             # Nothing really to be done. Something is very wrong. Maybe fixed on next attempt
             self._logr.exception(f"Failed processing pipeline jobs for cleanup: {e}")
         try:
-            await self._mongo.process_dirty_refdata(older_than, self._process_refdata)
+            await self._mongo.process_dirty_refdata(older_than, self._process_staged_entity)
         except Exception as e:
             # Nothing really to be done. Something is very wrong. Maybe fixed on next attempt
             self._logr.exception(f"Failed processing refdata for cleanup: {e}")
+        # TODO AI_MODEL wire up an analogous mongo.process_dirty_ai_models(older_than,
+        #      self._process_staged_entity) call here once that mongo method is added -
+        #      _process_staged_entity is already AI-model-ready (Chunk 10.1).
     
     def close(self):
         """Shutdown the scheduler."""

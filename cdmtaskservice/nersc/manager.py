@@ -229,6 +229,21 @@ rm -rf -- "{path}"
 """
 
 
+# Like _REMOVE_PATH_TEMPLATE, but also prunes now-empty ancestor directories left behind by
+# path, walking upward via dirname and stopping at the first non-empty ancestor (rmdir fails
+# harmlessly on a non-empty directory) or at stop_at (exclusive), whichever comes first.
+_REMOVE_PATH_AND_PRUNE_TEMPLATE = """
+if [ -e "{path}" ]; then
+    rm -rf -- "{path}"
+fi
+d=$(dirname -- "{path}")
+while [ "$d" != "{stop_at}" ]; do
+    rmdir -- "$d" 2>/dev/null || break
+    d=$(dirname -- "$d")
+done
+"""
+
+
 _CTS_ROOT = __name__.split(".")[0]
 _CTS_DEPENDENCIES = {remote}
 _PIP_DEPENDENCIES = set()
@@ -381,6 +396,9 @@ class NERSCManager:
             if _PIP_DEPENDENCIES:
                 tg.create_task(self._install_pip_dependencies(perlmutter))
         self._perlmutter_scratch = pm_scratch.result()
+        self._ai_model_scratch_root = (
+            self._perlmutter_scratch / self._work_loc / _AI_MODEL_SCRATCH_DIR
+        )
         self._nersc_perlmutter_file_cache_path = self._make_cache_path(
             nersc_paths.jaws_staging_dir_perlmutter)
         logr.info(
@@ -446,10 +464,7 @@ class NERSCManager:
         return self._work_loc / refdata_id
 
     def _get_ai_model_scratch(self, key: models.AIModelKey) -> Path:
-        return (
-            self._perlmutter_scratch / self._work_loc / _AI_MODEL_SCRATCH_DIR
-            / key.source.value / key.model / key.version
-        )
+        return self._ai_model_scratch_root / key.source.value / key.model / key.version
 
     def _get_ai_model_staging_loc(self, key: models.AIModelKey) -> Path:
         # Perlmutter login nodes (where `xfer` QOS jobs run) cannot write to the DTN-only
@@ -530,6 +545,14 @@ class NERSCManager:
                 logr.info("Deleting path at NERSC", extra={logfields.FILE: p})
                 # May need to catch SFAPI client errors and wrap. YAGNI for now
                 tg.create_task(perlmutter.run(_REMOVE_PATH_TEMPLATE.format(path=p)))
+
+    async def _delete_path_and_prune_empty_ancestors(self, path: Path, stop_at: Path):
+        logr = logging.getLogger(__name__)
+        cli = self._client_provider()
+        perlmutter = await cli.compute(Machine.perlmutter)
+        logr.info("Deleting path at NERSC and pruning empty ancestors", extra={logfields.FILE: path})
+        # May need to catch SFAPI client errors and wrap. YAGNI for now
+        await perlmutter.run(_REMOVE_PATH_AND_PRUNE_TEMPLATE.format(path=path, stop_at=stop_at))
 
     def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
         # skip some API calls vs. the upload example in the NERSC docs
@@ -1419,3 +1442,22 @@ class NERSCManager:
         state may result in undefined behavior.
         """
         await self._delete_paths([self._get_refdata_scratch(refdata.id)])
+
+    async def clean_ai_model(self, key: models.AIModelKey):
+        """
+        Remove any files at NERSC associated with staging the AI model snapshot. Does not
+        remove the final staged snapshot itself or the NERSC -> LRC sync notification file
+        read by JAWS.
+
+        If any files do not exist they are silently ignored.
+
+        Also prunes now-empty ancestor directories left behind by the
+        <source>/<model>/<version> scratch nesting, stopping at the AI model scratch root so a
+        sibling version/model's in-progress scratch content is never touched.
+
+        Note that running this method on an AI model where staging is not in a terminal state
+        for this cluster may result in undefined behavior.
+        """
+        await self._delete_path_and_prune_empty_ancestors(
+            self._get_ai_model_scratch(key), self._ai_model_scratch_root
+        )

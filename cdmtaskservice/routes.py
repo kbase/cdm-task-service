@@ -1194,6 +1194,39 @@ async def recover_ai_model(
     await registry.recover_ai_model(models.AIModelKey(source, model, version), cluster)
 
 
+@ROUTER_ADMIN.delete(
+    "/ai-models/{source}/{model:path}/{version}/{cluster}/clean",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Clean up AI model staging files",
+    description="Remove AI model staging related files managed by this service at the remote "
+        + "compute site. The AI model staging must be in a terminal state.\n\n"
+        + "The registered AI model snapshot itself is not removed. If the AI model is already "
+        + "cleaned this is a noop.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def clean_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model: _ANN_AI_MODEL_MODEL,
+    version: _ANN_AI_MODEL_VERSION,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster where AI model staging files should be cleaned up."
+    )],
+    force: Annotated[bool, Query(
+        description="**WARNING**: setting force to true may cause undefined behavior. True will "
+        + "cause AI model files to be removed regardless of staging state."
+    )] = False,
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can clean AI models.")
+    appstate = app_state.get_app_state(r)
+    ai_model = await appstate.ai_model_registry.get_ai_model(
+        source, f"{model}@{version}", resolve_tag=False, populate_tags=False, as_admin=True
+    )
+    await appstate.flow_cleaner.clean_ai_model(ai_model, cluster, user, force=force)
+
+
 @ROUTER_ADMIN.put(
     "/sites/{site}/active",
     summary="Activate a site",

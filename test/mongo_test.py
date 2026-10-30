@@ -2846,3 +2846,74 @@ async def test_add_ai_model_site_fail_inputs(mondb):
         await mc.add_ai_model_site(None, status)
     with pytest.raises(ValueError, match="^status is required$"):
         await mc.add_ai_model_site(key, None)
+
+
+async def test_set_ai_model_clean(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model(statuses=[
+        models.AdminStagingStatus(
+            cluster=sites.Cluster.PERLMUTTER_JAWS,
+            state=models.StagingState.CREATED,
+            transition_times=[models.StagingStateTransition(
+                state=models.StagingState.CREATED, time=_SAFE_TIME
+            )],
+        ),
+        models.AdminStagingStatus(
+            cluster=sites.Cluster.KBASE,
+            state=models.StagingState.ERROR,
+            transition_times=[
+                models.StagingStateTransition(
+                    state=models.StagingState.CREATED, time=_SAFE_TIME
+                ),
+                models.StagingStateTransition(
+                    state=models.StagingState.ERROR, time=_SAFE_TIME
+                ),
+            ],
+        ),
+    ])
+    await mc.save_ai_model(am)
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert [s.cleaned for s in got.statuses] == [False, False]
+
+    await mc.set_ai_model_clean(sites.Cluster.KBASE, am.key)
+    am.statuses[1].cleaned = True
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert got == am
+
+    await mc.set_ai_model_clean(sites.Cluster.PERLMUTTER_JAWS, am.key)
+    am.statuses[0].cleaned = True
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert got == am
+
+
+async def test_set_ai_model_clean_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()  # only has a status for PERLMUTTER_JAWS
+    await mc.save_ai_model(am)
+
+    k = sites.Cluster.KBASE
+    other_key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/other", "abc123")
+    with pytest.raises(ValueError, match="^cluster is required$"):
+        await mc.set_ai_model_clean(None, am.key)
+    with pytest.raises(ValueError, match="^key is required$"):
+        await mc.set_ai_model_clean(k, None)
+    with pytest.raises(NoSuchAIModelError, match=re.escape(
+        f"No AI model with key '{other_key}' for cluster kbase exists"
+    )):
+        await mc.set_ai_model_clean(k, other_key)
+    with pytest.raises(NoSuchAIModelError, match=re.escape(
+        f"No AI model with key '{am.key}' for cluster kbase exists"
+    )):
+        await mc.set_ai_model_clean(k, am.key)
+    # right cluster (present on am), but a key that doesn't exist at all
+    with pytest.raises(NoSuchAIModelError, match=re.escape(
+        f"No AI model with key '{other_key}' for cluster perlmutter-jaws exists"
+    )):
+        await mc.set_ai_model_clean(sites.Cluster.PERLMUTTER_JAWS, other_key)

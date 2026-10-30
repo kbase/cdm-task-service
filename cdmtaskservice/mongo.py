@@ -1734,22 +1734,34 @@ class MongoDAO:
         doc = self._clean_doc(doc)
         return models.AdminReferenceData(**doc) if as_admin else models.ReferenceData(**doc)
 
-    async def set_refdata_clean(self, cluster: sites.Cluster, refdata_id: str):
-        """ Set a site's refdata cleaned state to true. """
-        elemquery = {models.FLD_COMMON_CLUSTER: _not_falsy(cluster, "cluster").value}
-        query = {
-            models.FLD_COMMON_ID: _require_string(refdata_id, "refdata_id"),
-            models.FLD_COMMON_STATUSES: {"$elemMatch": elemquery},
+    async def _set_staging_clean(
+        self,
+        col: AsyncIOMotorCollection,
+        query: dict[str, Any],
+        not_found_errcls: type[Exception],
+        not_found_msg: str,
+        cluster: sites.Cluster,
+    ):
+        query[models.FLD_COMMON_STATUSES] = {
+            "$elemMatch": {models.FLD_COMMON_CLUSTER: _not_falsy(cluster, "cluster").value}
         }
         update = {"$set": {
             f"{models.FLD_COMMON_STATUSES}.$.{models.FLD_COMMON_CLEANED}": True
         }}
-        res = await self._col_refdata.update_one(query, update)
+        res = await col.update_one(query, update)
         if not res.matched_count:
-            raise NoSuchReferenceDataError(
-                f"No reference data with ID '{refdata_id}' for cluster {cluster.value} exists"
-            )
-    
+            raise not_found_errcls(f"{not_found_msg} for cluster {cluster.value} exists")
+
+    async def set_refdata_clean(self, cluster: sites.Cluster, refdata_id: str):
+        """ Set a site's refdata cleaned state to true. """
+        await self._set_staging_clean(
+            self._col_refdata,
+            {models.FLD_COMMON_ID: _require_string(refdata_id, "refdata_id")},
+            NoSuchReferenceDataError,
+            f"No reference data with ID '{refdata_id}'",
+            cluster,
+        )
+
     async def process_dirty_refdata(
             self,
             older_than: datetime.datetime,
@@ -1777,7 +1789,6 @@ class MongoDAO:
         }}}
         async for j in self._col_refdata.find(query):
             await operation(self._to_refdata(j, as_admin=True))
-
 
     async def _update_staging_state(
         self,
@@ -2067,6 +2078,20 @@ class MongoDAO:
             raise NoSuchAIModelError(
                 f"No AI model with key '{key}' without cluster {status.cluster.value} exists"
             )
+
+    async def set_ai_model_clean(self, cluster: sites.Cluster, key: models.AIModelKey):
+        """ Set a site's AI model cleaned state to true. """
+        await self._set_staging_clean(
+            self._col_ai_models,
+            {
+                models.FLD_AI_MODEL_SOURCE: _not_falsy(key, "key").source.value,
+                models.FLD_AI_MODEL_MODEL: key.model,
+                models.FLD_AI_MODEL_VERSION: key.version,
+            },
+            NoSuchAIModelError,
+            f"No AI model with key '{key}'",
+            cluster,
+        )
 
 
 class NoSuchImageError(Exception):
