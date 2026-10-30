@@ -13,10 +13,12 @@ from cdmtaskservice.callback_url_paths import (
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
     get_refdata_download_complete_callback,
+    get_ai_model_download_complete_callback,
 )
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
+    InvalidAIModelStateError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     IllegalParameterError,
@@ -49,8 +51,8 @@ from cdmtaskservice.update_state import (
     submitting_error_processing,
     submitted_nersc_error_processing,
     error,
-    submitted_nersc_refdata_download,
-    refdata_complete,
+    submitted_nersc_staging_download,
+    staging_complete,
 )
 from cdmtaskservice.user import CTSUser
 
@@ -68,6 +70,20 @@ _JAWS_RESULT_TO_EXTERNAL = {
     jaws_client.JAWSResult.FAILED:       models.ExternalRunnerState.ERROR,
     jaws_client.JAWSResult.CANCELED:     models.ExternalRunnerState.CANCELED,
     jaws_client.JAWSResult.SYSTEM_ERROR: models.ExternalRunnerState.ERROR,
+}
+
+_TRANSFER_ERRCLS = {
+    EntityType.JOB: InvalidJobStateError,
+    EntityType.PIPELINE_JOB: InvalidJobStateError,
+    EntityType.REFDATA: InvalidReferenceDataStateError,
+    EntityType.AI_MODEL: InvalidAIModelStateError,
+}
+
+_TRANSFER_LOGFIELD = {
+    EntityType.JOB: logfields.JOB_ID,
+    EntityType.PIPELINE_JOB: logfields.JOB_ID,
+    EntityType.REFDATA: logfields.REFDATA_ID,
+    EntityType.AI_MODEL: logfields.AI_MODEL_ID,
 }
 
 
@@ -128,7 +144,7 @@ class NERSCJAWSRunner(JobFlow):
     async def _get_transfer_result(
         self,
         trans_func: Callable[[], Awaitable[tuple[TransferResult, Any]]],
-        entity_id: str,
+        entity_id: str | models.AIModelKey,
         op: str,
         err_type: str,
         entity_type: EntityType = EntityType.JOB,
@@ -142,18 +158,13 @@ class NERSCJAWSRunner(JobFlow):
             await self._updates.handle_exception(e, entity_id, err_type, entity_type=entity_type)
             raise
         if res.state == TransferState.INCOMPLETE:
-            errcls = (
-                InvalidReferenceDataStateError
-                if entity_type == EntityType.REFDATA
-                else InvalidJobStateError
-            )
+            errcls = _TRANSFER_ERRCLS[entity_type]
             raise errcls(f"{op} task is not complete")
         elif res.state == TransferState.FAIL:
             self._logr.error(
                 f"{op} failed for {entity_type.value}.",
                 extra={
-                    logfields.REFDATA_ID if entity_type == EntityType.REFDATA
-                        else logfields.JOB_ID: entity_id,
+                    _TRANSFER_LOGFIELD[entity_type]: str(entity_id),
                     logfields.REMOTE_ERROR: res.message,
                     logfields.REMOTE_TRACEBACK: res.traceback
                 }
@@ -292,12 +303,11 @@ class NERSCJAWSRunner(JobFlow):
             # TODO PERF config / set concurrency
             # TODO DISKSPACE will need to clean up job downloads @ NERSC
             nersc_job_id = await self._nman.download_s3_files(
-                job.id,
+                job,
                 objmeta,
                 presigned,
                 callback_url,
                 insecure_ssl=self._s3insecure,
-                pipeline=job.pipeline_input.get_pipeline_spec() if pipeline else None,
             )
             # Hmm. really this should go through job state but that seems pointless right now.
             # May need to refactor this and the mongo method later to be more generic to
@@ -685,7 +695,7 @@ class NERSCJAWSRunner(JobFlow):
             is required.
         """
         refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
-        if refstate.state != models.ReferenceDataState.CREATED:
+        if refstate.state != models.StagingState.CREATED:
             raise InvalidReferenceDataStateError("Reference data must be in the created state")
         # Could check that the s3 and refdata path / etag match... YAGNI
         # TODO PERF this validates the file paths yet again.
@@ -698,16 +708,14 @@ class NERSCJAWSRunner(JobFlow):
             # TODO DISKSPACE clean up no longer used refdata @ NERSC
             #                keep the refdata mongo record so it can be restaged if necessary
             job_id = await self._nman.download_s3_files(
-                refdata.id,
+                refdata,
                 [objmeta],
                 presigned,
                 callback_url,
                 insecure_ssl=self._s3insecure,
-                refdata=True,
-                unpack=refdata.unpack,
             )
             await self._updates.update_refdata_state(
-                refdata.id, submitted_nersc_refdata_download(job_id)
+                refdata.id, submitted_nersc_staging_download(job_id)
             )
         except Exception as e:
             await self._updates.handle_exception(
@@ -722,7 +730,7 @@ class NERSCJAWSRunner(JobFlow):
         """
         refdata = await self._mongo.get_refdata_by_id(_require_string(refdata_id, "refdata_id"))
         refstate = refdata.get_status_for_cluster(self.CLUSTER)
-        if refstate.state != models.ReferenceDataState.DOWNLOAD_SUBMITTED:
+        if refstate.state != models.StagingState.DOWNLOAD_SUBMITTED:
             raise InvalidReferenceDataStateError(
                 "Reference data must be in the download submitted state for "
                 + f"cluster {refstate.cluster.value}"
@@ -736,7 +744,7 @@ class NERSCJAWSRunner(JobFlow):
             entity_type=EntityType.REFDATA,
         )
         # TODO DISKSPACE will need to clean up refdata manifests & d/l result json files
-        await self._updates.update_refdata_state(refdata.id, refdata_complete())
+        await self._updates.update_refdata_state(refdata.id, staging_complete())
         if self._on_refdata_complete:
             # don't wait for this function to run before returning
             await self._coman.run_coroutine(self._on_refdata_complete(refdata))
@@ -744,8 +752,19 @@ class NERSCJAWSRunner(JobFlow):
     async def update_refdata_state(
         self,
         refdata_id: str,
-        new_state: models.ReferenceDataState,
-        update: models.RefdataUpdate | None = None
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None = None
+    ):
+        """ Throws an error as this method is unsupported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+
+    async def update_ai_model_state(
+        self,
+        key: models.AIModelKey,
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None = None
     ):
         """ Throws an error as this method is unsupported. """
         raise UnsupportedOperationError(
@@ -755,9 +774,9 @@ class NERSCJAWSRunner(JobFlow):
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """
         Clean up refdata staging files at the remote compute site.
-        
+
         If any files do not exist they are silently ignored.
-        
+
         refdata - the refdata to clean up.
         force - perform the clean up even if the refdata staging isn't in a terminal state.
             This may cause undefined behavior.
@@ -769,3 +788,68 @@ class NERSCJAWSRunner(JobFlow):
         if not force and not refstate.state.is_terminal():
             raise IllegalParameterError("Refdata is not in a terminal state and cannot be cleaned")
         await self._nman.clean_refdata(refdata)
+
+    async def clean_ai_model(self, ai_model: models.AdminAIModel, force: bool = False):
+        """
+        Clean up AI model staging files at the remote compute site.
+
+        If any files do not exist they are silently ignored.
+
+        ai_model - the AI model to clean up.
+        force - perform the clean up even if the AI model staging isn't in a terminal state.
+            This may cause undefined behavior.
+        """
+        aistate = _not_falsy(ai_model, "ai_model").get_status_for_cluster(self.CLUSTER)
+        if not force and not aistate.state.is_terminal():
+            raise IllegalParameterError(
+                "AI model is not in a terminal state and cannot be cleaned"
+            )
+        await self._nman.clean_ai_model(ai_model.key)
+
+    async def stage_ai_model(self, ai_model: models.AdminAIModel):
+        """
+        Start staging an AI model snapshot. It is expected that the AI model has been persisted
+        to the data storage system and is in the created state.
+
+        ai_model - the AI model to stage.
+        """
+        aistate = _not_falsy(ai_model, "ai_model").get_status_for_cluster(self.CLUSTER)
+        if aistate.state != models.StagingState.CREATED:
+            raise InvalidAIModelStateError("AI model must be in the created state")
+        try:
+            callback_url = get_ai_model_download_complete_callback(
+                self._callback_root, ai_model.key, self.CLUSTER
+            )
+            job_id = await self._nman.stage_ai_model(ai_model, callback_url)
+            await self._updates.update_ai_model_state(
+                ai_model.key, submitted_nersc_staging_download(job_id)
+            )
+        except Exception as e:
+            await self._updates.handle_exception(
+                e, ai_model.key, "starting staging for",
+                entity_type=EntityType.AI_MODEL,
+            )
+
+    async def ai_model_complete(self, key: models.AIModelKey):
+        """
+        Complete an AI model staging task. The AI model is expected to be in the download
+        submitted state for the cluster.
+        """
+        ai_model = await self._mongo.get_ai_model(
+            _not_falsy(key, "key").source, key.model, key.version
+        )
+        aistate = ai_model.get_status_for_cluster(self.CLUSTER)
+        if aistate.state != models.StagingState.DOWNLOAD_SUBMITTED:
+            raise InvalidAIModelStateError(
+                "AI model must be in the download submitted state for "
+                + f"cluster {aistate.cluster.value}"
+            )
+        async def tfunc():
+            return await self._nman.get_ai_model_staging_result(key), None
+        await self._get_transfer_result(  # check for errors
+            tfunc,
+            key,
+            "Download", "getting download results for",
+            entity_type=EntityType.AI_MODEL,
+        )
+        await self._updates.update_ai_model_state(key, staging_complete())

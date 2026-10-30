@@ -18,7 +18,7 @@ from cdmtaskservice.mongo import MongoDAO
 from cdmtaskservice.nersc.manager import NERSCManager
 from cdmtaskservice.s3.client import S3ObjectMeta
 from cdmtaskservice import sites
-from cdmtaskservice.update_state import submitted_refdata_download, refdata_complete
+from cdmtaskservice.update_state import submitted_staging_download, staging_complete
 
 
 class LawrenciumJAWSRunner(NERSCJAWSRunner):
@@ -60,6 +60,12 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
             service_root_url,
         )
     
+    # TODO AI_MODEL if Lawrencium is reactivated, add a stage_ai_model override here mirroring
+    #      whatever mechanism stage_refdata/nersc_refdata_complete/refdata_complete use for
+    #      refdata at that time (today that's the generic JAWS Globus-transfer primitives,
+    #      parametrized by the AI model's snapshot subdirectory instead of a refdata id's path) -
+    #      i.e. keep AI model sync content-agnostic and consistent with however refdata sync
+    #      works when LRC comes back, rather than deciding that mechanism now.
     async def stage_refdata(self, refdata: models.ReferenceData, objmeta: S3ObjectMeta):
         """
         Do nothing. This method is overidden as LRC refdata staging depends on the completion
@@ -77,7 +83,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         """
         try:
             refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
-            if refstate.state != models.ReferenceDataState.CREATED:
+            if refstate.state != models.StagingState.CREATED:
                 raise InvalidReferenceDataStateError(
                     f"Reference data must be in the created state for cluster {self.CLUSTER}"
                 )
@@ -85,7 +91,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
                 self._callback_root, refdata.id, self.CLUSTER
             )
             await self._nman.setup_refdata_transfer_callback(refdata, self.CLUSTER, callback_url)
-            await self._updates.update_refdata_state(refdata.id, submitted_refdata_download())
+            await self._updates.update_refdata_state(refdata.id, submitted_staging_download())
             # Note on eventual retries - JAWS writes a file to note that the transfer is
             # done, whether it succeeded or failed. The file path is based on the file that the
             # s3 remote code writes when refdata is staged. Therefore on a retry, these files
@@ -104,7 +110,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         """
         refdata = await self._mongo.get_refdata_by_id(_require_string(refdata_id, "refdata_id"))
         refstate = refdata.get_status_for_cluster(self.CLUSTER)
-        if refstate.state != models.ReferenceDataState.DOWNLOAD_SUBMITTED:
+        if refstate.state != models.StagingState.DOWNLOAD_SUBMITTED:
             raise InvalidReferenceDataStateError(
                 "Reference data must be in the download submitted state for "
                 + f"cluster {refstate.cluster.value}"
@@ -114,7 +120,7 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         await self._get_transfer_result(  # check for errors
             tfunc, refdata.id, "Transfer", "transferring", entity_type=EntityType.REFDATA
         )
-        await self._updates.update_refdata_state(refdata.id, refdata_complete())
+        await self._updates.update_refdata_state(refdata.id, staging_complete())
 
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
         """
@@ -124,4 +130,13 @@ class LawrenciumJAWSRunner(NERSCJAWSRunner):
         # refdata from NERSC -> LRC and the file JAWS writes when it's done, but they're both tiny
         # and are in the same directory structure as the refdata itself
         # YAGNI for now
-        pass # Intentionally do nothing 
+        pass # Intentionally do nothing
+
+    async def clean_ai_model(self, ai_model: models.AdminAIModel, force: bool = False):
+        """
+        Do nothing. AI models are staged at NERSC; there is nothing to clean up at LRC.
+        """
+        # Same consideration as clean_refdata above - any NERSC -> LRC transfer trigger/complete
+        # files are tiny and sit in the same directory structure as the AI model itself.
+        # YAGNI for now
+        pass # Intentionally do nothing

@@ -27,6 +27,7 @@ from cdmtaskservice import sites
 from cdmtaskservice.callback_url_paths import (
     get_download_complete_callback,
     get_refdata_download_complete_callback,
+    get_ai_model_download_complete_callback,
     get_job_complete_callback,
     get_upload_complete_callback,
     get_error_log_upload_complete_callback,
@@ -65,6 +66,7 @@ ROUTER_SITES = APIRouter(tags=["Sites"])
 ROUTER_JOBS = APIRouter(tags=["Jobs"], prefix="/jobs")
 ROUTER_IMAGES = APIRouter(tags=["Images"], prefix="/images")
 ROUTER_REFDATA = APIRouter(tags=["Reference Data"], prefix="/refdata")
+ROUTER_AI_MODELS = APIRouter(tags=["AI Models - Experimental"], prefix="/ai-models")
 ROUTER_ADMIN = APIRouter(tags=["Admin"], prefix="/admin")
 ROUTER_CALLBACKS = APIRouter(tags=["Callbacks"])
 ROUTER_EXTERNAL_EXEC = APIRouter(tags=["External Execution"])
@@ -589,6 +591,76 @@ async def get_refdata_by_path(
 
 # TODO CHECKSUM FEATURE add get refdata by crc64nvme if needed... YAGNI
 
+
+_ANN_AI_MODEL_REF = Annotated[str, FastPath(
+    openapi_examples={"model ref": {"value": "org/name@main"}},
+    description="The AI model's combined model@ref reference.",
+    min_length=1,
+    max_length=1000,
+)]
+
+
+_ANN_AI_MODEL_MODEL = Annotated[str, FastPath(
+    openapi_examples={"model": {"value": "org/name"}},
+    description="The AI model identifier.",
+    min_length=1,
+    max_length=500,
+)]
+
+
+_ANN_AI_MODEL_VERSION = Annotated[str, FastPath(
+    openapi_examples={"version": {"value": "abc123def456"}},
+    description="The resolved AI model version.",
+    min_length=1,
+    max_length=200,
+)]
+
+
+class AIModels(BaseModel):
+    """ The response to a request to get AI model information in the system. """
+    data: Annotated[list[models.AIModel], Field(description="The AI models.")]
+    # if we add paging / sorting / filtering, could add more info here
+
+
+@ROUTER_AI_MODELS.get(
+    "",
+    response_model=AIModels,
+    response_model_exclude_none=True,
+    summary="Get AI models",
+    description="Get information about registered AI models in the system, including their "
+        + "staging status, in no particular order. Returns at most 1000 records.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_ai_models(r: Request) -> AIModels:
+    registry = app_state.get_app_state(r).ai_model_registry
+    ai_models = await registry.get_ai_models()
+    return AIModels(data=ai_models)
+
+
+@ROUTER_AI_MODELS.get(
+    "/{source}/{model_ref:path}",
+    response_model=models.AIModel,
+    response_model_exclude_none=True,
+    summary="Get an AI model by model and ref",
+    description="Get information about a registered AI model snapshot, including its staging "
+        + "status, by its source and combined model@ref reference.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model_ref: _ANN_AI_MODEL_REF,
+    resolve_tag: Annotated[bool, Query(
+        description="If the ref doesn't match a version exactly, fall back to resolving it as "
+            + "a tag. Set to false when the ref is already known to be a resolved version, to "
+            + "avoid silently matching an unrelated tag of the same name."
+    )] = True,
+) -> models.AIModel:
+    registry = app_state.get_app_state(r).ai_model_registry
+    return await registry.get_ai_model(
+        source, model_ref, resolve_tag=resolve_tag, populate_tags=True
+    )
+
 @ROUTER_ADMIN.post(
     "/images/{image_id:path}",
     response_model=models.Image,
@@ -611,12 +683,15 @@ async def approve_image(
         min_length=1,
         max_length=50,
     )] = None,
-    default_refdata_mount_point: Annotated[str, Query(
+    default_staged_data_mount_point: Annotated[str, Query(
         openapi_examples={"mount_point": {"value": "/reference_data"}},
-        description="The default mount point for the image refdata in the container. Overridden "
-            + "by the refdata mount point in a job submission if provided there. If a default "
-            + "mount point is provided, then providing a mount point in the job submission "
-            + "is optional. Must be an absolute path.",
+        description="The default mount point for the image's reference data, or for the AI "
+            + "model store in a job that requests AI models, in the container. Overridden by "
+            + "the mount point in a job submission if provided there. If a default mount "
+            + "point is provided, then providing a mount point in the job submission is "
+            + "optional. Must be an absolute path. A job requesting AI models gets a mount "
+            + "point regardless, defaulting to '/ai_models' if none is specified here or in "
+            + "the job submission - there is no equivalent default for reference data.",
         pattern=models.ABSOLUTE_PATH_REGEX,
         min_length=1,
         max_length=1024,
@@ -643,7 +718,7 @@ async def approve_image(
         user.user,
         image_reg=image_reg,
         refdata_id=refdata_id,
-        default_refdata_mount_point=default_refdata_mount_point,
+        default_staged_data_mount_point=default_staged_data_mount_point,
         allowed_sites=_parse_allowed_sites(allowed_sites),
         script_image=script_image,
     )
@@ -707,6 +782,49 @@ async def create_refdata(
     _ensure_admin(user, "Only service administrators can create reference data.")
     refdata = app_state.get_app_state(r).refdata
     return await refdata.create_refdata(refdata_s3_path, user, crc64nvme=crc64nvme, unpack=unpack)
+
+
+@ROUTER_ADMIN.post(
+    "/ai-models/{source}/{model_ref:path}",
+    response_model=models.AdminAIModel,
+    response_model_exclude_none=True,
+    summary="Register an AI model",
+    description="Register an AI model snapshot for use with this service and start its staging "
+        + "process at every usable compute site. If the model snapshot is already registered, "
+        + "this is a no-op other than moving the tag, if any, to the newly resolved version.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def register_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model_ref: _ANN_AI_MODEL_REF,
+    user: CTSUser=Depends(_AUTH),
+) -> models.AdminAIModel:
+    _ensure_admin(user, "Only service administrators can register AI models.")
+    registry = app_state.get_app_state(r).ai_model_registry
+    return await registry.register_ai_model(source, model_ref, user)
+
+
+@ROUTER_ADMIN.get(
+    "/ai-models/{source}/{model_ref:path}",
+    response_model=models.AdminAIModel,
+    response_model_exclude_none=True,
+    summary="Get AI model information as an admin",
+    description="Get information about a registered AI model snapshot, including its staging "
+        + "status, by its source and combined model@ref reference, with additional details.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def get_ai_model_admin(
+    r: Request,
+    source: models.AIModelSource,
+    model_ref: _ANN_AI_MODEL_REF,
+    user: CTSUser=Depends(_AUTH),
+) -> models.AdminAIModel:
+    _ensure_admin(user, "Only service administrators can get AI models as an admin.")
+    registry = app_state.get_app_state(r).ai_model_registry
+    return await registry.get_ai_model(
+        source, model_ref, resolve_tag=True, populate_tags=True, as_admin=True
+    )
 
 
 @ROUTER_ADMIN.get(
@@ -1052,6 +1170,64 @@ async def clean_refdata(
 
 
 @ROUTER_ADMIN.put(
+    "/ai-models/{source}/{model:path}/{version}/{cluster}/recover",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Recover stalled AI model staging",
+    description="Recover an AI model staging process. Currently only handles the "
+        + "case where a site does not exist in the AI model's staging data structure. May be "
+        + "extended in the future to cover other cases.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def recover_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model: _ANN_AI_MODEL_MODEL,
+    version: _ANN_AI_MODEL_VERSION,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which recovery will be attempted."
+    )],
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can recover AI models.")
+    registry = app_state.get_app_state(r).ai_model_registry
+    await registry.recover_ai_model(models.AIModelKey(source, model, version), cluster)
+
+
+@ROUTER_ADMIN.delete(
+    "/ai-models/{source}/{model:path}/{version}/{cluster}/clean",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Clean up AI model staging files",
+    description="Remove AI model staging related files managed by this service at the remote "
+        + "compute site. The AI model staging must be in a terminal state.\n\n"
+        + "The registered AI model snapshot itself is not removed. If the AI model is already "
+        + "cleaned this is a noop.\n\n"
+        + "This is an experimental API and is subject to change without notice."
+)
+async def clean_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model: _ANN_AI_MODEL_MODEL,
+    version: _ANN_AI_MODEL_VERSION,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster where AI model staging files should be cleaned up."
+    )],
+    force: Annotated[bool, Query(
+        description="**WARNING**: setting force to true may cause undefined behavior. True will "
+        + "cause AI model files to be removed regardless of staging state."
+    )] = False,
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_admin(user, "Only service administrators can clean AI models.")
+    appstate = app_state.get_app_state(r)
+    ai_model = await appstate.ai_model_registry.get_ai_model(
+        source, f"{model}@{version}", resolve_tag=False, populate_tags=False, as_admin=True
+    )
+    await appstate.flow_cleaner.clean_ai_model(ai_model, cluster, user, force=force)
+
+
+@ROUTER_ADMIN.put(
     "/sites/{site}/active",
     summary="Activate a site",
     description="Set a site to active, allowing submission of jobs and other activities "
@@ -1212,6 +1388,33 @@ async def download_complete(
 
 
 @ROUTER_CALLBACKS.get(
+    f"/{get_ai_model_download_complete_callback()}/{{source}}/{{model:path}}/{{version}}"
+        + "/{cluster}",
+    summary="Report AI model data download complete",
+    description="Report that data download for an AI model is complete. This method is not "
+        + "expected to be called by users.",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def ai_model_download_complete(
+    r: Request,
+    source: models.AIModelSource,
+    model: _ANN_AI_MODEL_MODEL,
+    version: _ANN_AI_MODEL_VERSION,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which the AI model download is complete."
+    )],
+):
+    key = models.AIModelKey(source, model, version)
+    logging.getLogger(__name__).info(
+        f"Download reported as complete for AI model {key} on cluster {cluster.value}",
+        extra={logfields.AI_MODEL_ID: str(key), logfields.CLUSTER: cluster.value},
+    )
+    runner = await app_state.get_app_state(r).jobflow_manager.get_flow(cluster)
+    await runner.ai_model_complete(key)
+
+
+@ROUTER_CALLBACKS.get(
     f"/{get_refdata_download_complete_callback()}/{{refdata_id}}/{{cluster}}",
     summary="Report refdata data download complete",
     description="Report that data download for refdata is complete. This method is not expected "
@@ -1337,6 +1540,37 @@ async def container_heartbeat(
 
 
 @ROUTER_EXTERNAL_EXEC.put(
+    "/external_exec/ai-models/{source}/{model:path}/{version}/{cluster}/update/{new_state}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Update AI model state",
+    description="Not for general use.\n\nUpdate AI model staging state for a cluster.",
+)
+async def update_ai_model(
+    r: Request,
+    source: models.AIModelSource,
+    model: _ANN_AI_MODEL_MODEL,
+    version: _ANN_AI_MODEL_VERSION,
+    cluster: Annotated[sites.Cluster, FastPath(
+        description="The cluster for which the AI model should be updated."
+    )],
+    new_state: Annotated[models.StagingState, FastPath(
+        openapi_examples={"download_submitted": {
+            "value": models.StagingState.DOWNLOAD_SUBMITTED
+        }},
+        description="The new state for the AI model.",
+    )],
+    update: models.StagingStateUpdate | None = None,
+    user: CTSUser=Depends(_AUTH),
+):
+    _ensure_refdata_service(user, "Only refdata services can update AI model state.")
+    key = models.AIModelKey(source, model, version)
+    appstate = app_state.get_app_state(r)
+    flow = await appstate.jobflow_manager.get_flow(cluster)
+    await flow.update_ai_model_state(key, new_state, update)
+
+
+@ROUTER_EXTERNAL_EXEC.put(
     "/external_exec/refdata/{refdata_id}/{cluster}/update/{new_state}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
@@ -1349,13 +1583,13 @@ async def update_refdata(
     cluster: Annotated[sites.Cluster, FastPath(
         description="The cluster for which the refdata should be updated."
     )],
-    new_state: Annotated[models.ReferenceDataState, FastPath(
+    new_state: Annotated[models.StagingState, FastPath(
         openapi_examples={"download_submitted": {
-            "value": models.ReferenceDataState.DOWNLOAD_SUBMITTED
+            "value": models.StagingState.DOWNLOAD_SUBMITTED
         }},
         description="The new state for the refdata.",
     )],
-    update: models.RefdataUpdate | None = None,
+    update: models.StagingStateUpdate | None = None,
     user: CTSUser=Depends(_AUTH),
 ):
     _ensure_refdata_service(user, "Only refdata services can update refdata state.")

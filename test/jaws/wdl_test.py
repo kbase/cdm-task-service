@@ -185,7 +185,7 @@ def test_wdl_refdata():
     # should be tested there
     mapping = {models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar")}
     im = _JOB_BASIC.image.model_copy(update={
-        "default_refdata_mount_point": "/reffyref", "refdata_id": "refid"
+        "default_staged_data_mount_point": "/reffyref", "refdata_id": "refid"
     })
     job = _JOB_BASIC.model_copy(update={"image": im})
     jawsinput = wdl.generate_wdl(job, mapping, relative_refdata_path="some/ref/path")
@@ -1080,6 +1080,52 @@ def test_wdl_container_number_multiple_containers():
             ["main_command", "1", "pref/1/suff"],
         ],
         "some_image.container_num_list": [0, 1],
+    }
+    assert jawsinput.wdl == expwdl
+
+
+def test_wdl_ai_model():
+    mapping = {
+        models.S3FileWithDataID(file="bucket/file1"): Path("foo/bar"),
+    }
+    model1 = models.ParameterWithFlag(
+        type=models.ParameterType.AI_MODEL,
+        ai_model_source=models.AIModelSource.HUGGINGFACE,
+        ai_model="org/name@abc123def456",
+        flag="--model",
+    )
+    model2 = models.ParameterWithFlag(
+        type=models.ParameterType.AI_MODEL,
+        ai_model_source=models.AIModelSource.HUGGINGFACE,
+        ai_model="org/other@deadbeef",
+    )
+    model3 = models.ParameterWithFlag(
+        type=models.ParameterType.AI_MODEL,
+        ai_model_source=models.AIModelSource.HUGGINGFACE,
+        ai_model="org/third@cafef00d",
+        flag="--model3=",
+    )
+    p = models.Parameters(args=[model1, model3], environment={"MODEL2": model2})
+    ji = _JOB_BASIC.job_input.model_copy(update={
+        "params": p, "input_files": [models.S3FileWithDataID(file="bucket/file1")],
+    })
+    job = _JOB_BASIC.model_copy(update={"job_input": ji})
+    jawsinput = wdl.generate_wdl(job, mapping)
+    expwdl = load_test_data("basic.wdl")
+    assert jawsinput.input_json == {
+        "some_image.input_files_list": [["foo/bar"]],
+        "some_image.file_locs_list": [["file1"]],
+        "some_image.environment_list": [
+            ["MODEL2=/ai_models/huggingface/org/other/deadbeef"],
+        ],
+        "some_image.cmdline_list": [
+            [
+                "main_command",
+                "--model", "/ai_models/huggingface/org/name/abc123def456",
+                "--model3=/ai_models/huggingface/org/third/cafef00d",
+            ],
+        ],
+        "some_image.container_num_list": [0],
     }
     assert jawsinput.wdl == expwdl
 

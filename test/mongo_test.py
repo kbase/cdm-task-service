@@ -9,8 +9,8 @@ from typing import Coroutine, Callable, Any
 from cdmtaskservice import models
 from cdmtaskservice import sites
 from cdmtaskservice.exceptions import (
-    InvalidJobStateError,
     JobRecoveryError,
+    MismatchedJobStateError,
     NoSuchJobError,
 )
 from cdmtaskservice.pipelines import models as pipe_models
@@ -18,18 +18,24 @@ from cdmtaskservice.mongo import (
     MissingSubJobError,
     JobUpdateConflictError,
     MongoDAO,
+    NoSuchAIModelError,
     NoSuchReferenceDataError,
     NoSuchSubJobError,
+    SaveAIModelResult,
     SubJobHtcondorStatsAlreadySetError,
     SubJobUpdateConflictError,
+    Tag,
 )
 from cdmtaskservice.update_state import (
     error,
     force_recovering,
     recovering,
+    staging_complete,
+    staging_error,
     submitted_download,
     submitted_jaws_job,
-    submitted_nersc_refdata_download,
+    submitted_staging_download,
+    submitted_nersc_staging_download,
     submitting_job,
     submitting_upload,
     submitting_upload_with_exit_code,
@@ -42,6 +48,12 @@ from conftest import (
 )
 
 # TODO TEST add more tests
+
+# These tests deliberately read deprecated fields (refdata_mount_point /
+# default_refdata_mount_point) to confirm their backwards compatible behavior, so the
+# resulting DeprecationWarning is expected rather than a signal of accidental deprecated
+# field use elsewhere in the code.
+_IGNORE_MOUNT_POINT_DEPRECATION = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 # Mongo only has millisecond precision
 _SAFE_TIME = datetime.datetime(2025, 3, 31, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
@@ -117,7 +129,8 @@ async def test_indexes(mongo, mondb):
     await MongoDAO.create(mondb)
     cols = mongo.client[MONGO_TEST_DB].list_collection_names()
     assert set(cols) == {
-        "jobs", "pipeline_jobs", "refdata", "images", "sites", "subjobs", "exitcodes"
+        "jobs", "pipeline_jobs", "refdata", "images", "sites", "subjobs", "exitcodes",
+        "ai_models", "ai_model_tags",
     }
     siteindex = mongo.client[MONGO_TEST_DB]["sites"].index_information()
     assert siteindex == {
@@ -245,6 +258,36 @@ async def test_indexes(mongo, mondb):
             "sparse": True
         }
     }
+    aimodelindex = mongo.client[MONGO_TEST_DB]["ai_models"].index_information()
+    assert aimodelindex == {
+        "_id_": {"v": 2, "key": [("_id", 1)]},
+        "source_1_model_1_version_1": {
+            "v": 2,
+            "key": [("source", 1), ("model", 1), ("version", 1)],
+            "unique": True,
+        },
+        "statuses.cleaned_1_statuses.state_1_statuses._update_time_1": {
+            "v": 2,
+            "key": [("statuses.cleaned", 1), ("statuses.state", 1), ("statuses._update_time", 1)],
+            "partialFilterExpression": SON([
+                ("statuses.cleaned", False),
+                ("statuses.state", SON([("$in", ["complete", "error"])]))
+            ]),
+        },
+    }
+    aimodeltagindex = mongo.client[MONGO_TEST_DB]["ai_model_tags"].index_information()
+    assert aimodeltagindex == {
+        "_id_": {"v": 2, "key": [("_id", 1)]},
+        "source_1_model_1_tag_1": {
+            "v": 2,
+            "key": [("source", 1), ("model", 1), ("tag", 1)],
+            "unique": True,
+        },
+        "source_1_model_1_version_1": {
+            "v": 2,
+            "key": [("source", 1), ("model", 1), ("version", 1)],
+        },
+    }
 
 
 async def test_job_basic_roundtrip(mondb):
@@ -253,6 +296,52 @@ async def test_job_basic_roundtrip(mondb):
 
     got = await mc.get_job("foo", as_admin=True)
     assert got == _BASEJOB
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+async def test_job_staged_data_mount_point_does_not_persist_deprecated_fields(mondb):
+    # The deprecated refdata_mount_point / default_refdata_mount_point fields are kept in
+    # sync on the in-memory model for backwards compatible API responses, but should not be
+    # redundantly written to new Mongo documents.
+    job = _BASEJOB.model_copy(deep=True)
+    job.job_input.params.staged_data_mount_point = "/params_mount"
+    job.image.default_staged_data_mount_point = "/image_mount"
+    mc = await MongoDAO.create(mondb)
+    await mc.save_job(job)
+
+    raw = await mondb.jobs.find_one({"id": "foo"})
+    assert "refdata_mount_point" not in raw["job_input"]["params"]
+    assert raw["job_input"]["params"]["staged_data_mount_point"] == "/params_mount"
+    assert "default_refdata_mount_point" not in raw["image"]
+    assert raw["image"]["default_staged_data_mount_point"] == "/image_mount"
+
+    # the deprecated fields are nevertheless populated on read for backwards compatible clients
+    got = await mc.get_job("foo", as_admin=True)
+    assert got.job_input.params.refdata_mount_point == "/params_mount"
+    assert got.image.default_refdata_mount_point == "/image_mount"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+async def test_image_does_not_persist_deprecated_staged_data_mount_point_field(mondb):
+    image = models.Image(
+        name="some_image",
+        digest="digest",
+        entrypoint=["arg1"],
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        refdata_id="someid",
+        default_staged_data_mount_point="/image_mount",
+    )
+    mc = await MongoDAO.create(mondb)
+    await mc.save_image(image)
+
+    raw = await mondb.images.find_one({"name": "some_image"})
+    assert "default_refdata_mount_point" not in raw
+    assert raw["default_staged_data_mount_point"] == "/image_mount"
+
+    # the deprecated field is nevertheless populated on read for backwards compatible clients
+    got = await mc.get_image("some_image", digest="digest")
+    assert got.default_refdata_mount_point == "/image_mount"
 
 
 async def test_pipeline_job_basic_roundtrip(mondb):
@@ -553,8 +642,9 @@ async def test_update_job_fail(mondb):
     await fail_update_job(mc, "bar", u, dt, tid, NoSuchJobError(
         "No job with ID 'bar' exists"
     ))
-    await fail_update_job(mc, "foo", submitting_upload(), dt, tid, InvalidJobStateError(
-        "Job 'foo' is in state 'download_submitted', expected 'job_submitted'"
+    await fail_update_job(mc, "foo", submitting_upload(), dt, tid, MismatchedJobStateError(
+        "Job 'foo' is in state 'download_submitted', expected 'job_submitted'",
+        actual_state=models.JobState.DOWNLOAD_SUBMITTED,
     ), expected_actual_state=models.JobState.DOWNLOAD_SUBMITTED)
     await fail_update_job(mc, "foo", u, _SAFE_TIME + datetime.timedelta(milliseconds=-1), tid,
         ValueError("Job 'foo' last update time is after the provided time")
@@ -581,12 +671,13 @@ async def test_update_job_and_subjob_fail_update_to_error(mondb):
         expected_subjob_doc = await mondb.subjobs.find_one(
             {"id": "bar", "sub_id": 0}
         )
-        await fail_update_job(mc, "foo", u, dt, tid, InvalidJobStateError(
-            f"Job 'foo' is in disallowed state {state.value!r}"
+        await fail_update_job(mc, "foo", u, dt, tid, MismatchedJobStateError(
+            f"Job 'foo' is in disallowed state {state.value!r}", actual_state=state
         ), expected_actual_state=state)
         assert await mondb.jobs.find_one({"id": "foo"}) == expected_job_doc
-        await fail_update_subjob(mc, "bar", 0, u, dt, InvalidJobStateError(
-            f"Job 'bar' with subjob ID 0 is in disallowed state {state.value!r}"
+        await fail_update_subjob(mc, "bar", 0, u, dt, MismatchedJobStateError(
+            f"Job 'bar' with subjob ID 0 is in disallowed state {state.value!r}",
+            actual_state=state,
         ), expected_actual_state=state)
         assert await mondb.subjobs.find_one(
             {"id": "bar", "sub_id": 0}
@@ -596,7 +687,7 @@ async def test_update_job_and_subjob_fail_update_to_error(mondb):
 async def fail_update_job(mc, job_id, update, dt, tid, expected, expected_actual_state=None):
     with pytest.raises(type(expected), match=f"^{re.escape(expected.args[0])}$") as exc_info:
         await mc.update_job_state(job_id, update, dt, tid)
-    if isinstance(expected, InvalidJobStateError):
+    if isinstance(expected, MismatchedJobStateError):
         assert exc_info.value.actual_state == expected_actual_state
 
 
@@ -713,7 +804,7 @@ async def test_update_job_force_recovery_no_prior_recover(mondb):
 
 
 async def test_update_job_recovery_cooldown_state_mismatch(mondb):
-    # A positive cooldown on a job in the wrong state should raise InvalidJobStateError, not
+    # A positive cooldown on a job in the wrong state should raise MismatchedJobStateError, not
     # JobRecoveryError — the cooldown diagnostic query must not mask a state mismatch
     mc = await MongoDAO.create(mondb)
     await mc.save_job(_BASEJOB)  # state = DOWNLOAD_SUBMITTED
@@ -721,7 +812,7 @@ async def test_update_job_recovery_cooldown_state_mismatch(mondb):
     dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
     initial_doc = await mondb.jobs.find_one({"id": "foo"})
     # force_recovering requires current state = RECOVERING, but job is DOWNLOAD_SUBMITTED
-    with pytest.raises(InvalidJobStateError, match=(
+    with pytest.raises(MismatchedJobStateError, match=(
         r"^Job 'foo' is in state 'download_submitted', expected 'recovering'$"
     )) as exc_info:
         await mc.update_job_state(
@@ -1165,8 +1256,9 @@ async def test_update_subjob_fail(mondb):
     await fail_update_subjob(mc, "bar", 1, u, dt, NoSuchSubJobError(
         "No job with ID 'bar' and subjob ID 1 exists"
     ))
-    await fail_update_subjob(mc, "bar", 0, submitting_upload(), dt, InvalidJobStateError(
-        "Job 'bar' with subjob ID 0 is in state 'created', expected 'job_submitted'"
+    await fail_update_subjob(mc, "bar", 0, submitting_upload(), dt, MismatchedJobStateError(
+        "Job 'bar' with subjob ID 0 is in state 'created', expected 'job_submitted'",
+        actual_state=models.JobState.CREATED,
     ), expected_actual_state=models.JobState.CREATED)
     await fail_update_subjob(mc, "bar", 0, u, _SAFE_TIME + datetime.timedelta(milliseconds=-1),
         ValueError("Job 'bar' with subjob ID 0 last update time is after the provided time")
@@ -1185,7 +1277,7 @@ async def fail_update_subjob(
         await mc.update_subjob_state(
             job_id, subjob_id, update, dt, last_update_time=last_update_time
         )
-    if isinstance(expected, InvalidJobStateError):
+    if isinstance(expected, MismatchedJobStateError):
         assert exc_info.value.actual_state == expected_actual_state
 
 
@@ -1555,11 +1647,11 @@ async def test_refdata_redundant_update_time(mondb):
         id="foo",
         file="bucket/key",
         unpack=False,
-        statuses=[models.AdminReferenceDataStatus(
+        statuses=[models.AdminStagingStatus(
             cluster=sites.Cluster.PERLMUTTER_JAWS,
-            state=models.ReferenceDataState.CREATED,
-            transition_times=[models.RefDataStateTransition(
-                state=models.ReferenceDataState.CREATED,
+            state=models.StagingState.CREATED,
+            transition_times=[models.StagingStateTransition(
+                state=models.StagingState.CREATED,
                 time=_SAFE_TIME
             )],
         )]
@@ -1579,15 +1671,15 @@ async def test_refdata_redundant_update_time(mondb):
     await mc.update_refdata_state(
         sites.Cluster.PERLMUTTER_JAWS,
         "foo",
-        submitted_nersc_refdata_download("ntid"),
+        submitted_nersc_staging_download("ntid"),
         dt,
     )
     got = await mc.get_refdata_by_id("foo", as_admin=True)
     
     # check expected refdata structure
-    rd.statuses[0].state = models.ReferenceDataState.DOWNLOAD_SUBMITTED
-    rd.statuses[0].transition_times.append(models.RefDataStateTransition(
-        state=models.ReferenceDataState.DOWNLOAD_SUBMITTED,
+    rd.statuses[0].state = models.StagingState.DOWNLOAD_SUBMITTED
+    rd.statuses[0].transition_times.append(models.StagingStateTransition(
+        state=models.StagingState.DOWNLOAD_SUBMITTED,
         time=dt,
     ))
     rd.statuses[0].nersc_download_job_id = ["ntid"]
@@ -1598,11 +1690,11 @@ async def test_refdata_redundant_update_time(mondb):
     assert refd["statuses"][0]["_update_time"] == dt
     
     # check that adding a new site to refdata adds the update time correctly
-    rds = models.AdminReferenceDataStatus(
+    rds = models.AdminStagingStatus(
         cluster=sites.Cluster.KBASE,
-        state=models.ReferenceDataState.CREATED,
-        transition_times=[models.RefDataStateTransition(
-            state=models.ReferenceDataState.CREATED,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED,
             time=_SAFE_TIME
         )],
     )
@@ -1837,26 +1929,26 @@ async def test_set_refdata_clean(mondb):
         file="bucket/key",
         unpack=False,
         statuses=[
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.PERLMUTTER_JAWS,
-                state=models.ReferenceDataState.CREATED,
+                state=models.StagingState.CREATED,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.CREATED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.CREATED,
                         time=_SAFE_TIME
                     ),
                 ],
             ),
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.KBASE,
-                state=models.ReferenceDataState.ERROR,
+                state=models.StagingState.ERROR,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.CREATED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.CREATED,
                         time=_SAFE_TIME
                     ),
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.ERROR,
+                    models.StagingStateTransition(
+                        state=models.StagingState.ERROR,
                         time=_SAFE_TIME
                     ),
                 ],
@@ -1888,12 +1980,12 @@ async def test_set_refdata_clean_fail(mondb):
         file="bucket/key",
         unpack=False,
         statuses=[
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.PERLMUTTER_JAWS,
-                state=models.ReferenceDataState.CREATED,
+                state=models.StagingState.CREATED,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.CREATED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.CREATED,
                         time=_SAFE_TIME
                     ),
                 ],
@@ -1935,22 +2027,22 @@ async def test_process_dirty_refdata(mondb):
         file="bucket/key",
         unpack=False,
         statuses=[
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.PERLMUTTER_JAWS,
-                state=models.ReferenceDataState.ERROR,
+                state=models.StagingState.ERROR,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.CREATED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.CREATED,
                         time=older_than
                     ),
                 ],
             ),
-            models.AdminReferenceDataStatus(
+            models.AdminStagingStatus(
                 cluster=sites.Cluster.KBASE,
-                state=models.ReferenceDataState.COMPLETE,
+                state=models.StagingState.COMPLETE,
                 transition_times=[
-                    models.RefDataStateTransition(
-                        state=models.ReferenceDataState.DOWNLOAD_SUBMITTED,
+                    models.StagingStateTransition(
+                        state=models.StagingState.DOWNLOAD_SUBMITTED,
                         time=older_than
                     ),
                 ],
@@ -1962,7 +2054,7 @@ async def test_process_dirty_refdata(mondb):
     await mc.save_refdata(rd)  # shouldn't be found due to date = older_than
     
     # Shouldn't be found due to non-terminal states
-    for state in set(models.ReferenceDataState) - models.ReferenceDataState.terminal_states():
+    for state in set(models.StagingState) - models.StagingState.terminal_states():
         rd = rd.model_copy(deep=True, update={"id": state.value, "file": "bucket/" + state.value})
         rd.statuses[0].state=state
         rd.statuses[0].transition_times[0].time = _SAFE_TIME
@@ -2235,3 +2327,677 @@ async def test_save_subjob_htcondor_stats_fail(mondb):
         await mc.save_subjob_htcondor_stats("j1", 0, None, None, -1.0, t)
     with pytest.raises(ValueError, match="^last_update_time is required$"):
         await mc.save_subjob_htcondor_stats("j1", 0, None, None, None, None)
+
+
+def _ai_model(
+    model: str = "org/name",
+    version: str = "abc123",
+    statuses: list[models.StagingStatus] | list[models.AdminStagingStatus] | None = None,
+    as_admin: bool = True,
+    tags: list[str] | None = None,
+) -> models.AdminAIModel | models.AIModel:
+    cls = models.AdminAIModel if as_admin else models.AIModel
+    status_cls = models.AdminStagingStatus if as_admin else models.StagingStatus
+    if statuses is None:
+        statuses = [status_cls(
+            cluster=sites.Cluster.PERLMUTTER_JAWS,
+            state=models.StagingState.CREATED,
+            transition_times=[models.StagingStateTransition(
+                state=models.StagingState.CREATED, time=_SAFE_TIME
+            )],
+        )]
+    return cls(
+        source=models.AIModelSource.HUGGINGFACE,
+        model=model,
+        version=version,
+        size_bytes=123456,
+        registered_by="yermum",
+        registered_on=_SAFE_TIME,
+        statuses=statuses,
+        tags=tags,
+    )
+
+
+async def test_save_and_get_ai_model_basic(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    res = await mc.save_ai_model(am)
+    assert res == SaveAIModelResult(model_created=True, tag_moved=False)
+
+    got = await mc.get_ai_model(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    assert got == _ai_model(as_admin=False)
+
+    gotadmin = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert gotadmin == am
+
+    # check that the internal update time is set correctly
+    raw = await mondb.ai_models.find_one({"source": "huggingface", "model": "org/name"})
+    assert raw["statuses"][0]["_update_time"] == _SAFE_TIME
+
+
+async def test_save_ai_model_fail_inputs(mondb):
+    mc = await MongoDAO.create(mondb)
+    with pytest.raises(ValueError, match="^ai_model is required$"):
+        await mc.save_ai_model(None)
+
+
+def test_tag_fail_inputs():
+    with pytest.raises(ValueError, match="^tag is required$"):
+        Tag(tag=None, user="auser", time=_SAFE_TIME)
+    with pytest.raises(ValueError, match="^tag is required$"):
+        Tag(tag="  \t   ", user="auser", time=_SAFE_TIME)
+    with pytest.raises(ValueError, match="^user is required$"):
+        Tag(tag="main", user=None, time=_SAFE_TIME)
+    with pytest.raises(ValueError, match="^user is required$"):
+        Tag(tag="main", user="  \t   ", time=_SAFE_TIME)
+    with pytest.raises(ValueError, match="^time is required$"):
+        Tag(tag="main", user="auser", time=None)
+
+
+async def test_save_ai_model_already_registered_is_noop_without_tag(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    assert (await mc.save_ai_model(am)) == SaveAIModelResult(model_created=True, tag_moved=False)
+    # re-register with no tag - should be a no-op, no error, nothing in the doc changed
+    am2 = _ai_model()
+    am2.registered_by = "someoneelse"
+    am2.registered_on = datetime.datetime(2025, 5, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    assert (
+        (await mc.save_ai_model(am2)) == SaveAIModelResult(model_created=False, tag_moved=False)
+    )
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert got == am
+
+
+async def test_save_ai_model_with_new_tag(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    t = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    res = await mc.save_ai_model(am, tag=Tag(tag="main", user="auser", time=t))
+    assert res == SaveAIModelResult(model_created=True, tag_moved=True)
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "main",
+        resolve_tag=True, populate_tags=True,
+    )
+    assert got == _ai_model(as_admin=False, tags=["main"])
+
+    # tagged_by/tagged_on aren't exposed via the API, so check them directly in Mongo
+    tagdoc = await mondb.ai_model_tags.find_one({
+        "source": "huggingface", "model": "org/name", "tag": "main"
+    })
+    tagdoc.pop("_id")
+    assert tagdoc == {
+        "source": "huggingface",
+        "model": "org/name",
+        "tag": "main",
+        "version": "abc123",
+        "tagged_by": "auser",
+        "tagged_on": t,
+    }
+
+    # resolve_tag=False should not find it via the tag
+    with pytest.raises(
+        NoSuchAIModelError,
+        match=re.escape(
+            "No AI model with source huggingface, model 'org/name', and ref 'main' exists"
+        ),
+    ):
+        await mc.get_ai_model(models.AIModelSource.HUGGINGFACE, "org/name", "main")
+
+
+async def test_save_ai_model_tag_reassert_is_noop(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    t1 = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    res1 = await mc.save_ai_model(am, tag=Tag(tag="main", user="auser", time=t1))
+    assert res1 == SaveAIModelResult(model_created=True, tag_moved=True)
+
+    # re-register same model under the same tag - no-op, tagged_by/tagged_on untouched
+    t2 = datetime.datetime(2025, 5, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    res2 = await mc.save_ai_model(am, tag=Tag(tag="main", user="buser", time=t2))
+    assert res2 == SaveAIModelResult(model_created=False, tag_moved=False)
+
+    tagdoc = await mondb.ai_model_tags.find_one({
+        "source": "huggingface", "model": "org/name", "tag": "main"
+    })
+    tagdoc.pop("_id")
+    assert tagdoc == {
+        "source": "huggingface",
+        "model": "org/name",
+        "tag": "main",
+        "version": "abc123",
+        "tagged_by": "auser",
+        "tagged_on": t1,
+    }
+
+
+async def test_save_ai_model_tag_move(mondb):
+    mc = await MongoDAO.create(mondb)
+    am1 = _ai_model(version="abc123")
+    am2 = _ai_model(version="def456")
+    t1 = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    t2 = datetime.datetime(2025, 5, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    res1 = await mc.save_ai_model(am1, tag=Tag(tag="main", user="auser", time=t1))
+    assert res1 == SaveAIModelResult(model_created=True, tag_moved=True)
+    res2 = await mc.save_ai_model(am2, tag=Tag(tag="main", user="buser", time=t2))
+    assert res2 == SaveAIModelResult(model_created=True, tag_moved=True)
+
+    tagdoc = await mondb.ai_model_tags.find_one({
+        "source": "huggingface", "model": "org/name", "tag": "main"
+    })
+    tagdoc.pop("_id")
+    assert tagdoc == {
+        "source": "huggingface",
+        "model": "org/name",
+        "tag": "main",
+        "version": "def456",
+        "tagged_by": "buser",
+        "tagged_on": t2,
+    }
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "main", resolve_tag=True
+    )
+    assert got == _ai_model(version="def456", as_admin=False)
+
+
+async def test_get_ai_model_fail_inputs(mondb):
+    mc = await MongoDAO.create(mondb)
+    with pytest.raises(ValueError, match="^source is required$"):
+        await mc.get_ai_model(None, "org/name", "abc123")
+    with pytest.raises(ValueError, match="^model is required$"):
+        await mc.get_ai_model(models.AIModelSource.HUGGINGFACE, None, "abc123")
+    with pytest.raises(ValueError, match="^model is required$"):
+        await mc.get_ai_model(models.AIModelSource.HUGGINGFACE, "  \t   ", "abc123")
+    with pytest.raises(ValueError, match="^ref is required$"):
+        await mc.get_ai_model(models.AIModelSource.HUGGINGFACE, "org/name", None)
+    with pytest.raises(ValueError, match="^ref is required$"):
+        await mc.get_ai_model(models.AIModelSource.HUGGINGFACE, "org/name", "  \t   ")
+
+
+async def test_get_ai_model_resolve_tag_matches_version_directly(mondb):
+    # resolve_tag=True on a ref that's already an exact version (no tag registered at all)
+    # should resolve via the version lookup, never falling through to the tag lookup.
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    await mc.save_ai_model(am)
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", resolve_tag=True,
+    )
+    assert got == _ai_model(as_admin=False)
+
+
+async def test_get_ai_model_fail_no_such_model(mondb):
+    mc = await MongoDAO.create(mondb)
+    with pytest.raises(
+        NoSuchAIModelError,
+        match=re.escape(
+            "No AI model with source huggingface, model 'org/name', and ref 'abc123' exists"
+        ),
+    ):
+        await mc.get_ai_model(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+
+
+async def test_get_ai_model_fail_no_such_model_with_resolve_tag(mondb):
+    # ref matches neither a version nor a tag, even with a real model/tag registered under
+    # the same source/model - confirms the tag fallback doesn't mask the not-found error.
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    t = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.save_ai_model(am, tag=Tag(tag="main", user="auser", time=t))
+    with pytest.raises(
+        NoSuchAIModelError,
+        match=re.escape(
+            "No AI model with source huggingface, model 'org/name', and ref 'nope' exists"
+        ),
+    ):
+        await mc.get_ai_model(
+            models.AIModelSource.HUGGINGFACE, "org/name", "nope", resolve_tag=True
+        )
+
+
+async def test_get_ai_model_as_admin_with_resolve_and_populate_tags(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    t = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.save_ai_model(am, tag=Tag(tag="main", user="auser", time=t))
+
+    # as_admin=True + resolve_tag=True + populate_tags=True all together
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "main",
+        resolve_tag=True, populate_tags=True, as_admin=True,
+    )
+    assert got == _ai_model(tags=["main"])
+
+
+async def test_get_ai_model_populate_tags_with_no_tags(mondb):
+    # populate_tags=True on a model with no tag pointing at it should return tags=[], not None
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    await mc.save_ai_model(am)
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", populate_tags=True,
+    )
+    assert got == _ai_model(as_admin=False, tags=[])
+
+
+async def test_get_ai_model_populate_tags_on_version_match(mondb):
+    # querying by the exact version (not the tag, resolve_tag not even needed) with
+    # populate_tags=True should still find and populate the tag pointing at that version.
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    t = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.save_ai_model(am, tag=Tag(tag="main", user="auser", time=t))
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", populate_tags=True,
+    )
+    assert got == _ai_model(as_admin=False, tags=["main"])
+
+
+async def test_get_ai_model_version_resolved_before_tag(mondb):
+    # a model registered with version equal to a string that also happens to be a tag on
+    # another model should resolve as the version, not the tag, when resolve_tag=True
+    mc = await MongoDAO.create(mondb)
+    tagged = _ai_model(version="abc123")
+    collider = _ai_model(version="main")
+    t = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.save_ai_model(tagged, tag=Tag(tag="main", user="auser", time=t))
+    await mc.save_ai_model(collider)
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "main", resolve_tag=True
+    )
+    assert got == _ai_model(version="main", as_admin=False)
+
+
+async def test_get_ai_models(mondb):
+    mc = await MongoDAO.create(mondb)
+    am1 = _ai_model(model="org/name1", version="abc123")
+    am2 = _ai_model(model="org/name2", version="def456")
+    t = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.save_ai_model(am1, tag=Tag(tag="main", user="auser", time=t))
+    await mc.save_ai_model(am2)
+
+    got = await mc.get_ai_models()
+    bymodel = {m.model: m for m in got}
+    assert set(bymodel) == {"org/name1", "org/name2"}
+    assert bymodel["org/name1"] == _ai_model(
+        model="org/name1", version="abc123", as_admin=False, tags=["main"]
+    )
+    assert bymodel["org/name2"] == _ai_model(
+        model="org/name2", version="def456", as_admin=False, tags=[]
+    )
+
+
+async def test_update_ai_model_state(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    await mc.save_ai_model(am)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_ai_model_state(
+        sites.Cluster.PERLMUTTER_JAWS,
+        am.key,
+        submitted_nersc_staging_download("ntid"),
+        dt,
+    )
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    am.statuses[0].state = models.StagingState.DOWNLOAD_SUBMITTED
+    am.statuses[0].transition_times.append(models.StagingStateTransition(
+        state=models.StagingState.DOWNLOAD_SUBMITTED, time=dt,
+    ))
+    am.statuses[0].nersc_download_job_id = ["ntid"]
+    assert got == am
+
+    # check that the internal update time is set correctly
+    raw = await mondb.ai_models.find_one({"source": "huggingface", "model": "org/name"})
+    assert raw["statuses"][0]["_update_time"] == dt
+
+
+async def test_update_ai_model_state_full_lifecycle(mondb):
+    # Exercises transitions beyond just the download-submitted state field, confirming the
+    # AI_MODEL field mapping (error/admin_error/traceback) works, not just NERSC_DOWNLOAD_JOB_ID.
+    # Uses KBASE (not PERLMUTTER_JAWS) since submitted_staging_download() never sets a NERSC
+    # download job ID, which lines up with how KBase staging actually works.
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model(statuses=[models.AdminStagingStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=_SAFE_TIME
+        )],
+    )])
+    await mc.save_ai_model(am)
+
+    dt1 = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_ai_model_state(
+        sites.Cluster.KBASE, am.key, submitted_staging_download(), dt1,
+    )
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    am.statuses[0].state = models.StagingState.DOWNLOAD_SUBMITTED
+    am.statuses[0].transition_times.append(models.StagingStateTransition(
+        state=models.StagingState.DOWNLOAD_SUBMITTED, time=dt1,
+    ))
+    assert got == am
+    raw = await mondb.ai_models.find_one({"source": "huggingface", "model": "org/name"})
+    assert raw["statuses"][0]["_update_time"] == dt1
+
+    dt2 = datetime.datetime(2025, 4, 3, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_ai_model_state(
+        sites.Cluster.KBASE,
+        am.key,
+        staging_error("bad thing happened", "really bad thing happened", traceback="tb"),
+        dt2,
+    )
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    am.statuses[0].state = models.StagingState.ERROR
+    am.statuses[0].transition_times.append(models.StagingStateTransition(
+        state=models.StagingState.ERROR, time=dt2,
+    ))
+    am.statuses[0].error = "bad thing happened"
+    am.statuses[0].admin_error = "really bad thing happened"
+    am.statuses[0].traceback = "tb"
+    assert got == am
+    raw = await mondb.ai_models.find_one({"source": "huggingface", "model": "org/name"})
+    assert raw["statuses"][0]["_update_time"] == dt2
+
+
+async def test_update_ai_model_state_complete(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model(statuses=[models.AdminStagingStatus(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
+        state=models.StagingState.DOWNLOAD_SUBMITTED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.DOWNLOAD_SUBMITTED, time=_SAFE_TIME
+        )],
+    )])
+    await mc.save_ai_model(am)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    await mc.update_ai_model_state(
+        sites.Cluster.PERLMUTTER_JAWS, am.key, staging_complete(), dt,
+    )
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    am.statuses[0].state = models.StagingState.COMPLETE
+    am.statuses[0].transition_times.append(models.StagingStateTransition(
+        state=models.StagingState.COMPLETE, time=dt,
+    ))
+    assert got == am
+    raw = await mondb.ai_models.find_one({"source": "huggingface", "model": "org/name"})
+    assert raw["statuses"][0]["_update_time"] == dt
+
+
+async def test_update_ai_model_state_fail_no_such_model(mondb):
+    mc = await MongoDAO.create(mondb)
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    with pytest.raises(
+        NoSuchAIModelError,
+        match=re.escape(f"No AI model with key '{key}' for cluster kbase in state created exists"),
+    ):
+        await mc.update_ai_model_state(
+            sites.Cluster.KBASE, key, submitted_nersc_staging_download("ntid"), _SAFE_TIME,
+        )
+
+
+async def test_update_ai_model_state_fail_inputs(mondb):
+    mc = await MongoDAO.create(mondb)
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    update = submitted_nersc_staging_download("ntid")
+    with pytest.raises(ValueError, match="^cluster is required$"):
+        await mc.update_ai_model_state(None, key, update, _SAFE_TIME)
+    with pytest.raises(ValueError, match="^key is required$"):
+        await mc.update_ai_model_state(sites.Cluster.KBASE, None, update, _SAFE_TIME)
+    with pytest.raises(ValueError, match="^update is required$"):
+        await mc.update_ai_model_state(sites.Cluster.KBASE, key, None, _SAFE_TIME)
+    with pytest.raises(ValueError, match="^time is required$"):
+        await mc.update_ai_model_state(sites.Cluster.KBASE, key, update, None)
+
+
+async def test_add_ai_model_site(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()  # existing site's update time is _SAFE_TIME
+    await mc.save_ai_model(am)
+
+    dt = datetime.datetime(2025, 4, 2, 12, 0, 0, 345000, tzinfo=datetime.timezone.utc)
+    status = models.AdminStagingStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=dt,
+        )],
+    )
+    await mc.add_ai_model_site(am.key, status)
+
+    am.statuses.append(status)
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert got == am
+
+    # check that the internal update time is set independently for both sites
+    raw = await mondb.ai_models.find_one({"source": "huggingface", "model": "org/name"})
+    assert raw["statuses"][0]["_update_time"] == _SAFE_TIME
+    assert raw["statuses"][1]["_update_time"] == dt
+
+
+async def test_add_ai_model_site_fail_no_such_model(mondb):
+    mc = await MongoDAO.create(mondb)
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    status = models.AdminStagingStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=_SAFE_TIME,
+        )],
+    )
+    with pytest.raises(
+        NoSuchAIModelError,
+        match=re.escape(f"No AI model with key '{key}' without cluster kbase exists"),
+    ):
+        await mc.add_ai_model_site(key, status)
+
+
+async def test_add_ai_model_site_fail_cluster_already_exists(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()
+    await mc.save_ai_model(am)
+
+    status = models.AdminStagingStatus(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,  # already present from _ai_model()'s default
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=_SAFE_TIME,
+        )],
+    )
+    with pytest.raises(
+        NoSuchAIModelError,
+        match=re.escape(
+            f"No AI model with key '{am.key}' without cluster perlmutter-jaws exists"
+        ),
+    ):
+        await mc.add_ai_model_site(am.key, status)
+
+
+async def test_add_ai_model_site_fail_inputs(mondb):
+    mc = await MongoDAO.create(mondb)
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123")
+    status = models.AdminStagingStatus(
+        cluster=sites.Cluster.KBASE,
+        state=models.StagingState.CREATED,
+        transition_times=[models.StagingStateTransition(
+            state=models.StagingState.CREATED, time=_SAFE_TIME,
+        )],
+    )
+    with pytest.raises(ValueError, match="^key is required$"):
+        await mc.add_ai_model_site(None, status)
+    with pytest.raises(ValueError, match="^status is required$"):
+        await mc.add_ai_model_site(key, None)
+
+
+async def test_set_ai_model_clean(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model(statuses=[
+        models.AdminStagingStatus(
+            cluster=sites.Cluster.PERLMUTTER_JAWS,
+            state=models.StagingState.CREATED,
+            transition_times=[models.StagingStateTransition(
+                state=models.StagingState.CREATED, time=_SAFE_TIME
+            )],
+        ),
+        models.AdminStagingStatus(
+            cluster=sites.Cluster.KBASE,
+            state=models.StagingState.ERROR,
+            transition_times=[
+                models.StagingStateTransition(
+                    state=models.StagingState.CREATED, time=_SAFE_TIME
+                ),
+                models.StagingStateTransition(
+                    state=models.StagingState.ERROR, time=_SAFE_TIME
+                ),
+            ],
+        ),
+    ])
+    await mc.save_ai_model(am)
+
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert [s.cleaned for s in got.statuses] == [False, False]
+
+    await mc.set_ai_model_clean(sites.Cluster.KBASE, am.key)
+    am.statuses[1].cleaned = True
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert got == am
+
+    await mc.set_ai_model_clean(sites.Cluster.PERLMUTTER_JAWS, am.key)
+    am.statuses[0].cleaned = True
+    got = await mc.get_ai_model(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123", as_admin=True
+    )
+    assert got == am
+
+
+async def test_set_ai_model_clean_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    am = _ai_model()  # only has a status for PERLMUTTER_JAWS
+    await mc.save_ai_model(am)
+
+    k = sites.Cluster.KBASE
+    other_key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/other", "abc123")
+    with pytest.raises(ValueError, match="^cluster is required$"):
+        await mc.set_ai_model_clean(None, am.key)
+    with pytest.raises(ValueError, match="^key is required$"):
+        await mc.set_ai_model_clean(k, None)
+    with pytest.raises(NoSuchAIModelError, match=re.escape(
+        f"No AI model with key '{other_key}' for cluster kbase exists"
+    )):
+        await mc.set_ai_model_clean(k, other_key)
+    with pytest.raises(NoSuchAIModelError, match=re.escape(
+        f"No AI model with key '{am.key}' for cluster kbase exists"
+    )):
+        await mc.set_ai_model_clean(k, am.key)
+    # right cluster (present on am), but a key that doesn't exist at all
+    with pytest.raises(NoSuchAIModelError, match=re.escape(
+        f"No AI model with key '{other_key}' for cluster perlmutter-jaws exists"
+    )):
+        await mc.set_ai_model_clean(sites.Cluster.PERLMUTTER_JAWS, other_key)
+
+
+async def test_process_dirty_ai_models(mondb):
+    mc = await MongoDAO.create(mondb)
+    current = datetime.datetime(
+        year=2026, month=2, day=10, hour=14, minute=30, second=54, tzinfo=datetime.UTC
+    )
+    older_than = current - datetime.timedelta(days=30)  # much newer than _SAFE_TIME
+    orig = _ai_model(model="org/foo", statuses=[
+        models.AdminStagingStatus(
+            cluster=sites.Cluster.PERLMUTTER_JAWS,
+            state=models.StagingState.ERROR,
+            transition_times=[
+                models.StagingStateTransition(
+                    state=models.StagingState.CREATED,
+                    time=older_than
+                ),
+            ],
+        ),
+        models.AdminStagingStatus(
+            cluster=sites.Cluster.KBASE,
+            state=models.StagingState.COMPLETE,
+            transition_times=[
+                models.StagingStateTransition(
+                    state=models.StagingState.DOWNLOAD_SUBMITTED,
+                    time=older_than
+                ),
+            ],
+        ),
+    ])
+
+    am = orig.model_copy(deep=True, update={"model": "org/toonew"})
+    await mc.save_ai_model(am)  # shouldn't be found due to date = older_than
+
+    # Shouldn't be found due to non-terminal states
+    for state in set(models.StagingState) - models.StagingState.terminal_states():
+        am = am.model_copy(deep=True, update={"model": f"org/{state.value}"})
+        am.statuses[0].state = state
+        am.statuses[0].transition_times[0].time = _SAFE_TIME
+        await mc.save_ai_model(am)
+
+    am = am.model_copy(deep=True, update={"model": "org/cleaned"})
+    am.statuses[1].transition_times[0].time = _SAFE_TIME
+    am.statuses[1].cleaned = True
+    await mc.save_ai_model(am)  # shouldn't be found due to cleaned state
+
+    # save AI models expected to be found, 1 per terminal state
+    comp = orig.model_copy(deep=True, update={"model": "org/found_comp"})
+    comp.statuses[1].transition_times[0].time = older_than - datetime.timedelta(seconds=1)
+    await mc.save_ai_model(comp)
+
+    err = orig.model_copy(deep=True, update={"model": "org/found_err"})
+    err.statuses[0].transition_times[0].time = older_than - datetime.timedelta(seconds=1)
+    await mc.save_ai_model(err)
+
+    found = {}
+    async def collect(ai_model):
+        found[ai_model.model] = ai_model
+    await mc.process_dirty_ai_models(older_than, collect)
+
+    # debugging help
+    assert found.keys() == {"org/found_err", "org/found_comp"}
+    assert found == {"org/found_comp": comp, "org/found_err": err}
+
+    # test noop
+    found.clear()
+    await mc.process_dirty_ai_models(_SAFE_TIME, collect)
+    assert found.keys() == set()
+
+
+async def test_process_dirty_ai_models_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await _process_dirty_ai_models_fail(
+        mc, None, lambda: print("foo"), ValueError("older_than is required")
+    )
+    await _process_dirty_ai_models_fail(mc, _SAFE_TIME, None, ValueError("operation is required"))
+
+
+async def _process_dirty_ai_models_fail(mc, older_than, op, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.process_dirty_ai_models(older_than, op)

@@ -9,9 +9,10 @@ import logging
 from pathlib import Path
 import traceback
 
+from cdmtaskservice.ai_models.huggingface_client import stage_snapshot
 from cdmtaskservice.arg_checkers import not_falsy as _not_falsy, require_string as _require_string
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
-from cdmtaskservice.exceptions import InvalidReferenceDataStateError
+from cdmtaskservice.exceptions import InvalidAIModelStateError, InvalidReferenceDataStateError
 from cdmtaskservice import models
 from cdmtaskservice.refserv.cts_client import CTSRefdataClient
 from cdmtaskservice.refserv.models import RefdataLocalStatus, RefdataLocalState
@@ -23,6 +24,7 @@ from cdmtaskservice.s3.remote import unpack_archive
 
 _MD5_FILE = "md5.json"
 _MD5_FILE_TMP = _MD5_FILE + ".tmp"
+_AI_MODEL_DIR = "_ai_models"
 
 
 class RefdataManager:
@@ -52,8 +54,7 @@ class RefdataManager:
         self._refpath = _not_falsy(refdata_path, "refdata_path")
         self._metapath = _not_falsy(refdata_meta_path, "refdata_meta_path")
         self._logr = logging.getLogger(__name__)
-        # TODO CODE update to an InterpreterPoolExecutor when upgrading to Python 3.14
-        #           is possible. Currently some dependencies aren't compatible.
+        # TODO CODE update to an InterpreterPoolExecutor & test
         # 10 workers seems like plenty, refdata staging should be rare.
         self._exe = ProcessPoolExecutor(max_workers=10)
 
@@ -94,12 +95,12 @@ class RefdataManager:
         # the staging to error out in the CTS, but that should never happen
         refdata = await self._cli.get_refdata(refdata_id)
         refstate = refdata.get_status_for_cluster(cluster)
-        if refstate.state != models.ReferenceDataState.CREATED:
+        if refstate.state != models.StagingState.CREATED:
             raise InvalidReferenceDataStateError(
                 f"Reference data must be in the created state for cluster {refstate.cluster.value}"
             )
         await self._cli.update_refdata_state(
-            refdata.id, cluster, models.ReferenceDataState.DOWNLOAD_SUBMITTED
+            refdata.id, cluster, models.StagingState.DOWNLOAD_SUBMITTED
         )
         # Now this server coroutine has claimed the staging process, any other requests to
         # the server will fail for this refdata ID so we're safe to proceed and send errors
@@ -119,7 +120,7 @@ class RefdataManager:
                 self._exe, _unpack_refdata, refdata.id, arcpath, refdata.unpack, self._metapath
             )
             await self._cli.update_refdata_state(
-                refdata.id, cluster, models.ReferenceDataState.COMPLETE
+                refdata.id, cluster, models.StagingState.COMPLETE
             )
         except Exception as e:
             self._logr.exception(
@@ -129,7 +130,58 @@ class RefdataManager:
             await self._cli.update_refdata_state(
                 refdata.id,
                 cluster,
-                models.ReferenceDataState.ERROR,
+                models.StagingState.ERROR,
+                admin_error=str(e),
+                traceback=traceback.format_exc()
+            )
+
+    async def stage_ai_model(self, key: models.AIModelKey, cluster: sites.Cluster):
+        """
+        Stage an AI model snapshot from its source directly to the local AI model store.
+        Starts the staging and returns immediately.
+
+        key - the key of the AI model to stage.
+        cluster - the cluster where the AI model is being staged.
+        """
+        _not_falsy(key, "key")
+        _not_falsy(cluster, "cluster")
+        # check the AI model exists, update state and throw errors back to CTS
+        # before starting a coroutine and returning
+        # If there's another process trying to do the same thing then one of them will cause
+        # the staging to error out in the CTS, but that should never happen
+        ai_model = await self._cli.get_ai_model(key)
+        aistate = ai_model.get_status_for_cluster(cluster)
+        if aistate.state != models.StagingState.CREATED:
+            raise InvalidAIModelStateError(
+                f"AI model must be in the created state for cluster {aistate.cluster.value}"
+            )
+        await self._cli.update_ai_model_state(key, cluster, models.StagingState.DOWNLOAD_SUBMITTED)
+        # Now this server coroutine has claimed the staging process, any other requests to
+        # the server will fail for this AI model so we're safe to proceed and send errors
+        # directly to the CTS vs. the caller, whoever that might be (although it should
+        # only be the CTS under normal circumstances)
+        await self._coman.run_coroutine(self._stage_ai_model(key, cluster))
+
+    async def _stage_ai_model(self, key: models.AIModelKey, cluster: sites.Cluster):
+        # TODO AI_MODEL consider writing a local metadata file analogous to refdata's
+        #               _unpack_refdata/_MD5_FILE (e.g. per-file checksums), if a local,
+        #               filesystem-based view of staging completeness/content is ever needed for
+        #               AI models the way get_refdata_state provides for refdata.
+        try:
+            dest_dir = self._refpath / _AI_MODEL_DIR / key.source.value / key.model / key.version
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            self._logr.info(f"Staging AI model {key} to {dest_dir}")
+            await asyncio.get_running_loop().run_in_executor(
+                self._exe, stage_snapshot, key.model, key.version, dest_dir
+            )
+            await self._cli.update_ai_model_state(key, cluster, models.StagingState.COMPLETE)
+        except Exception as e:
+            self._logr.exception(f"Failed to stage AI model {key} for cluster {cluster.value}")
+            # if this fails there's not much else we can do
+            await self._cli.update_ai_model_state(
+                key,
+                cluster,
+                models.StagingState.ERROR,
                 admin_error=str(e),
                 traceback=traceback.format_exc()
             )

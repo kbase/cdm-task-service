@@ -22,7 +22,7 @@ class _ImageFields(NamedTuple):
     urls: list | None
     usage_notes: str | None
     refdata_id: str | None
-    default_refdata_mount_point: str | None
+    default_staged_data_mount_point: str | None
     allowed_sites: set[sites.SubmittableCluster] | None
     script_image: bool
 
@@ -49,7 +49,7 @@ class Images:
         username: str,
         image_reg: models.ImageRegistration = None,
         refdata_id: str = None,
-        default_refdata_mount_point: str = None,
+        default_staged_data_mount_point: str = None,
         allowed_sites: set[sites.SubmittableCluster] = None,
         script_image: bool = None,
     ) -> models.Image:
@@ -62,8 +62,14 @@ class Images:
             and a from_image reference to an existing registered image from which to copy
             user-supplied fields.
         refdata_id - the ID of reference data to associate with the image.
-        default_refdata_mount_point - the default mount point for refdata in an image container.
-            Must be an absolute path with at least one path element.
+        default_staged_data_mount_point - the default mount point in an image container for
+            whichever of reference data or the AI model store a job submitted against this
+            image ends up requesting. Must be an absolute path with at least one path
+            element. A job requesting AI models gets a mount point regardless of whether one
+            is provided here or in the job submission, defaulting to
+            models.DEFAULT_AI_MODEL_MOUNT_POINT - there is no equivalent default for
+            reference data, which requires an explicit mount point from one of those two
+            sources.
         allowed_sites - the compute sites at which the image is permitted to run. If not
             provided, the image may run at any site.
         script_image - whether the image is a script-driven image requiring a user-provided
@@ -72,16 +78,12 @@ class Images:
         """
         image_reg = image_reg or models.ImageRegistration()
         fields = await self._resolve_image_fields(
-            image_reg, refdata_id, default_refdata_mount_point, allowed_sites, script_image
+            image_reg, refdata_id, default_staged_data_mount_point, allowed_sites, script_image
         )
-        if fields.default_refdata_mount_point:
-            if not fields.refdata_id:
+        if fields.default_staged_data_mount_point:
+            if not _ABSPATH_REGEX.fullmatch(fields.default_staged_data_mount_point):
                 raise IllegalParameterError(
-                    "If a refdata mount point is provided a refdata ID must be provided."
-                )
-            if not _ABSPATH_REGEX.fullmatch(fields.default_refdata_mount_point):
-                raise IllegalParameterError(
-                    "Refdata mount points must be absolute paths with at least one path element."
+                    "Mount points must be absolute paths with at least one path element."
                 )
         if fields.refdata_id:  # ensure refdata exists
             await self._ref.get_refdata_by_id(fields.refdata_id)
@@ -98,7 +100,7 @@ class Images:
             registered_by=username,
             registered_on=utcdatetime(),
             refdata_id=fields.refdata_id,
-            default_refdata_mount_point=fields.default_refdata_mount_point,
+            default_staged_data_mount_point=fields.default_staged_data_mount_point,
             usage_notes=fields.usage_notes,
             urls=fields.urls,
             allowed_sites=fields.allowed_sites,
@@ -111,7 +113,7 @@ class Images:
         self,
         image_reg: models.ImageRegistration,
         refdata_id: str,
-        default_refdata_mount_point: str,
+        default_staged_data_mount_point: str,
         allowed_sites: set[sites.SubmittableCluster] | None,
         script_image: bool | None,
     ) -> _ImageFields:
@@ -130,8 +132,8 @@ class Images:
                 usage_notes = from_img.usage_notes
             if refdata_id is None:
                 refdata_id = from_img.refdata_id
-            if default_refdata_mount_point is None:
-                default_refdata_mount_point = from_img.default_refdata_mount_point
+            if default_staged_data_mount_point is None:
+                default_staged_data_mount_point = from_img.default_staged_data_mount_point
             if allowed_sites is None and from_img.allowed_sites:
                 allowed_sites = set(from_img.allowed_sites)
             if script_image is None:
@@ -140,7 +142,7 @@ class Images:
             urls=urls,
             usage_notes=usage_notes,
             refdata_id=refdata_id or None,  # ensure not empty string, etc.
-            default_refdata_mount_point=default_refdata_mount_point,
+            default_staged_data_mount_point=default_staged_data_mount_point,
             allowed_sites=allowed_sites,
             script_image=script_image or False,
         )

@@ -159,6 +159,8 @@ def _process_parameter(
                 param = _handle_manifest(job, manifest, flag)
             case models.ParameterType.CONTAINTER_NUMBER:
                 param = _handle_container_num(param, container_num, flag)
+            case models.ParameterType.AI_MODEL:
+                param = _handle_ai_model(job, param, flag)
             case _:
                 # should be impossible but make code future proof
                 raise ValueError(f"Unexpected parameter type: {_}")
@@ -167,37 +169,39 @@ def _process_parameter(
     return [param] if as_list and not isinstance(param, list) else param
 
 
+def _flag_and_value(value: str, flag: str | None) -> str | list[str]:
+    """
+    Combine a single argument value with an optional preceding flag, shell quoting as
+    necessary.
+
+    If flag ends with '=', the flag and value are joined into a single quoted token.
+    If flag is set but doesn't end with '=', the flag and value become two separate
+    quoted tokens. If there's no flag, just the quoted value is returned.
+    """
+    if not flag:
+        return shlex.quote(value)
+    if flag.endswith("="):
+        return shlex.quote(flag + value)
+    return [shlex.quote(flag), shlex.quote(value)]
+
+
 def _handle_container_num(
         p: models.Parameter, container_num: int, flag: str | None
 ) -> str | list[str]:
-    # similar to the function below
     pre = p.container_num_prefix if p.container_num_prefix else ""
     suf = p.container_num_suffix if p.container_num_suffix else ""
-    cn = f"{pre}{container_num}{suf}"
-    if flag:
-        if flag.endswith("="):
-            # not sure if this will work, but since Job flags are shell safe it's
-            # impossible to test
-            param = shlex.quote(flag) + cn
-        else:
-            param = [shlex.quote(flag), cn]
-    else:
-        param = shlex.quote(cn)
-    return param
+    return _flag_and_value(f"{pre}{container_num}{suf}", flag)
 
 
 def _handle_manifest(job: models.Job, manifest: Path, flag: str | None) -> str | list[str]:
     pth = os.path.join(job.job_input.params.input_mount_point, manifest.name)
-    # This is the same as the comma separated list case below... not sure if using a common fn
-    # makes sense
-    if flag:
-        if flag.endswith("="):
-            param = shlex.quote(flag + pth)
-        else:
-            param = [shlex.quote(flag), shlex.quote(pth)]
-    else:
-        param = shlex.quote(pth)
-    return param
+    return _flag_and_value(pth, flag)
+
+
+def _handle_ai_model(job: models.Job, p: models.Parameter, flag: str | None) -> str | list[str]:
+    model, version = models.split_ai_model_ref(p.ai_model)
+    pth = "/".join([job.get_staged_data_mount_point(), p.ai_model_source.value, model, version])
+    return _flag_and_value(pth, flag)
 
 
 # this is a bit on the complex side...
@@ -211,14 +215,9 @@ def _join_files(
     imp = job.job_input.params.input_mount_point
     match format_:
         case models.InputFilesFormat.COMMA_SEPARATED_LIST:
-            fileret = ",".join([_join_path(imp, file_to_rel_path, f) for f in files])
-            if flag:
-                if flag.endswith("="):
-                    fileret = shlex.quote(flag + fileret)
-                else:
-                    fileret = [shlex.quote(flag), shlex.quote(fileret)]
-            else:
-                fileret = shlex.quote(fileret)
+            fileret = _flag_and_value(
+                ",".join(_join_path(imp, file_to_rel_path, f) for f in files), flag
+            )
         case models.InputFilesFormat.SPACE_SEPARATED_LIST:
             if flag:
                 if flag.endswith("="):

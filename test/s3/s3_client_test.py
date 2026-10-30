@@ -576,7 +576,7 @@ async def _check_object(minio, bucket, key, crc, etag, content):
         assert obj["ETag"] == etag
         chunks = []
         async with obj["Body"] as stream:
-            while chunk := await stream.content.read(1024 * 1024):  # 1 MiB chunks
+            while chunk := await stream.read(1024 * 1024):  # 1 MiB chunks
                 chunks.append(chunk)
         assert b"".join(chunks) == content
 

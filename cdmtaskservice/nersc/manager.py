@@ -87,6 +87,10 @@ _CHECKSUM_MANIFEST_JSON = "checksum_manifest.json"
 _JOB_LOGS = "logs"
 _JOBS_DIR = "jobs"
 _REFDATA_DIR = "refdata"
+_AI_MODEL_SCRATCH_DIR = "ai_models"
+# Leading underscore to stand out from the flat refdata UUID directories it sits alongside
+# at the DTN-root level (see self._ai_model_root_loc in __init__).
+_AI_MODEL_ROOT_DIR = "_ai_models"
 
 
 _JAWS_CONF_TEMPLATE = """
@@ -114,10 +118,29 @@ _JAWS_INPUT_JSON = "input.json"
 # the newer interpreter, e.g. NoModuleFoundError: awscrt at job runtime despite a successful
 # install at startup.
 # To check for newer versions to pin to, run `module avail python` on a NERSC Perlmutter login
-# node. After updating this constant, restart the CTS server so _install_pip_dependencies
-# reinstalls under the newly pinned version.
-_PYTHON_MODULE = "python/3.13-26.8.0"
+# node.
+_PYTHON_MODULE = "python/3.14-26.8.1"
 _RUN_CTS_REMOTE_CODE_FILENAME = "run_cts_remote_code.sh"
+
+
+class _CTSRemoteMode(Enum):
+    """
+    Every `CTS_MODE` value this file can set, which `remote.py::main` reads back out of the
+    environment on the NERSC side to decide which remote task to run.
+
+    remote.py intentionally does not import this enum (or anything else from this module) - it
+    runs in a separate, minimal-dependency environment at NERSC and compares CTS_MODE against
+    the equivalent bare string literals instead. CTS_MODE is a wire-format contract between two
+    independently deployed environments, not a shared code path.
+    """
+    MANIFEST = "manifest"
+    REFDATA_MANIFEST = "refdata_manifest"
+    AI_MODEL = "ai_model"
+    ERRORS_JSON = "errorsjson"
+    CHECKSUM = "checksum"
+    PIPELINE_CHECKSUM = "pipeline_checksum"
+
+
 # Might want to make a shared constants module for all these env var names and update this
 # file and remote.py
 _RUN_CTS_REMOTE_CODE = f"""
@@ -128,6 +151,7 @@ module load {_PYTHON_MODULE}
 export PYTHONPATH=$CTS_CODE_LOCATION
 export CTS_MODE=$CTS_MODE
 export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
+export CTS_JOB_IMAGE=$CTS_JOB_IMAGE
 export CTS_ERRORS_JSON_LOCATION=$CTS_ERRORS_JSON_LOCATION
 export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
 export CTS_JAWS_OUTPUT_DIR=$CTS_JAWS_OUTPUT_DIR
@@ -139,19 +163,23 @@ export CTS_DTN_HOST=$CTS_DTN_HOST
 export CTS_REFDATA_DEST_DIR=$CTS_REFDATA_DEST_DIR
 export CTS_COMPLETION_FILE_LOCATION=$CTS_COMPLETION_FILE_LOCATION
 export CTS_COMPLETION_FILE_CONTENTS=$CTS_COMPLETION_FILE_CONTENTS
+export CTS_AI_MODEL_SOURCE=$CTS_AI_MODEL_SOURCE
+export CTS_AI_MODEL_MODEL=$CTS_AI_MODEL_MODEL
+export CTS_AI_MODEL_VERSION=$CTS_AI_MODEL_VERSION
+export CTS_AI_MODEL_DEST_DIR=$CTS_AI_MODEL_DEST_DIR
 export CTS_RESULT_FILE_LOCATION=$CTS_RESULT_FILE_LOCATION
 export CTS_LOG_FILE_LOCATION=$CTS_LOG_FILE_LOCATION
 export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
 export SCRATCH=$SCRATCH
 
 # Redirect all further output to a durable log file so a killed (e.g. OOM) process still
-# leaves a trace, since the SFAPI task's captured stdout is only available for a short time
-# after the task ends (successfully or not).
+# leaves a trace.
 exec >> "$CTS_LOG_FILE_LOCATION" 2>&1
 
 echo "PYTHONPATH=[$PYTHONPATH]"
 echo "CTS_MODE=[$CTS_MODE]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
+echo "CTS_JOB_IMAGE=[$CTS_JOB_IMAGE]"
 echo "CTS_ERRORS_JSON_LOCATION=[$CTS_ERRORS_JSON_LOCATION]"
 echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
 echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]"
@@ -163,6 +191,10 @@ echo "CTS_DTN_HOST=[$CTS_DTN_HOST]"
 echo "CTS_REFDATA_DEST_DIR=[$CTS_REFDATA_DEST_DIR]"
 echo "CTS_COMPLETION_FILE_LOCATION=[$CTS_COMPLETION_FILE_LOCATION]"
 echo "CTS_COMPLETION_FILE_CONTENTS=[$CTS_COMPLETION_FILE_CONTENTS]"
+echo "CTS_AI_MODEL_SOURCE=[$CTS_AI_MODEL_SOURCE]"
+echo "CTS_AI_MODEL_MODEL=[$CTS_AI_MODEL_MODEL]"
+echo "CTS_AI_MODEL_VERSION=[$CTS_AI_MODEL_VERSION]"
+echo "CTS_AI_MODEL_DEST_DIR=[$CTS_AI_MODEL_DEST_DIR]"
 echo "CTS_RESULT_FILE_LOCATION=[$CTS_RESULT_FILE_LOCATION]"
 echo "CTS_LOG_FILE_LOCATION=[$CTS_LOG_FILE_LOCATION]"
 echo "CTS_CALLBACK_URL=[$CTS_CALLBACK_URL]"
@@ -195,6 +227,21 @@ if [ ! -e "{path}" ]; then
     exit 0
 fi
 rm -rf -- "{path}"
+"""
+
+
+# Like _REMOVE_PATH_TEMPLATE, but also prunes now-empty ancestor directories left behind by
+# path, walking upward via dirname and stopping at the first non-empty ancestor (rmdir fails
+# harmlessly on a non-empty directory) or at stop_at (exclusive), whichever comes first.
+_REMOVE_PATH_AND_PRUNE_TEMPLATE = """
+if [ -e "{path}" ]; then
+    rm -rf -- "{path}"
+fi
+d=$(dirname -- "{path}")
+while [ "$d" != "{stop_at}" ]; do
+    rmdir -- "$d" 2>/dev/null || break
+    d=$(dirname -- "$d")
+done
 """
 
 
@@ -301,7 +348,7 @@ class NERSCManager:
 
     def __init__(
             self,
-            client_provider: Callable[[], str],
+            client_provider: Callable[[], AsyncClient],
             nersc_paths: NERSCPaths,
             nesrc_jaws_user: str,
             pipeline_registry: PipelineRegistry,
@@ -315,6 +362,7 @@ class NERSCManager:
         self._work_loc = Path("cdm_task_service") / service_group
         self._jawscfg = f"jaws_cts_{service_group}.conf"
         self._refdata_root = nersc_paths.jaws_refdata_root_dir
+        self._ai_model_root_loc = self._work_loc / _AI_MODEL_ROOT_DIR
 
     async def _setup_remote_code(self, nersc_paths: NERSCPaths, jaws_token: str, jaws_group: str):
         # TODO RELIABILITY atomically write files. For these small ones probably doesn't matter?
@@ -349,6 +397,9 @@ class NERSCManager:
             if _PIP_DEPENDENCIES:
                 tg.create_task(self._install_pip_dependencies(perlmutter))
         self._perlmutter_scratch = pm_scratch.result()
+        self._ai_model_scratch_root = (
+            self._perlmutter_scratch / self._work_loc / _AI_MODEL_SCRATCH_DIR
+        )
         self._nersc_perlmutter_file_cache_path = self._make_cache_path(
             nersc_paths.jaws_staging_dir_perlmutter)
         logr.info(
@@ -412,12 +463,41 @@ class NERSCManager:
 
     def _get_relative_refdata_loc(self, refdata_id) -> Path:
         return self._work_loc / refdata_id
-    
+
+    def _get_ai_model_scratch(self, key: models.AIModelKey) -> Path:
+        return self._ai_model_scratch_root / key.source.value / key.model / key.version
+
+    def _get_ai_model_staging_loc(self, key: models.AIModelKey) -> Path:
+        # Perlmutter login nodes (where `xfer` QOS jobs run) cannot write to the DTN-only
+        # AI model root, so the snapshot is staged here first and copied to its final location
+        # by a DTN-side step at the end of the job.
+        return self._get_ai_model_scratch(key) / _STAGING_DIR_NAME
+
+    def _get_ai_model_loc(self, key: models.AIModelKey) -> Path:
+        return self._refdata_root / self._get_relative_ai_model_loc(key)
+
+    def _get_relative_ai_model_loc(self, key: models.AIModelKey) -> Path:
+        return self._ai_model_root_loc / key.source.value / key.model / key.version
+
     def _get_refdata_file_change_path(self, refdata_id) -> Path:
         # the file path that JAWS looks for to trigger refdata transfers
         return (
             self._refdata_root /
             f"{self._nersc_jaws_user}_{self._service_group}_{refdata_id}_changes.txt"
+        )
+
+    def _get_ai_model_file_change_path(self, key: models.AIModelKey) -> Path:
+        # Mirrors _get_refdata_file_change_path's naming shape, with the AI model's composite
+        # key (slashes flattened to underscores to avoid creating stray subdirectories) standing
+        # in for a refdata_id. JAWS itself does watch this path and will replicate the AI model
+        # to LRC on seeing it, same as for refdata - what's actually absent is any CTS-side watch
+        # for JAWS's own completion signal, since that's only set up via on_refdata_complete,
+        # which nothing wires up for AI models (see the TODO in lawrencium_jaws.py).
+        flat_model = key.model.replace("/", "_")
+        return (
+            self._refdata_root /
+            f"{self._nersc_jaws_user}_{self._service_group}_"
+            f"{key.source.value}_{flat_model}_{key.version}_changes.txt"
         )
     
     def _get_refdata_file_complete_path(self, refdata_id, site: sites.Cluster) -> Path:
@@ -467,6 +547,14 @@ class NERSCManager:
                 # May need to catch SFAPI client errors and wrap. YAGNI for now
                 tg.create_task(perlmutter.run(_REMOVE_PATH_TEMPLATE.format(path=p)))
 
+    async def _delete_path_and_prune_empty_ancestors(self, path: Path, stop_at: Path):
+        logr = logging.getLogger(__name__)
+        cli = self._client_provider()
+        perlmutter = await cli.compute(Machine.perlmutter)
+        logr.info("Deleting path at NERSC and pruning empty ancestors", extra={logfields.FILE: path})
+        # May need to catch SFAPI client errors and wrap. YAGNI for now
+        await perlmutter.run(_REMOVE_PATH_AND_PRUNE_TEMPLATE.format(path=path, stop_at=stop_at))
+
     def _get_async_path(self, compute: AsyncCompute, target: Path) -> AsyncRemotePath:
         # skip some API calls vs. the upload example in the NERSC docs
         # don't use a directory as the target or it makes an API call
@@ -476,49 +564,86 @@ class NERSCManager:
 
     async def download_s3_files(
         self,
-        download_id: str,
+        entity: models.Job | pipe_models.AdminPipelineJob | models.ReferenceData,
         objects: list[S3ObjectMeta],
         presigned_urls: list[str],
         callback_url: str,
         concurrency: int = 10,
         insecure_ssl: bool = False,
-        refdata: bool = False,
-        unpack: bool = False,
-        pipeline: pipe_models.PipelineSpec = None,
     ) -> str:
         """
         Download a set of files to NERSC from an S3 instance.
 
-        download_id - the ID of the job or reference data for which the files are being
-            transferred. This must be a unique ID, and no other transfers should be occurring
-            for the id.
+        entity - the job or reference data for which the files are being downloaded. The
+            entity's ID is used as the download ID; no other transfers should be occurring for
+            the entity. For reference data, causes files to be stored in the NERSC refdata
+            location and, per entity.unpack, *.gz/*.tar.gz/*.tgz files to be unpacked. For a
+            pipeline job, causes the pre-staged WDL bundle's MD5s to be verified as part of the
+            download task. For a non-pipeline job, causes the job's container image to be
+            pulled at NERSC as part of the download task, prior to the job being submitted to
+            JAWS.
         objects - the S3 files to download.
         presigned_urls - the presigned download URLs for each object, in the same order as
             the objects.
         callback_url - the URL to GET as a callback for when the download is complete.
         concurrency - the number of simultaneous downloads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
-        refdata - whether this is a refdata download and files should be stored in the NERSC
-            refdata location.
-        unpack - whether to unpack *.gz, *.tar.gz, or *.tgz files.
-        pipeline - if this download is for a pipeline job, the pipeline's identity. Causes the
-            pre-staged WDL bundle's MD5s to be verified as part of the download task.
 
         Returns the NERSC Slurm job ID for the download.
         """
+        _not_falsy(entity, "entity")
+        # note objects and jobs / refdata are somewhat redundant
+        # maybe should check the objects match
+        entity_type = entity.get_entity_type()
+        is_refdata = False
+        unpack = False
+        pipeline_def = None
+        image = None
+        if entity_type == models.EntityType.REFDATA:
+            is_refdata = True
+            unpack = entity.unpack
+        elif entity_type == models.EntityType.PIPELINE_JOB:
+            pipeline_def = self._pipereg.get(entity.pipeline_input.get_pipeline_spec())
+        else:  # EntityType.JOB
+            image = entity.image.name_with_digest
         maniio = self._create_download_manifest(
-            download_id, objects, presigned_urls, concurrency, insecure_ssl, refdata, unpack)
+            entity.id, objects, presigned_urls, concurrency, insecure_ssl, is_refdata, unpack
+        )
         total_bytes = sum(o.size for o in objects)
-        pipeline_def = self._pipereg.get(pipeline) if pipeline else None
         return await self._process_manifest(
-            maniio,
-            download_id,
+            entity.id,
             callback_url,
-            "download_manifest.json",
             "download",
             total_bytes,
-            mode="refdata_manifest" if refdata else "manifest",
+            mode=_CTSRemoteMode.REFDATA_MANIFEST if is_refdata else _CTSRemoteMode.MANIFEST,
+            manifest=maniio,
+            filename="download_manifest.json",
             pipeline_def=pipeline_def,
+            job_image=image,
+        )
+
+    async def stage_ai_model(
+        self, ai_model: models.AdminAIModel, callback_url: str
+    ) -> str:
+        """
+        Start staging an AI model snapshot to NERSC by submitting a remote Slurm job that
+        downloads the snapshot directly from its source (e.g. huggingface.co) and syncs it to
+        the DTN-only-writable AI model store.
+
+        ai_model - the AI model to stage.
+        callback_url - the URL to GET as a callback for when staging is complete.
+
+        Returns the NERSC Slurm job ID for the staging task.
+        """
+        _not_falsy(ai_model, "ai_model")
+        # No file manifest is needed - staging pulls a single named snapshot directly from its
+        # source rather than transferring a list of S3 files.
+        return await self._process_manifest(
+            ai_model.key,
+            callback_url,
+            "download",
+            ai_model.size_bytes,
+            mode=_CTSRemoteMode.AI_MODEL,
         )
 
     async def _upload_presigned_files(
@@ -550,53 +675,87 @@ class NERSCManager:
         maniio = self._create_upload_manifest(
             remote_files, presigned_urls, concurrency, insecure_ssl)
         return await self._process_manifest(
-            maniio,
             job_id,
             callback_url,
-            "upload_manifest.json",
             "upload",
             total_bytes,
+            manifest=maniio,
+            filename="upload_manifest.json",
         )
+
+    def _refdata_manifest_command_extras(self, refdata_id: str) -> list[str]:
+        extras = [
+            f"export CTS_STAGING_DIR={self._get_refdata_staging_loc(refdata_id)}",
+            f"export CTS_DTN_HOST={_DTN_HOST}",
+            f"export CTS_REFDATA_DEST_DIR={self._get_refdata_loc(refdata_id)}",
+        ]
+        # TODO CLEANUP need to delete this and the JAWS written completion file
+        # see https://jaws-docs.jgi.doe.gov/en/latest/jaws/jaws_refdata.html#adding-data-to-refdata-directory
+        extras.append(
+            f"export CTS_COMPLETION_FILE_LOCATION={self._get_refdata_file_change_path(refdata_id)}"
+        )
+        extras.append(f"export CTS_COMPLETION_FILE_CONTENTS={self._get_refdata_loc(refdata_id)}")
+        return extras
+
+    def _ai_model_command_extras(self, key: models.AIModelKey) -> list[str]:
+        extras = [
+            f"export CTS_AI_MODEL_SOURCE={key.source.value}",
+            f"export CTS_AI_MODEL_MODEL={key.model}",
+            f"export CTS_AI_MODEL_VERSION={key.version}",
+            f"export CTS_STAGING_DIR={self._get_ai_model_staging_loc(key)}",
+            f"export CTS_DTN_HOST={_DTN_HOST}",
+            f"export CTS_AI_MODEL_DEST_DIR={self._get_ai_model_loc(key)}",
+        ]
+        # JAWS watches this file the same way it does for refdata and will replicate the
+        # AI model to LRC when it sees it - we don't wait for or react to that transfer
+        # ourselves (no SFAPI completion watch is set up for AI models - see the TODO in
+        # lawrencium_jaws.py, only reachable via on_refdata_complete, which nothing wires up
+        # for AI models). This is harmless either way since JAWS does a full sync of the
+        # refdata root to LRC monthly regardless, so the AI model would get replicated sooner
+        # or later either way; writing this file just keeps AI model staging in sync with how
+        # refdata already behaves, and means less to wire up if/when LRC support for AI
+        # models is added.
+        extras.append(
+            f"export CTS_COMPLETION_FILE_LOCATION={self._get_ai_model_file_change_path(key)}"
+        )
+        extras.append(f"export CTS_COMPLETION_FILE_CONTENTS={self._get_ai_model_loc(key)}")
+        return extras
 
     def _build_process_manifest_command(
         self,
-        entity_id: str,
+        entity_id: str | models.AIModelKey,
         callback_url: str,
-        mode: str,
-        manifestpath: Path,
+        mode: _CTSRemoteMode,
         task_base_path: Path,
+        manifestpath: Path | None = None,
         error_json_file_location: str = None,
         container_logs_location: str = None,
         checksum_manifest_path: Path = None,
+        job_image: str = None,
     ) -> list[str]:
-        refdata = mode == "refdata_manifest"
         command = [
-            f"export CTS_MODE={mode}",
+            f"export CTS_MODE={mode.value}",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}",
-            f"export CTS_MANIFEST_LOCATION={manifestpath}",
             f"export CTS_RESULT_FILE_LOCATION={task_base_path}_result.json",
             f"export CTS_LOG_FILE_LOCATION={task_base_path}_log.txt",
             f"export CTS_CALLBACK_URL={callback_url}",
             f"export SCRATCH=$SCRATCH",
         ]
+        if manifestpath is not None:
+            command.append(f"export CTS_MANIFEST_LOCATION={manifestpath}")
+        if job_image:
+            command.append(f"export CTS_JOB_IMAGE={job_image}")
         if error_json_file_location:
             command.append(f"export CTS_ERRORS_JSON_LOCATION={error_json_file_location}")
             command.append(f"export CTS_CONTAINER_LOGS_LOCATION={container_logs_location}")
         if checksum_manifest_path:
             command.append(f"export CTS_CHECKSUM_MANIFEST_LOCATION={checksum_manifest_path}")
-        if refdata:
-            command.append(f"export CTS_STAGING_DIR={self._get_refdata_staging_loc(entity_id)}")
-            command.append(f"export CTS_DTN_HOST={_DTN_HOST}")
-            command.append(f"export CTS_REFDATA_DEST_DIR={self._get_refdata_loc(entity_id)}")
-            # TODO CLEANUP need to delete this and the JAWS written completion file
-            # see https://jaws-docs.jgi.doe.gov/en/latest/jaws/jaws_refdata.html#adding-data-to-refdata-directory
-            command.append(
-                "export CTS_COMPLETION_FILE_LOCATION="
-                f"{self._get_refdata_file_change_path(entity_id)}"
-            )
-            command.append(
-                f"export CTS_COMPLETION_FILE_CONTENTS={self._get_refdata_loc(entity_id)}"
-            )
+        extras_fn = {
+            _CTSRemoteMode.REFDATA_MANIFEST: self._refdata_manifest_command_extras,
+            _CTSRemoteMode.AI_MODEL: self._ai_model_command_extras,
+        }.get(mode)
+        if extras_fn:
+            command += extras_fn(entity_id)
         command.append(f'"$CTS_CODE_LOCATION"/{_RUN_CTS_REMOTE_CODE_FILENAME}')
         return command
 
@@ -630,27 +789,33 @@ class NERSCManager:
 
     async def _process_manifest(
         self,
-        manifest: io.BytesIO,
-        entity_id: str,
+        entity_id: str | models.AIModelKey,
         callback_url: str,
-        filename: str,
         task_type: str,
         total_bytes: int,
-        mode: str = "manifest",
+        mode: _CTSRemoteMode = _CTSRemoteMode.MANIFEST,
+        manifest: io.BytesIO | None = None,
+        filename: str | None = None,
         error_json_file_location: str = None,
         container_logs_location: str = None,  # this is expected to be present if the above is
         pipeline_def: PipelineDefinition = None,
+        job_image: str = None,
     ):
-        refdata = mode == "refdata_manifest"
-        if refdata:
-            rootpath = self._get_refdata_scratch(entity_id)
-        else:
-            rootpath = self._get_job_scratch(entity_id)
-        manifestpath = rootpath / filename
+        rootpath_fn = {
+            _CTSRemoteMode.AI_MODEL: self._get_ai_model_scratch,
+            _CTSRemoteMode.REFDATA_MANIFEST: self._get_refdata_scratch,
+        }.get(mode, self._get_job_scratch)
+        rootpath = rootpath_fn(entity_id)
         cli = self._client_provider()
         perl = await cli.compute(Machine.perlmutter)
         # TODO CLEANUP manifests after some period of time
-        await self._upload_file_to_nersc(perl, manifestpath, bio=manifest)
+        # AI model staging has no file manifest at all - it stages exactly one named snapshot
+        # directly from huggingface.co, not a list of S3 files - so there's no manifest to
+        # upload or path to pass along to the remote task.
+        manifestpath = None
+        if manifest is not None:
+            manifestpath = rootpath / filename
+            await self._upload_file_to_nersc(perl, manifestpath, bio=manifest)
         checksum_manifest_path = await self._upload_pipeline_checksum_manifest(
             perl, rootpath, pipeline_def
         )
@@ -658,11 +823,12 @@ class NERSCManager:
             entity_id,
             callback_url,
             mode,
-            manifestpath,
             rootpath / task_type,
+            manifestpath=manifestpath,
             error_json_file_location=error_json_file_location,
             container_logs_location=container_logs_location,
             checksum_manifest_path=checksum_manifest_path,
+            job_image=job_image,
         )
         script = _SBATCH_SCRIPT_TEMPLATE.format(
             time=_seconds_to_slurm_time(_compute_sbatch_time_sec(total_bytes)),
@@ -673,12 +839,13 @@ class NERSCManager:
         await self._upload_file_to_nersc(perl, scriptpath, bio=io.BytesIO(script.encode()))
         job = await perl.submit_job(str(scriptpath))
         job_id = str(job.jobid)
+        entity_desc, logfield = {
+            _CTSRemoteMode.AI_MODEL: ("AI model", logfields.AI_MODEL_ID),
+            _CTSRemoteMode.REFDATA_MANIFEST: ("refdata", logfields.REFDATA_ID),
+        }.get(mode, ("job", logfields.JOB_ID))
         logging.getLogger(__name__).info(
-            f"Submitted {task_type} Slurm job for {'refdata' if refdata else 'job'}",
-            extra={
-                logfields.NERSC_JOB_ID: job_id,
-                logfields.REFDATA_ID if refdata else logfields.JOB_ID: entity_id
-            }
+            f"Submitted {task_type} Slurm job for {entity_desc}",
+            extra={logfields.NERSC_JOB_ID: job_id, logfield: str(entity_id)}
         )
         return job_id
 
@@ -777,7 +944,15 @@ class NERSCManager:
         Get the results of downloading files to NERSC from s3 for refdata.
         """
         return (await self._get_transfer_result(
-            _not_falsy(refdata, "refdata").id, "download", refdata=True
+            _not_falsy(refdata, "refdata").id, "download", entity_type=models.EntityType.REFDATA
+        ))[0]
+
+    async def get_ai_model_staging_result(self, key: models.AIModelKey) -> TransferResult:
+        """
+        Get the results of staging an AI model snapshot to NERSC.
+        """
+        return (await self._get_transfer_result(
+            _not_falsy(key, "key"), "download", entity_type=models.EntityType.AI_MODEL
         ))[0]
 
     async def get_presigned_upload_result(self, job: models.Job) -> TransferResult:
@@ -803,9 +978,18 @@ class NERSCManager:
         return await self._get_transfer_result(_not_falsy(job, "job").id, "error_log")
 
     async def _get_transfer_result(
-        self, entity_id: str, op: str, refdata: bool = False
+        self,
+        entity_id: str | models.AIModelKey,
+        op: str,
+        entity_type: models.EntityType = models.EntityType.JOB,
     ) -> tuple[TransferResult, Any]:
-        sc = self._get_refdata_scratch(entity_id) if refdata else self._get_job_scratch(entity_id)
+        scratch_fn = {
+            models.EntityType.JOB: self._get_job_scratch,
+            models.EntityType.PIPELINE_JOB: self._get_job_scratch,
+            models.EntityType.REFDATA: self._get_refdata_scratch,
+            models.EntityType.AI_MODEL: self._get_ai_model_scratch,
+        }[entity_type]
+        sc = scratch_fn(entity_id)
         path = sc / f"{op}_result.json"
         res = await self._download_json_file_from_NERSC(
             Machine.perlmutter, path, no_exception_on_missing_file=True
@@ -939,6 +1123,8 @@ class NERSCManager:
         refpath = None
         if job.image.refdata_id:
             refpath = self._get_relative_refdata_loc(job.image.refdata_id)
+        elif job.job_input.uses_ai_model_store():
+            refpath = self._ai_model_root_loc
         wdljson = wdl.generate_wdl(
             job, fmap, manifest_file_list=manifest_file_paths, relative_refdata_path=refpath
         )
@@ -1042,9 +1228,9 @@ class NERSCManager:
         perl = await cli.compute(Machine.perlmutter)
         rootpath = self._get_job_scratch(job.id)
         checksum_file = _CRC64NVME_CHECKSUMS_JSON_FILE_NAME
-        mode = "pipeline_checksum" if output_keys_location else "checksum"
+        mode = _CTSRemoteMode.PIPELINE_CHECKSUM if output_keys_location else _CTSRemoteMode.CHECKSUM
         command = [  # similar to the command in _process_manifest
-            f"export CTS_MODE={mode}; ",
+            f"export CTS_MODE={mode.value}; ",
             f"export CTS_CODE_LOCATION={self._nersc_code_path}; ",
             f"export CTS_RESULT_FILE_LOCATION={rootpath / 'upload_checksums_result.json'}; ",
             f"export CTS_LOG_FILE_LOCATION={rootpath / 'upload_checksums_log.txt'}; ",
@@ -1147,13 +1333,13 @@ class NERSCManager:
 
         manifest = self._create_upload_manifest(remotelogs, presigns, concurrency, insecure_ssl)
         return await self._process_manifest(
-            manifest,
             job.id,
             cburl,
-            "error_log_upload_manifest.json",
             "error_log",
             total_bytes,
-            mode="errorsjson",
+            mode=_CTSRemoteMode.ERRORS_JSON,
+            manifest=manifest,
+            filename="error_log_upload_manifest.json",
             error_json_file_location=errfilepath,
             container_logs_location=str(rootpath / _JOB_LOGS)
         )
@@ -1275,3 +1461,22 @@ class NERSCManager:
         state may result in undefined behavior.
         """
         await self._delete_paths([self._get_refdata_scratch(refdata.id)])
+
+    async def clean_ai_model(self, key: models.AIModelKey):
+        """
+        Remove any files at NERSC associated with staging the AI model snapshot. Does not
+        remove the final staged snapshot itself or the NERSC -> LRC sync notification file
+        read by JAWS.
+
+        If any files do not exist they are silently ignored.
+
+        Also prunes now-empty ancestor directories left behind by the
+        <source>/<model>/<version> scratch nesting, stopping at the AI model scratch root so a
+        sibling version/model's in-progress scratch content is never touched.
+
+        Note that running this method on an AI model where staging is not in a terminal state
+        for this cluster may result in undefined behavior.
+        """
+        await self._delete_path_and_prune_empty_ancestors(
+            self._get_ai_model_scratch(key), self._ai_model_scratch_root
+        )

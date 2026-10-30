@@ -47,7 +47,8 @@ class CDMTaskServiceConfig:
     refdata_service_role: str - the Auth2 custom role indicating a user is the refdata service.
     nersc_jaws_user: str - the user name of the user associated with the NERSC and JAWS
         credentials.
-    jaws_refdata_root_dir: str - the JAWS refdata root directory to use for refdata storage.
+    jaws_refdata_root_dir: str - the JAWS refdata root directory to use for refdata and AI
+        model storage.
     jaws_staging_dir_prl: str - the JAWS staging directory for the `kbase` site on the NERSC
         Perlmutter system.
     sfapi_cred_path: str - the path to a NERSC Superfacility API credential file. The file is
@@ -76,7 +77,7 @@ class CDMTaskServiceConfig:
     refdata_server_token: str - the token to use when communicating with the refdata staging
         server.
     refdata_host_path: str - The root path local to the job container host where reference
-        data is stored.
+        data and AI models are stored.
     external_executor_job_update_timeout_min: int - the number of minutes to wait when trying
         to update the job state in the service before failing.
     external_executor_mount_prefix_override: str - a host container mount path prefix override
@@ -104,8 +105,9 @@ class CDMTaskServiceConfig:
     container_s3_log_dir: str - where to store container logs in S3.
     job_max_cpu_hours: float - the maximum number of cpu hours per job.
     clean_frequency_hours: int - how often the job cleaning code that removes transient files
-        from completed jobs and refdata should be run in hours.
-    clean_age_days: int - jow old jobs and refdata must be before they're cleaned in days.
+        from completed jobs, refdata, and AI model staging should be run in hours.
+    clean_age_days: int - jow old jobs, refdata, and AI model staging must be before they're
+        cleaned in days.
     kafka_bootstrap_servers: str - the Kafka bootstrap servers in standard format.
     kafka_topic_jobs: str - the Kafka topic where job updates will be published.
     kafka_startup_unsent_delay_min: int | None - if present, indicates that unsent Kafka job
@@ -339,7 +341,7 @@ class CDMTaskServiceConfig:
             f"Authentication external executor role: {self.external_executor_role}",
             f"Authentication refdata service role: {self.refdata_service_role}",
             f"NERSC / JAWS user: {self.nersc_jaws_user}",
-            f"NERSC / JAWS refdata root dir: {self.jaws_refdata_root_dir}",
+            f"NERSC / JAWS refdata / AI model root dir: {self.jaws_refdata_root_dir}",
             f"NERSC / JAWS Perlmutter staging dir: {self.jaws_staging_dir_prl}",
             f"NERSC client credential path: {self.sfapi_cred_path}",
             f"NERSC remote code dir: {self.nersc_remote_code_dir}",
@@ -358,7 +360,7 @@ class CDMTaskServiceConfig:
             f"HTCondor exe url override: {self.condor_exe_url_override}",
             f"Refdata server url: {self.refdata_server_url}",
             f"Refdata server token: REDACTED FOR YOUR PLEASURE",
-            f"Refdata host path: {self.refdata_host_path}",
+            f"Refdata / AI model host path: {self.refdata_host_path}",
             "External executor job update timeout (min): "
                 + str(self.external_executor_job_update_timeout_min),
             "External executor mount prefix override: " +
@@ -380,8 +382,8 @@ class CDMTaskServiceConfig:
             f"Allowed S3 paths: {self.allowed_s3_paths}",
             f"Directory in S3 for container logs: {self.container_s3_log_dir}",
             f"Max CPU hours per job: {self.job_max_cpu_hours}",
-            f"Job/refdata clean frequency, hours: {self.clean_frequency_hours}",
-            f"Job/refdata clean age, days: {self.clean_age_days}",
+            f"Job/refdata/AI model clean frequency, hours: {self.clean_frequency_hours}",
+            f"Job/refdata/AI model clean age, days: {self.clean_age_days}",
             f"Kafka bootstrap servers: {self.kafka_boostrap_servers}",
             f"Kafka jobs topic: {self.kafka_topic_jobs}",
             f"Kafka unsent messages startup send delay: {self.kafka_startup_unsent_delay_min}",

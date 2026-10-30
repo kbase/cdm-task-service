@@ -6,14 +6,17 @@ from fastapi import status
 from kbase.auth import InvalidTokenError, InvalidUserError
 from typing import NamedTuple
 
+from cdmtaskservice.ai_models.huggingface_client import AIModelResolutionError
 from cdmtaskservice.errors import ErrorType
 from cdmtaskservice.exceptions import (
     ChecksumMismatchError,
     IllegalParameterError,
+    InvalidAIModelStateError,
     InvalidAuthHeaderError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     JobRecoveryError,
+    MismatchedJobStateError,
     NoSuchJobError,
     UnauthorizedError,
     UnavailableResourceError,
@@ -24,10 +27,11 @@ from cdmtaskservice.images import NoEntrypointError
 from cdmtaskservice.image_remote_lookup import ImageNameParseError, ImageInfoFetchError
 from cdmtaskservice.jobflows.flowmanager import InactiveJobFlowError, UnavailableJobFlowError
 from cdmtaskservice.job_state import NoJobLogsError
-from cdmtaskservice.models import NoRefdataClusterStatusError
+from cdmtaskservice.models import NoAIModelClusterStatusError, NoRefdataClusterStatusError
 from cdmtaskservice.mongo import (
     ImageTagExistsError,
     ImageDigestExistsError,
+    NoSuchAIModelError,
     NoSuchImageError,
     NoSuchReferenceDataError,
     NoSuchSubJobError,
@@ -73,17 +77,22 @@ _ERR_MAP = {
     NoEntrypointError: ErrorMapping(ErrorType.MISSING_ENTRYPOINT, _H400),
     ImageInfoFetchError: ErrorMapping(ErrorType.IMAGE_FETCH, _H400),
     ImageNameParseError: ErrorMapping(ErrorType.IMAGE_NAME_PARSE, _H400),
+    AIModelResolutionError: ErrorMapping(ErrorType.AI_MODEL_RESOLUTION, _H400),
     ImageTagExistsError: ErrorMapping(ErrorType.IMAGE_TAG_EXISTS, _H400),
     ImageDigestExistsError: ErrorMapping(ErrorType.IMAGE_DIGEST_EXISTS, _H400),
     NoSuchImageError: ErrorMapping(ErrorType.NO_SUCH_IMAGE, _H404),
     NoSuchJobError: ErrorMapping(ErrorType.NO_SUCH_JOB, _H404),
     NoSuchSubJobError: ErrorMapping(ErrorType.NO_SUCH_SUBJOB, _H404),
     NoSuchReferenceDataError: ErrorMapping(ErrorType.NO_SUCH_REFDATA, _H404),
+    NoSuchAIModelError: ErrorMapping(ErrorType.NO_SUCH_AI_MODEL, _H404),
     ReferenceDataExistsError: ErrorMapping(ErrorType.REFDATA_EXISTS, _H400),
     InvalidJobStateError: ErrorMapping(ErrorType.INVALID_JOB_STATE, _H400),
+    MismatchedJobStateError: ErrorMapping(ErrorType.INVALID_JOB_STATE, _H400),
     JobRecoveryError: ErrorMapping(ErrorType.JOB_RECOVERY, _H400),
     InvalidReferenceDataStateError: ErrorMapping(ErrorType.INVALID_REFDATA_STATE, _H400),
+    InvalidAIModelStateError: ErrorMapping(ErrorType.INVALID_AI_MODEL_STATE, _H400),
     NoRefdataClusterStatusError: ErrorMapping(ErrorType.NO_REFDATA_CLUSTER_STATUS, _H400),
+    NoAIModelClusterStatusError: ErrorMapping(ErrorType.NO_AI_MODEL_CLUSTER_STATUS, _H400),
     UnavailableResourceError: ErrorMapping(ErrorType.RESOURCE_UNAVAILABLE, _H400),
     InactiveJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_INACTIVE, _H400),
     UnavailableJobFlowError: ErrorMapping(ErrorType.JOB_FLOW_UNAVAILABLE, _H400),

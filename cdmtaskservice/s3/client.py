@@ -421,7 +421,7 @@ class S3Client:
                 loc.parent.mkdir(parents=True, exist_ok=True)
                 obj = await client.get_object(Bucket=buk, Key=key)
                 async with obj["Body"] as stream, aiofiles.open(loc, "wb") as f:
-                    while chunk := await stream.content.read(1024 * 1024):  # 1 MiB chunks
+                    while chunk := await stream.read(1024 * 1024):  # 1 MiB chunks
                         await f.write(chunk)
             download.path = path
             funcs.append(download)

@@ -18,7 +18,7 @@ from pydantic import (
     StringConstraints,
 )
 import re
-from typing import Annotated, Self
+from typing import Annotated, NamedTuple, Self
 
 from cdmtaskservice.arg_checkers import (
     contains_control_characters as _contains_control_characters,
@@ -70,14 +70,17 @@ FLD_SUBJOB_RUNTIME = "runtime_seconds"
 FLD_SUBJOB_HEARTBEAT = "heartbeat"
 FLD_SUBJOB_HTC_STATS_MISSING = "stats_missing"
 FLD_REFDATA_FILE = "file"
-FLD_REFDATA_STATUSES = "statuses"
-FLD_REFDATA_CLUSTER = "cluster"
-FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"  # deprecated, see FLD_REFDATA_NERSC_DL_JOB_ID
-FLD_REFDATA_NERSC_DL_JOB_ID = "nersc_download_job_id"
+FLD_REFDATA_NERSC_DL_TASK_ID = "nersc_download_task_id"  # deprecated, see FLD_COMMON_NERSC_DL_JOB_ID
+FLD_AI_MODEL_SOURCE = "source"
+FLD_AI_MODEL_MODEL = "model"
+FLD_AI_MODEL_VERSION = "version"
 # Fields that are shared between multiple models for consistency
-# Currently refdata, jobs, and subjobs
+# Currently refdata, jobs, ai models, and subjobs
 FLD_COMMON_ID = "id"
 FLD_COMMON_STATE = "state"
+FLD_COMMON_STATUSES = "statuses"
+FLD_COMMON_CLUSTER = "cluster"
+FLD_COMMON_NERSC_DL_JOB_ID = "nersc_download_job_id"
 FLD_COMMON_TRANS_TIMES = "transition_times"
 FLD_COMMON_TRANS_HISTORY = "trans_history"
 FLD_COMMON_CPU_HOURS = "cpu_hours"
@@ -111,6 +114,9 @@ PATH_REGEX = r"^/?(?:[\w.-]+/)*[\w.-]+/?$"
 ABSOLUTE_PATH_REGEX = r"^/(?:[\w.-]+/)*[\w.-]+/?$"
 PATH_REGEX_COMPILED = re.compile(PATH_REGEX)
 
+DEFAULT_AI_MODEL_MOUNT_POINT = "/ai_models"
+""" The mount point used for the AI model store when no mount point is otherwise specified. """
+
 
 def _validate_bucket_name(bucket: str, index: int = None) -> str:
     try:
@@ -137,26 +143,51 @@ def _err_on_control_chars(s: str, allowed_chars: list[str] = None):
     return s
 
 
+class AIModelSource(str, Enum):
+    """
+    The source from which an AI model's bytes are fetched.
+    """
+    HUGGINGFACE = "huggingface"
+
+
+def split_ai_model_ref(model_ref: str) -> tuple[str, str]:
+    """
+    Split a combined model@ref AI model reference, e.g. `org/name@main`, into its model and
+    ref parts. ref is split off at the last '@' in the string, since model may itself contain
+    '@' (unlikely for HuggingFace repo IDs, but not disallowed) while ref, a git branch/tag/hash,
+    never does.
+    """
+    model, sep, ref = model_ref.rpartition("@")
+    if not sep or not model or not ref:
+        raise ValueError(f"Invalid AI model reference '{model_ref}'; expected the form model@ref")
+    return model, ref
+
+
 # Note: doc strings on the individual enums don't show up in OpenAPI docs.
 class ParameterType(str, Enum):
     """
     The type of a parameter if not a string literal.
-    
+
     input_files will cause the list of input files for the container to be inserted
     into the entrypoint command line or an environment variable.
-    
+
     manifest_file will cause the list of input files for the container to be placed in a
     manifest file and will insert the file location into the entrypoint command line
     or an environment variable.
-    
+
     container_number will insert the integer number of the container into the
     entrypoint command line or an environment variable. This can be used so prevent file path
     collisions if multiple containers write to the same file paths.
+
+    ai_model will insert the filesystem path of a staged AI model snapshot into the
+    entrypoint command line or an environment variable.
+    This is an experimental API and is subject to change without notice.
     """
 
     INPUT_FILES = "input_files"
     MANIFEST_FILE = "manifest_file"
     CONTAINTER_NUMBER = "container_number"
+    AI_MODEL = "ai_model"
 
 
 class InputFilesFormat(str, Enum):
@@ -222,11 +253,12 @@ class Parameter(BaseModel):
     Represents a special parameter passed to a container.
     
     Can represent a set of input file names formatted in various ways, a manifest file
-    containing file paths or data IDs, or a container number.
-    
-    input_files_format is required when the type is input_files, but ignored otherwise.  
-    manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
-    manifest_file_header is optional and only taken into account when the type is manifest_file.  
+    containing file paths or data IDs, a container number, or a reference to an AI model.
+
+    input_files_format is required when the type is input_files, but ignored otherwise.
+    manifest_file_format is required when the type is manifest_file, but ignored otherwise.
+    manifest_file_header is optional and only taken into account when the type is manifest_file.
+    ai_model_source and ai_model are required when the type is ai_model, but ignored otherwise.
     """
     # The Parameter and ParameterWithFlag pydoc is almost identical, be sure to edit in sync
     model_config = ConfigDict(extra='forbid')
@@ -252,7 +284,22 @@ class Parameter(BaseModel):
         examples=["_output"],
         description="A string that will be appended to the container number."
     )] = None
-    
+    ai_model_source: Annotated[AIModelSource | None, Field(
+        examples=[AIModelSource.HUGGINGFACE.value],
+        description="The source of the AI model. Required if the type is ai_model, "
+            + "ignored otherwise. "
+            + "This is an experimental API and is subject to change without notice."
+    )] = None
+    ai_model: Annotated[str | None, Field(
+        examples=["org/name@main"],
+        description="A reference to an AI model in the form model@ref, where ref is either "
+            + "a tag registered for the model or a literal resolved version. "
+            + "Required if the type is ai_model, ignored otherwise. "
+            + "This is an experimental API and is subject to change without notice.",
+        min_length=1,
+        max_length=1000,
+    )] = None
+
     def get_flag(self):
         """
         Get any command line flag associated with this parameter.
@@ -279,6 +326,12 @@ class Parameter(BaseModel):
                 return self
             case ParameterType.CONTAINTER_NUMBER:
                 return self
+            case ParameterType.AI_MODEL:
+                if not self.ai_model_source or not self.ai_model:
+                    raise ValueError("The ai_model_source and ai_model fields are required for "
+                                     + f"{ParameterType.AI_MODEL.value} parameter types")
+                split_ai_model_ref(self.ai_model)  # raises ValueError on a malformed reference
+                return self
             case _:
                 # Impossible to test but here for safety if new types are added
                 raise ValueError(f"Unknown parameter type: {self.type}")
@@ -291,11 +344,12 @@ class ParameterWithFlag(Parameter):
     preceding flag argument.
     
     Can represent a set of input file names formatted in various ways, a manifest file
-    containing file paths or data IDs, or a container number.
-    
-    input_files_format is required when the type is input_files, but ignored otherwise.  
-    manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
-    manifest_file_header is optional and only taken into account when the type is manifest_file.  
+    containing file paths or data IDs, a container number, or a reference to an AI model.
+
+    input_files_format is required when the type is input_files, but ignored otherwise.
+    manifest_file_format is required when the type is manifest_file, but ignored otherwise.
+    manifest_file_header is optional and only taken into account when the type is manifest_file.
+    ai_model_source and ai_model are required when the type is ai_model, but ignored otherwise.
     """
     # The Parameter and ParameterWithFlag pydoc is almost identical, be sure to edit in sync
     model_config = ConfigDict(extra='forbid')
@@ -373,13 +427,25 @@ class Parameters(BaseModel):
             + "by use of a container number parameter when specifying the output directory "
             + "in the arguments or environment."
     )] = False
+    staged_data_mount_point: Annotated[str | None, Field(
+        examples=["/reference_data"],
+        description="Where reference data files or the AI model store should be placed in "
+            + "the container. Must start from the container root and include at least one "
+            + "directory when resolved. If a default is provided by the image, this setting "
+            + "overrides it. Required if the job image requires reference data and a default "
+            + "mount point isn't specified for the image. Not required if the job requests "
+            + "AI models, since the AI model store's mount point defaults to '/ai_models' if "
+            + "no mount point is otherwise specified - there is no equivalent default for "
+            + "reference data.",
+        min_length=1,
+        max_length=1024,
+        pattern=ABSOLUTE_PATH_REGEX,
+    )] = None
     refdata_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
-        description="Where reference data files should be pleased in the container. "
-            + "Must start from the container root and include at least one directory "
-            + "when resolved. Required if the job image requires reference data and a default "
-            + "reference data mount point isn't specified for the image. If a default is "
-            + "provided, this setting overrides it.",
+        deprecated="Replaced by staged_data_mount_point.",
+        description="Where reference data files should be placed in the container. "
+            + "Deprecated - see staged_data_mount_point.",
         min_length=1,
         max_length=1024,
         pattern=ABSOLUTE_PATH_REGEX,
@@ -413,12 +479,32 @@ class Parameters(BaseModel):
         description="A dictionary of environment variables to be inserted into the container. "
             + "String values are treated as literals."
     )] = None
-    
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_refdata_mount_point(cls, v):
+        if (
+            isinstance(v, dict)
+            and v.get("refdata_mount_point")
+            and not v.get("staged_data_mount_point")
+        ):
+            v = dict(v) # don't mutate caller's copy
+            v["staged_data_mount_point"] = v["refdata_mount_point"]
+        return v
+
     @model_validator(mode="after")
     def _check_parameters(self) -> Self:
         self.get_file_parameter()
+        self.refdata_mount_point = self.staged_data_mount_point
         return self
-    
+
+    def null_deprecated_fields(self) -> Self:
+        """
+        Return a copy of this instance with deprecated fields set to None, suitable for
+        persistence without redundantly storing data available in the fields that replaced them.
+        """
+        return self.model_copy(update={"refdata_mount_point": None})
+
     def get_file_parameter(self) -> Parameter | None:
         """
         If a file specification parameter is present in the arguments, get it.
@@ -442,7 +528,7 @@ class Parameters(BaseModel):
             self, param: str | Parameter, p: str | Parameter, loc: str = None, no_space=False
     ):
         if isinstance(p, Parameter):
-            if p.type is ParameterType.CONTAINTER_NUMBER:
+            if p.type in (ParameterType.CONTAINTER_NUMBER, ParameterType.AI_MODEL):
                 return param
             if loc and p.type is ParameterType.INPUT_FILES:
                 if p.input_files_format is InputFilesFormat.REPEAT_PARAMETER:
@@ -464,6 +550,45 @@ class Parameters(BaseModel):
                     + "with file input is allowed per parameter set")
             return p
         return param
+
+    def get_ai_model_parameters(self) -> list[Parameter]:
+        """
+        Get every ai_model type Parameter present in the arguments or environment, if any.
+        Unlike get_file_parameter, any number of these may be present.
+        """
+        # tried methodtools.lru_cache here but Pydantic complained
+        if hasattr(self, "_ai_model_params"):  # memoize
+            return self._ai_model_params
+        params = []
+        for p in (self.args or []):
+            if isinstance(p, Parameter) and p.type is ParameterType.AI_MODEL:
+                params.append(p)
+        for p in (self.environment or {}).values():
+            if isinstance(p, Parameter) and p.type is ParameterType.AI_MODEL:
+                params.append(p)
+        self._ai_model_params = params
+        return params
+
+
+def resolve_staged_data_mount_point(
+    params: Parameters, default_mount_point: str | None
+) -> str | None:
+    """
+    Resolve the effective in-container mount point for reference data or the AI model store.
+
+    params - the job's parameters.
+    default_mount_point - the image's default mount point, if any.
+
+    If no mount point is specified in either params or default_mount_point, but params
+    requests at least one AI model, /ai_models is used - since every
+    requested model's path is delivered to the container via its own Parameter, the exact
+    location of the AI model store mount doesn't matter to the user the way a refdata mount
+    point does. There is no equivalent default for reference data.
+    """
+    mount = params.staged_data_mount_point or default_mount_point
+    if not mount and params.get_ai_model_parameters():
+        return DEFAULT_AI_MODEL_MOUNT_POINT
+    return mount
 
 
 class S3File(BaseModel):
@@ -711,6 +836,14 @@ class JobInput(JobInputPreview):
             )
         return self
 
+    def null_deprecated_fields(self) -> Self:
+        """
+        Return a copy of this instance with deprecated fields, including those in nested
+        structures, set to None, suitable for persistence without redundantly storing data
+        available in the fields that replaced them.
+        """
+        return self.model_copy(update={"params": self.params.null_deprecated_fields()})
+
     def get_files_per_container(self) -> list[list[S3FileWithDataID]]:
         """
         Returns the input files split up by container.
@@ -724,6 +857,13 @@ class JobInput(JobInputPreview):
             files.append(infiles[:fcount])
             infiles = infiles[fcount:]
         return files
+
+    def uses_ai_model_store(self) -> bool:
+        """
+        Return True if this job input requests at least one AI model, and therefore requires
+        the AI model store to be mounted.
+        """
+        return bool(self.params.get_ai_model_parameters())
 
 
 class RegistrationInfo(BaseModel):
@@ -770,14 +910,48 @@ class JobImage(RegistrationInfo):
             + "this reference data to run, and it will be mounted into the image container at "
             + "the refdata mount point."
     )] = None
+    default_staged_data_mount_point: Annotated[str | None, Field(
+        examples=["/reference_data"],
+        description="The default mount point for the image's reference data, or for the AI "
+            + "model store in a job that requests AI models, in the container. Overridden by "
+            + "the mount point in a job submission if provided there. If a default mount "
+            + "point is provided, then providing a mount point in the job submission is "
+            + "optional. Must be an absolute path. Note that a job requesting AI models "
+            + "that has no mount point specified here or in the job submission still gets a "
+            + "mount point, defaulting to '/ai_models' - there is no equivalent default for "
+            + "reference data.",
+    )] = None
     default_refdata_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
-        description="The default mount point for the image refdata in the container. Overridden "
-            + "by the refdata mount point in a job submission if provided there. If a default "
-            + "mount point is provided, then providing a mount point in the job submission "
-            + "is optional. Must be an absolute path.",
+        deprecated="Replaced by default_staged_data_mount_point.",
+        description="The default mount point for the image refdata in the container. "
+            + "Deprecated - see default_staged_data_mount_point.",
     )] = None
-    
+
+    @model_validator(mode="before")
+    @classmethod
+    def _promote_default_refdata_mount_point(cls, v):
+        if (
+            isinstance(v, dict)
+            and v.get("default_refdata_mount_point")
+            and not v.get("default_staged_data_mount_point")
+        ):
+            v = dict(v)  # don't mutate caller's copy
+            v["default_staged_data_mount_point"] = v["default_refdata_mount_point"]
+        return v
+
+    @model_validator(mode="after")
+    def _sync_default_refdata_mount_point(self) -> Self:
+        self.default_refdata_mount_point = self.default_staged_data_mount_point
+        return self
+
+    def null_deprecated_fields(self) -> Self:
+        """
+        Return a copy of this instance with deprecated fields set to None, suitable for
+        persistence without redundantly storing data available in the fields that replaced them.
+        """
+        return self.model_copy(update={"default_refdata_mount_point": None})
+
     @property
     def name_with_digest(self):
         """
@@ -915,11 +1089,14 @@ class JobState(str, Enum):
 
 
 class EntityType(Enum):
-    """ The kind of entity - job, pipeline job, or reference data - being operated on. """
+    """
+    The kind of entity - job, pipeline job, reference data, or AI model - being operated on.
+    """
 
     JOB = "job"
     PIPELINE_JOB = "pipeline_job"
     REFDATA = "refdata"
+    AI_MODEL = "ai_model"
 
 
 class ExternalRunnerState(str, Enum):
@@ -1076,11 +1253,10 @@ class JobStatus(_JobBase):
     # This is an outgoing data structure only so we don't add validators
     user: Annotated[str, Field(examples=["myuserid"], description="The user that ran the job.")]
     admin_meta: Annotated[dict[str, str | int | float], Field(
-        default_factory=dict,
         examples=[{"name": "Getrude", "children": 31619}],
         description="Metadata for the job set by service administrators. This metadata is mutable "
             + "and arbitrary from the point of view of the service."
-    )]
+    )] = Field(default_factory=dict)
 
 
 class InternalJobCommonPreviewFields(BaseModel):
@@ -1139,12 +1315,15 @@ class JobPreview(JobStatus, InternalJobCommonPreviewFields):
         description="A location in S3 where the logfiles for the job containers can be viewed."
     )] = None
     
-    def get_refdata_mount_point(self) -> str | None:
+    def get_staged_data_mount_point(self) -> str | None:
         """
-        Get the in-container mount point for reference data or None if there is no reference
-        data for this job.
+        Get the in-container mount point for reference data or the AI model store, or None
+        if there is no mount point for this job. See resolve_staged_data_mount_point for the
+        AI model store default mount point behavior.
         """
-        return self.job_input.params.refdata_mount_point or self.image.default_refdata_mount_point
+        return resolve_staged_data_mount_point(
+            self.job_input.params, self.image.default_staged_data_mount_point
+        )
 
     def get_entity_type(self) -> EntityType:
         """ Get the entity type for this job. """
@@ -1182,6 +1361,17 @@ class Job(JobPreview, InternalJobNonPreviewFields):
     # This is an outgoing data structure only so we don't add validators
     job_input: JobInput
 
+    def null_deprecated_fields(self) -> Self:
+        """
+        Return a copy of this job with deprecated fields, including those in nested
+        structures, set to None, suitable for persistence without redundantly storing data
+        available in the fields that replaced them.
+        """
+        return self.model_copy(update={
+            "job_input": self.job_input.null_deprecated_fields(),
+            "image": self.image.null_deprecated_fields(),
+        })
+
 
 class NERSCDetails(BaseModel):
     """
@@ -1193,39 +1383,39 @@ class NERSCDetails(BaseModel):
         deprecated="Replaced by download_job_id. Only present on records created before NERSC "
             + "downloads were migrated from SFAPI async tasks to Slurm jobs.",
         description="IDs for SFAPI download tasks. Deprecated - see download_job_id."
-    )]
+    )] = None
     download_job_id: Annotated[list[str] | None, Field(
         default=None,
         description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to download files from "
             + "an S3 instance to NERSC. Multiple job IDs indicate job retries after failures. "
             + "Missing if the record predates the migration to Slurm jobs, see download_task_id."
-    )]
+    )] = None
     upload_task_id: Annotated[list[str] | None, Field(
         default=None,
         deprecated="Replaced by upload_job_id. Only present on records created before NERSC "
             + "uploads were migrated from SFAPI async tasks to Slurm jobs.",
         description="IDs for SFAPI upload tasks. Deprecated - see upload_job_id."
-    )]
+    )] = None
     upload_job_id: Annotated[list[str] | None, Field(
         default=None,
         description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to upload files to an S3 "
             + "instance from NERSC. Multiple job IDs indicate job retries after failures. "
             + "Missing if an upload job has not yet been submitted to NERSC, or if the record "
             + "predates the migration to Slurm jobs, see upload_task_id."
-    )]
+    )] = None
     log_upload_task_id: Annotated[list[str] | None, Field(
         default=None,
         deprecated="Replaced by log_upload_job_id. Only present on records created before NERSC "
             + "log uploads were migrated from SFAPI async tasks to Slurm jobs.",
         description="IDs for SFAPI log upload tasks. Deprecated - see log_upload_job_id."
-    )]
+    )] = None
     log_upload_job_id: Annotated[list[str] | None, Field(
         default=None,
         description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to upload log files to "
             + "an S3 instance from NERSC. Multiple job IDs indicate job retries after failures. "
             + "Missing if a log upload job has not yet been submitted to NERSC, or if the record "
             + "predates the migration to Slurm jobs, see log_upload_task_id."
-    )]
+    )] = None
 
 
 class JAWSDetails(BaseModel):
@@ -1345,7 +1535,16 @@ class AdminJobDetails(InternalAdminJobFields, Job):
 
 class ContainerUpdate(BaseModel):
     """ An update to the state of a subjob / container. """
-    
+
+    # TODO CODE this time is set by the executor, so any code comparing it to a CDM Task
+    #           Service-side timestamp needs to account for potential clock skew between the
+    #           executor host and the service. Probably not a big deal on modern, NTP-synced
+    #           infra, but if it ever needs correcting: the root route already returns
+    #           server_time (routes.Root), so the executor could calibrate an offset against it
+    #           (round-trip-corrected, e.g. server_time ~= local_send_time + RTT/2) now. Better
+    #           long term would be having the heartbeat response (currently a bare 204) also
+    #           return server_time, so the executor can recalibrate on every heartbeat it's
+    #           already sending to track drift, instead of needing a separate call to root.
     time: Annotated[datetime.datetime, Field(
         examples=[utcdatetime()],
         description="The time the state transition occurred."
@@ -1385,7 +1584,7 @@ class ContainerUpdate(BaseModel):
     )] = None
 
 
-class ReferenceDataState(str, Enum):
+class StagingState(str, Enum):
     """
     The state of a reference data staging process.
     """
@@ -1404,33 +1603,33 @@ class ReferenceDataState(str, Enum):
         return self in self.terminal_states()
 
 
-class RefDataStateTransition(BaseModel):
+class StagingStateTransition(BaseModel):
     """
     Denotes the new state and the entry time when a state change occurs.
     """
     # outgoing only, no validators
-    state: ReferenceDataState
+    state: StagingState
     time: Annotated[datetime.datetime, Field(
         examples=["2024-10-24T22:35:40Z"],
         description="The time at which the new state was entered."
     )]
 
 
-class ReferenceDataStatus(BaseModel):
+class StagingStatus(BaseModel):
     """
     Status of a reference data staging process at a particular remote compute location.
     """
     # This is an outgoing structure only so we don't add validators
     cluster: Annotated[sites.Cluster, Field(examples=[sites.Cluster.PERLMUTTER_JAWS.value])]
-    state: Annotated[ReferenceDataState, Field(
-        examples=[ReferenceDataState.COMPLETE.value],
+    state: Annotated[StagingState, Field(
+        examples=[StagingState.COMPLETE.value],
         description="The state of the reference data staging process."
     )]
-    transition_times: Annotated[list[RefDataStateTransition], Field(
+    transition_times: Annotated[list[StagingStateTransition], Field(
             examples=[[
-                {"state": ReferenceDataState.CREATED.value, "time": "2024-10-24T22:35:40Z"},
+                {"state": StagingState.CREATED.value, "time": "2024-10-24T22:35:40Z"},
                 {
-                    "state": ReferenceDataState.DOWNLOAD_SUBMITTED.value,
+                    "state": StagingState.DOWNLOAD_SUBMITTED.value,
                     "time": "2024-10-24T22:35:41Z"
                 },
             ]],
@@ -1447,7 +1646,7 @@ class ReferenceDataStatus(BaseModel):
         return self.cluster
 
 
-class AdminReferenceDataStatus(ReferenceDataStatus):
+class AdminStagingStatus(StagingStatus):
     """
     Information about reference data status with added details of interest to service
     administrators.
@@ -1462,14 +1661,14 @@ class AdminReferenceDataStatus(ReferenceDataStatus):
         deprecated="Replaced by nersc_download_job_id. Only present on records created before "
             + "NERSC refdata downloads were migrated from SFAPI async tasks to Slurm jobs.",
         description="IDs for SFAPI download tasks. Deprecated - see nersc_download_job_id."
-    )]
+    )] = None
     nersc_download_job_id: Annotated[list[str] | None, Field(
         default=None,
         description="IDs for NERSC Slurm jobs run via the NERSC SFAPI to download files from "
             + "an S3 instance to NERSC. Multiple job IDs indicate job retries after failures. "
             + "Only present if the refdata is being downloaded to NERSC via a Slurm job, i.e. "
             + "the record postdates the migration to Slurm jobs, see nersc_download_task_id."
-    )]
+    )] = None
     admin_error: Annotated[str | None, Field(
         examples=["The back fell off"],
         description="A description of the error that occurred oriented towards service "
@@ -1489,7 +1688,7 @@ class _ReferenceDataRoot(S3File, RegistrationInfo):
             + "files are supported."
     )] = False
     
-    def get_status_for_cluster(self, cluster: sites.Cluster) -> ReferenceDataStatus:
+    def get_status_for_cluster(self, cluster: sites.Cluster) -> StagingStatus:
         """
         Get the status of a cluster for this reference data.
         """
@@ -1517,7 +1716,7 @@ class ReferenceData(_ReferenceDataRoot):
     # This is an outgoing structure only so we don't add validators
     # TODO FUTURESITES will need to be able to stage to sites that don't exist currently
     #                  ... if that ever happens
-    statuses: Annotated[list[ReferenceDataStatus], Field(
+    statuses: Annotated[list[StagingStatus], Field(
         description="The states of reference data staging processes at remote compute locations.",
     )]
 
@@ -1529,17 +1728,17 @@ class AdminReferenceData(_ReferenceDataRoot):
     # This is an outgoing structure only so we don't add validators
     # TODO FUTURESITES will need to be able to stage to sites that don't exist currently
     #                  ... if that ever happens
-    statuses: Annotated[list[AdminReferenceDataStatus], Field(
+    statuses: Annotated[list[AdminStagingStatus], Field(
         description="The states of reference data staging processes at remote compute locations.",
     )]
 
 
-class RefdataUpdate(BaseModel):
-    """ An update to the state of a reference data staging process. """
-    
+class StagingStateUpdate(BaseModel):
+    """ An update to the state of a data staging process. """
+
     admin_error: Annotated[str | None, Field(
         examples=["The middle fell off"],
-        description="The error that occurred when staging refdata, suitable for displaying to a "
+        description="The error that occurred during staging, suitable for displaying to a "
             + "service admin.\n"
             + "Ignored if the new state isn't the error state."
     )] = None
@@ -1548,5 +1747,95 @@ class RefdataUpdate(BaseModel):
     )] = None
 
 
+class AIModelKey(NamedTuple):
+    """ Uniquely identifies a registered AI model snapshot. """
+    source: AIModelSource
+    model: str
+    version: str
+
+    def __str__(self) -> str:
+        return f"{self.source.value}/{self.model}/{self.version}"
+
+
+class _AIModelRoot(RegistrationInfo):
+    # This is an outgoing structure only so we don't add validators
+    source: Annotated[AIModelSource, Field(
+        examples=[AIModelSource.HUGGINGFACE.value],
+        description="The source from which the AI model's bytes are fetched. The meaning of "
+            + "the model and version fields depends on this value."
+    )]
+    model: Annotated[str, Field(
+        examples=["org/name"],
+        description="An identifier for the AI model, meaningful only in combination with "
+            + "source. For source 'huggingface', this is the org/name repo ID."
+    )]
+    version: Annotated[str, Field(
+        examples=["abc123def456"],
+        description="An immutable identifier for a specific, resolved snapshot of the AI "
+            + "model, meaningful only in combination with source. For source 'huggingface', "
+            + "this is a resolved git commit hash."
+    )]
+    size_bytes: Annotated[int, Field(
+        examples=[123456789],
+        description="The total size, in bytes, of the AI model snapshot's files, as reported "
+            + "by the source at registration time."
+    )]
+    tags: Annotated[list[str] | None, Field(
+        examples=[["main", "latest"]],
+        description="Mutable tags currently pointing at this AI model snapshot."
+    )] = None
+
+    @property
+    def key(self) -> AIModelKey:
+        """ Get the natural key for this AI model. """
+        return AIModelKey(self.source, self.model, self.version)
+
+    def get_status_for_cluster(self, cluster: sites.Cluster) -> StagingStatus:
+        """
+        Get the status of a cluster for this AI model.
+        """
+        _not_falsy(cluster, "cluster")
+        for s in self.statuses:
+            if s.cluster == cluster:
+                return s
+        raise NoAIModelClusterStatusError(
+            f"No status for cluster {cluster.value} for AI model {self.key}"
+        )
+
+    def get_entity_type(self) -> EntityType:
+        """ Get the entity type for this AI model. """
+        return EntityType.AI_MODEL
+
+    def is_pipeline(self) -> bool:
+        """ Return True if this entity is a pipeline job. Always False for AI models. """
+        return False
+
+
+class AIModel(_AIModelRoot):
+    """
+    Information about a registered AI model snapshot that is, or will be, available for
+    containers.
+    """
+    # This is an outgoing structure only so we don't add validators
+    statuses: Annotated[list[StagingStatus], Field(
+        description="The states of AI model staging processes at remote compute locations.",
+    )]
+
+
+class AdminAIModel(_AIModelRoot):
+    """
+    Information about a registered AI model snapshot that is, or will be, available for
+    containers, with added details of interest to service administrators.
+    """
+    # This is an outgoing structure only so we don't add validators
+    statuses: Annotated[list[AdminStagingStatus], Field(
+        description="The states of AI model staging processes at remote compute locations.",
+    )]
+
+
 class NoRefdataClusterStatusError(Exception):
     """ Raised when reference data has no status entry for a requested cluster. """
+
+
+class NoAIModelClusterStatusError(Exception):
+    """ Raised when an AI model has no status entry for a requested cluster. """

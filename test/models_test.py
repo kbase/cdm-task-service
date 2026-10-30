@@ -1,10 +1,18 @@
 # TODO TEST add  more tests
 
 from pydantic import ValidationError
+import pytest
+import re
 from pytest import raises
 
 from cdmtaskservice import models
 from cdmtaskservice import sites
+
+# These tests deliberately read deprecated fields (refdata_mount_point /
+# default_refdata_mount_point) to confirm their backwards compatible behavior, so the
+# resulting DeprecationWarning is expected rather than a signal of accidental deprecated
+# field use elsewhere in the code.
+_IGNORE_MOUNT_POINT_DEPRECATION = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
 def test_files_per_container():
@@ -122,15 +130,470 @@ def test_job_state_is_active():
 
 
 def test_refdata_state_terminal_states():
-    assert models.ReferenceDataState.terminal_states() == {
-        models.ReferenceDataState.ERROR, models.ReferenceDataState.COMPLETE
+    assert models.StagingState.terminal_states() == {
+        models.StagingState.ERROR, models.StagingState.COMPLETE
     }
 
 
 def test_refdata_state_is_terminal():
-    expected = {s: False for s in list(models.ReferenceDataState)}
-    expected[models.ReferenceDataState.COMPLETE] = True
-    expected[models.ReferenceDataState.ERROR] = True
-    
+    expected = {s: False for s in list(models.StagingState)}
+    expected[models.StagingState.COMPLETE] = True
+    expected[models.StagingState.ERROR] = True
+
     for s, term in expected.items():
         assert s.is_terminal() is term
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_new_field():
+    p = models.Parameters(staged_data_mount_point="/foo")
+    assert p.staged_data_mount_point == "/foo"
+    assert p.refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_deprecated_field_promoted():
+    p = models.Parameters(refdata_mount_point="/foo")
+    assert p.staged_data_mount_point == "/foo"
+    assert p.refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_new_field_takes_precedence():
+    p = models.Parameters(staged_data_mount_point="/new", refdata_mount_point="/old")
+    assert p.staged_data_mount_point == "/new"
+    assert p.refdata_mount_point == "/new"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_unset():
+    p = models.Parameters()
+    assert p.staged_data_mount_point is None
+    assert p.refdata_mount_point is None
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_null_deprecated_fields():
+    p = models.Parameters(staged_data_mount_point="/foo")
+    p2 = p.null_deprecated_fields()
+    assert p2.staged_data_mount_point == "/foo"
+    assert p2.refdata_mount_point is None
+    # the original instance is unmodified
+    assert p.staged_data_mount_point == "/foo"
+    assert p.refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_parameters_staged_data_mount_point_promotion_handles_non_dict_input():
+    # The before-validator's isinstance(v, dict) guard means non-dict input (an existing
+    # instance, or invalid input like a bare string) is passed through unchanged rather than
+    # crashing with an unrelated AttributeError from calling .get() on it.
+    p = models.Parameters(staged_data_mount_point="/foo")
+    p2 = models.Parameters.model_validate(p)
+    assert p2.staged_data_mount_point == "/foo"
+    assert p2.refdata_mount_point == "/foo"
+
+    with raises(ValidationError, match="Input should be a valid dictionary or instance"):
+        models.Parameters.model_validate("not a dict")
+
+
+_JOB_IMAGE_REQUIRED_FIELDS = {
+    "registered_by": "user",
+    "registered_on": "2024-10-24T22:35:40Z",
+    "name": "n",
+    "digest": "sha256:" + "a" * 64,
+    "entrypoint": ["run"],
+}
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_new_field():
+    ji = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_staged_data_mount_point": "/foo"}
+    )
+    assert ji.default_staged_data_mount_point == "/foo"
+    assert ji.default_refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_deprecated_field_promoted():
+    ji = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_refdata_mount_point": "/foo"}
+    )
+    assert ji.default_staged_data_mount_point == "/foo"
+    assert ji.default_refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_new_field_takes_precedence():
+    ji = models.JobImage.model_validate({
+        **_JOB_IMAGE_REQUIRED_FIELDS,
+        "default_staged_data_mount_point": "/new",
+        "default_refdata_mount_point": "/old",
+    })
+    assert ji.default_staged_data_mount_point == "/new"
+    assert ji.default_refdata_mount_point == "/new"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_unset():
+    ji = models.JobImage.model_validate(_JOB_IMAGE_REQUIRED_FIELDS)
+    assert ji.default_staged_data_mount_point is None
+    assert ji.default_refdata_mount_point is None
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_null_deprecated_fields():
+    ji = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_staged_data_mount_point": "/foo"}
+    )
+    ji2 = ji.null_deprecated_fields()
+    assert ji2.default_staged_data_mount_point == "/foo"
+    assert ji2.default_refdata_mount_point is None
+    # the original instance is unmodified
+    assert ji.default_staged_data_mount_point == "/foo"
+    assert ji.default_refdata_mount_point == "/foo"
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_image_default_staged_data_mount_point_promotion_handles_non_dict_input():
+    # See test_parameters_staged_data_mount_point_promotion_handles_non_dict_input for why
+    # this matters.
+    ji = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_staged_data_mount_point": "/foo"}
+    )
+    ji2 = models.JobImage.model_validate(ji)
+    assert ji2.default_staged_data_mount_point == "/foo"
+    assert ji2.default_refdata_mount_point == "/foo"
+
+    with raises(ValidationError, match="Input should be a valid dictionary or instance"):
+        models.JobImage.model_validate("not a dict")
+
+
+def _ai_model_param(ref: str = "org/name@main") -> models.Parameter:
+    return models.Parameter(
+        type=models.ParameterType.AI_MODEL,
+        ai_model_source=models.AIModelSource.HUGGINGFACE,
+        ai_model=ref,
+    )
+
+
+def test_parameter_ai_model_missing_fields():
+    with raises(
+        ValidationError,
+        match="The ai_model_source and ai_model fields are required for ai_model "
+            + "parameter types",
+    ):
+        models.Parameter(type=models.ParameterType.AI_MODEL)
+
+    with raises(
+        ValidationError,
+        match="The ai_model_source and ai_model fields are required for ai_model "
+            + "parameter types",
+    ):
+        models.Parameter(
+            type=models.ParameterType.AI_MODEL, ai_model_source=models.AIModelSource.HUGGINGFACE
+        )
+
+    with raises(
+        ValidationError,
+        match="The ai_model_source and ai_model fields are required for ai_model "
+            + "parameter types",
+    ):
+        models.Parameter(type=models.ParameterType.AI_MODEL, ai_model="org/name@main")
+
+
+def test_parameter_ai_model_valid():
+    p = _ai_model_param()
+    assert p.ai_model_source == models.AIModelSource.HUGGINGFACE
+    assert p.ai_model == "org/name@main"
+
+
+@pytest.mark.parametrize("bad_ref", ["org/name", "org/name@", "@main"])
+def test_parameter_ai_model_malformed_ref_rejected(bad_ref):
+    with raises(
+        ValidationError,
+        match=f"Invalid AI model reference '{re.escape(bad_ref)}'; expected the form model@ref",
+    ):
+        _ai_model_param(bad_ref)
+
+
+def test_split_ai_model_ref_valid():
+    assert models.split_ai_model_ref("org/name@main") == ("org/name", "main")
+    # ref is split off at the last '@', since model may itself contain '@'
+    assert models.split_ai_model_ref("org/na@me@main") == ("org/na@me", "main")
+
+
+@pytest.mark.parametrize("bad_ref", ["org/name", "org/name@", "@main", ""])
+def test_split_ai_model_ref_malformed(bad_ref):
+    with raises(
+        ValueError,
+        match=f"Invalid AI model reference '{re.escape(bad_ref)}'; expected the form model@ref",
+    ):
+        models.split_ai_model_ref(bad_ref)
+
+
+def test_parameters_get_ai_model_parameters_none():
+    p = models.Parameters()
+    assert p.get_ai_model_parameters() == []
+
+
+def test_parameters_get_ai_model_parameters_multiple():
+    am_arg = models.ParameterWithFlag(
+        type=models.ParameterType.AI_MODEL,
+        ai_model_source=models.AIModelSource.HUGGINGFACE,
+        ai_model="org/arg-model@main",
+    )
+    am1 = _ai_model_param("org/cheap@main")
+    am2 = _ai_model_param("org/expensive@v1")
+    cn = models.ParameterWithFlag(type=models.ParameterType.CONTAINTER_NUMBER)
+    p = models.Parameters(
+        args=["run", cn, am_arg],
+        environment={"CHEAP_MODEL": am1, "EXPENSIVE_MODEL": am2},
+    )
+    # collected from both args and environment, args first
+    assert p.get_ai_model_parameters() == [am_arg, am1, am2]
+    # multiple AI_MODEL Parameters don't trip the "at most one file Parameter" check
+    assert p.get_file_parameter() is None
+
+
+def test_parameters_ai_model_and_file_parameter_coexist():
+    am = _ai_model_param()
+    fp = models.Parameter(
+        type=models.ParameterType.MANIFEST_FILE,
+        manifest_file_format=models.ManifestFileFormat.FILES,
+    )
+    p = models.Parameters(environment={"MODEL": am, "MANIFEST": fp})
+    assert p.get_ai_model_parameters() == [am]
+    assert p.get_file_parameter() == fp
+
+
+def test_job_input_uses_ai_model_store_false():
+    ji = models.JobInput(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
+        image="fakeimage",
+        params=models.Parameters(),
+        input_files=["foo/bar"],
+        output_dir="foo/bar",
+    )
+    assert ji.uses_ai_model_store() is False
+
+
+def test_job_input_uses_ai_model_store_true():
+    ji = models.JobInput(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
+        image="fakeimage",
+        params=models.Parameters(environment={"MODEL": _ai_model_param()}),
+        input_files=["foo/bar"],
+        output_dir="foo/bar",
+    )
+    assert ji.uses_ai_model_store() is True
+
+
+# Job.get_staged_data_mount_point() is a thin wrapper around resolve_staged_data_mount_point
+# (job_state.py calls the latter directly, since it doesn't have a Job instance to call the
+# former on yet - see models.py's docstring on resolve_staged_data_mount_point). Every scenario
+# below is run against both entry points via the two getters below, so the two never drift.
+
+
+def _via_resolve_staged_data_mount_point(params, image_default_mount_point):
+    return models.resolve_staged_data_mount_point(params, image_default_mount_point)
+
+
+def _via_job_get_staged_data_mount_point(params, image_default_mount_point):
+    job = models.Job.model_construct(
+        image=models.JobImage.model_construct(
+            default_staged_data_mount_point=image_default_mount_point
+        ),
+        job_input=models.JobInput.model_construct(params=params),
+    )
+    return job.get_staged_data_mount_point()
+
+
+_MOUNT_POINT_GETTERS = [_via_resolve_staged_data_mount_point, _via_job_get_staged_data_mount_point]
+_MOUNT_POINT_GETTER_IDS = ["resolve_staged_data_mount_point", "Job.get_staged_data_mount_point"]
+
+
+@pytest.mark.parametrize("get_mount_point", _MOUNT_POINT_GETTERS, ids=_MOUNT_POINT_GETTER_IDS)
+def test_staged_data_mount_point_explicit_takes_precedence(get_mount_point):
+    params = models.Parameters(
+        staged_data_mount_point="/explicit", environment={"MODEL": _ai_model_param()}
+    )
+    assert get_mount_point(params, "/default") == "/explicit"
+
+
+@pytest.mark.parametrize("get_mount_point", _MOUNT_POINT_GETTERS, ids=_MOUNT_POINT_GETTER_IDS)
+def test_staged_data_mount_point_image_default_used(get_mount_point):
+    # AI models are requested here specifically to prove the image default takes precedence
+    # over DEFAULT_AI_MODEL_MOUNT_POINT's own fallback (below), not just that it's used absent
+    # any AI model request.
+    params = models.Parameters(environment={"MODEL": _ai_model_param()})
+    assert get_mount_point(params, "/default") == "/default"
+
+
+@pytest.mark.parametrize("get_mount_point", _MOUNT_POINT_GETTERS, ids=_MOUNT_POINT_GETTER_IDS)
+def test_staged_data_mount_point_ai_model_default(get_mount_point):
+    params = models.Parameters(environment={"MODEL": _ai_model_param()})
+    assert get_mount_point(params, None) == models.DEFAULT_AI_MODEL_MOUNT_POINT
+
+
+@pytest.mark.parametrize("get_mount_point", _MOUNT_POINT_GETTERS, ids=_MOUNT_POINT_GETTER_IDS)
+def test_staged_data_mount_point_no_ai_models_no_default(get_mount_point):
+    params = models.Parameters()
+    assert get_mount_point(params, None) is None
+
+
+@_IGNORE_MOUNT_POINT_DEPRECATION
+def test_job_null_deprecated_fields():
+    # Job.null_deprecated_fields() delegates to JobInput.null_deprecated_fields() and
+    # JobImage.null_deprecated_fields(); those methods' own promotion/sync behavior is covered
+    # by test_parameters_null_deprecated_fields and test_job_image_null_deprecated_fields, so
+    # here we only need real (validated) nested Parameters/JobImage instances to confirm the
+    # delegation is wired correctly - model_construct would bypass the sync validators that
+    # populate the deprecated fields in the first place.
+    params = models.Parameters(staged_data_mount_point="/params")
+    image = models.JobImage.model_validate(
+        {**_JOB_IMAGE_REQUIRED_FIELDS, "default_staged_data_mount_point": "/image"}
+    )
+    job = models.Job.model_construct(
+        image=image,
+        job_input=models.JobInput.model_construct(params=params),
+    )
+    job2 = job.null_deprecated_fields()
+    assert job2.job_input.params.staged_data_mount_point == "/params"
+    assert job2.job_input.params.refdata_mount_point is None
+    assert job2.image.default_staged_data_mount_point == "/image"
+    assert job2.image.default_refdata_mount_point is None
+    # the original instance is unmodified
+    assert job.job_input.params.refdata_mount_point == "/params"
+    assert job.image.default_refdata_mount_point == "/image"
+
+
+_SAFE_TIME = "2024-10-24T22:35:40Z"
+
+
+def test_ai_model_key_str():
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    assert str(key) == "huggingface/org/name/abc123def456"
+
+
+def test_ai_model_key_property():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert am.key == models.AIModelKey(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456"
+    )
+    adm = models.AdminAIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert adm.key == models.AIModelKey(
+        models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456"
+    )
+
+
+def test_ai_model_entity_type_and_is_pipeline():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert am.get_entity_type() == models.EntityType.AI_MODEL
+    assert am.is_pipeline() is False
+    adm = models.AdminAIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert adm.get_entity_type() == models.EntityType.AI_MODEL
+    assert adm.is_pipeline() is False
+
+
+def test_ai_model_tags_unset_by_default():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+    )
+    assert am.tags is None
+    assert "tags" not in am.model_dump(exclude_none=True)
+
+
+def test_ai_model_tags_populated():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[],
+        tags=["main", "latest"],
+    )
+    assert am.tags == ["main", "latest"]
+
+
+def _ai_model_status(cluster: sites.Cluster, state: models.StagingState) -> models.StagingStatus:
+    return models.StagingStatus(
+        cluster=cluster,
+        state=state,
+        transition_times=[models.StagingStateTransition(state=state, time=_SAFE_TIME)],
+    )
+
+
+def test_ai_model_get_status_for_cluster():
+    perl_status = _ai_model_status(sites.Cluster.PERLMUTTER_JAWS, models.StagingState.CREATED)
+    kbase_status = _ai_model_status(sites.Cluster.KBASE, models.StagingState.COMPLETE)
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[perl_status, kbase_status],
+    )
+    assert am.get_status_for_cluster(sites.Cluster.PERLMUTTER_JAWS) == perl_status
+    assert am.get_status_for_cluster(sites.Cluster.KBASE) == kbase_status
+
+
+def test_ai_model_get_status_for_cluster_fail_no_status():
+    am = models.AIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_SAFE_TIME,
+        statuses=[_ai_model_status(sites.Cluster.KBASE, models.StagingState.COMPLETE)],
+    )
+    with raises(models.NoAIModelClusterStatusError, match=(
+        "^No status for cluster perlmutter-jaws for AI model "
+        + re.escape("huggingface/org/name/abc123def456")
+        + "$"
+    )):
+        am.get_status_for_cluster(sites.Cluster.PERLMUTTER_JAWS)

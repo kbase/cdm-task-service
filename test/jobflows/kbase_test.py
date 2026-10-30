@@ -9,7 +9,12 @@ from cdmtaskservice.condor.client import CondorClient, ProcDetails, ProcState, P
 from cdmtaskservice import sites
 from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.exceptions import (
-    InvalidJobStateError, JobRecoveryError, UnsupportedOperationError
+    InvalidAIModelStateError,
+    InvalidJobStateError,
+    InvalidReferenceDataStateError,
+    JobRecoveryError,
+    MismatchedJobStateError,
+    UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.kbase import (
     KBaseRunner, KBaseSubjobMonitor, ExternalRunnerTimeoutError
@@ -97,6 +102,44 @@ def _recovery_job(state=models.JobState.ERROR, cluster_ids=_UNSET, num_container
 
 
 _JOB = _job()
+
+
+def _refdata(state=models.StagingState.CREATED):
+    return models.ReferenceData(
+        id="refdata-id",
+        file="bucket/refdata.tgz",
+        unpack=False,
+        registered_by="someuser",
+        registered_on=_T,
+        statuses=[models.StagingStatus(
+            cluster=sites.Cluster.KBASE,
+            state=state,
+            transition_times=[models.StagingStateTransition(
+                state=state,
+                time=_T,
+            )],
+        )],
+    )
+
+
+def _ai_model(state=models.StagingState.CREATED):
+    return models.AdminAIModel(
+        source=models.AIModelSource.HUGGINGFACE,
+        model="org/name",
+        version="abc123def456",
+        size_bytes=123456,
+        registered_by="someuser",
+        registered_on=_T,
+        statuses=[models.AdminStagingStatus(
+            cluster=sites.Cluster.KBASE,
+            state=state,
+            transition_times=[models.StagingStateTransition(
+                state=state,
+                time=_T,
+            )],
+            cleaned=False,
+        )],
+    )
 
 
 def _update(admin_error=None, exit_code=None, outputs=None, traceback=None,
@@ -825,17 +868,18 @@ async def test_update_container_state_parent_update_fails():
     updates.handle_exception.assert_called_once_with(exc, "jid", "updating state for")
 
 
-async def test_update_container_state_recovering_ignored_nonterminal():
-    """Parent job is in RECOVERING — InvalidJobStateError from parent update is swallowed."""
+async def test_update_container_state_recovering_ignored_nonterminal(caplog):
+    """Parent job is in RECOVERING — MismatchedJobStateError from parent update is swallowed."""
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.JOB_SUBMITTING, _T
     )
-    updates.update_job_state.side_effect = InvalidJobStateError(
+    updates.update_job_state.side_effect = MismatchedJobStateError(
         "job is recovering", actual_state=models.JobState.RECOVERING
     )
 
-    await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
 
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0, update_state.submitting_job(), _T,
@@ -846,23 +890,30 @@ async def test_update_container_state_recovering_ignored_nonterminal():
         "jid", update_state.submitting_job(), update_time=_T
     )
     updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert (
+        "Parent job no longer active (recovering), ignoring update to job_submitting "
+        "from subjob 0" in rec.message
+    )
 
 
-async def test_update_container_state_recovering_ignored_terminal():
+async def test_update_container_state_recovering_ignored_terminal(caplog):
     """Parent job is in RECOVERING during terminal update — swallowed in coroutine."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
     mongo.get_exit_codes_for_subjobs.return_value = [1, 1]
     condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
-    updates.update_job_state.side_effect = InvalidJobStateError(
+    updates.update_job_state.side_effect = MismatchedJobStateError(
         "job is recovering", actual_state=models.JobState.RECOVERING
     )
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
-        await runner.update_container_state(
-            _JOB, 0, models.JobState.ERROR,
-            _update(admin_error="container failed", traceback="Traceback: container failed"),
-        )
+        with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.ERROR,
+                _update(admin_error="container failed", traceback="Traceback: container failed"),
+            )
 
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
@@ -889,15 +940,82 @@ async def test_update_container_state_recovering_ignored_terminal():
         last_update_time=_T,
     )
     updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert (
+        "Parent job no longer active (recovering), ignoring update to error from subjob 0"
+        in rec.message
+    )
 
 
-async def test_update_container_state_invalid_state_error_nonterminal():
-    """InvalidJobStateError with non-RECOVERING actual_state is forwarded to handle_exception."""
+async def test_update_container_state_terminal_non_active_state_ignored(caplog):
+    """
+    Terminal parent update (via _run_terminal_update) where actual_state is already a
+    terminal state (not RECOVERING) — e.g. another container's parent write already landed —
+    is swallowed, since that state is also non-active and erroring the job out again would
+    itself be rejected.
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+    mongo.get_exit_codes_for_subjobs.return_value = [1, 1]
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
+    updates.update_job_state.side_effect = MismatchedJobStateError(
+        "wrong state", actual_state=models.JobState.ERROR
+    )
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.ERROR,
+                _update(admin_error="container failed", traceback="Traceback: container failed"),
+            )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0,
+        update_state.error("container failed", traceback="Traceback: container failed"), _T,
+        last_update_time=None,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
+    mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Check subjobs / containers for admin errors",
+            user_error=(
+                "At least one container exited with a non-zero "
+                "error code. Please examine the logs for details."
+            ),
+            log_files_path="logs/jid",
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
+        ),
+        last_update_time=_T,
+    )
+    updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert (
+        "Parent job no longer active (error), ignoring update to error from subjob 0"
+        in rec.message
+    )
+
+
+async def test_update_container_state_invalid_state_error_different_active_state():
+    """
+    MismatchedJobStateError where actual_state is a different, still-active state than the
+    target (not an exact match) is forwarded to handle_exception, even though it's later in
+    the state progression — an exact match is required for the benign-race swallow.
+    """
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.JOB_SUBMITTING, _T
     )
-    err = InvalidJobStateError("wrong state", actual_state=models.JobState.ERROR)
+    err = MismatchedJobStateError(
+        "wrong state", actual_state=models.JobState.JOB_SUBMITTED
+    )
     updates.update_job_state.side_effect = err
 
     await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
@@ -911,6 +1029,128 @@ async def test_update_container_state_invalid_state_error_nonterminal():
         "jid", update_state.submitting_job(), update_time=_T
     )
     updates.handle_exception.assert_called_once_with(err, "jid", "updating state for")
+
+
+async def test_update_container_state_benign_race_exact_match_swallowed(caplog):
+    """
+    MismatchedJobStateError where actual_state exactly matches the target state is a benign race
+    between containers converging on the same parent state and is swallowed.
+    """
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.JOB_SUBMITTING, _T
+    )
+    err = MismatchedJobStateError(
+        "wrong state", actual_state=models.JobState.JOB_SUBMITTING
+    )
+    updates.update_job_state.side_effect = err
+
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.submitting_job(), _T,
+        last_update_time=None,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.JOB_SUBMITTING)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_job(), update_time=_T
+    )
+    updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert "Parent job already at job_submitting, ignoring duplicate update from subjob 0" in (
+        rec.message
+    )
+
+
+async def test_update_container_state_non_active_state_other_than_recovering_ignored(caplog):
+    """
+    MismatchedJobStateError with any non-active actual_state (not just RECOVERING) — e.g. the
+    job was already canceled by another process — is swallowed, since another process
+    already owns the job and erroring it out here would itself be rejected. CANCELING/CANCELED
+    are routine external interventions, so this logs at info even though the target state
+    (JOB_SUBMITTING) doesn't match actual_state (CANCELED).
+    """
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.JOB_SUBMITTING, _T
+    )
+    err = MismatchedJobStateError(
+        "job canceled", actual_state=models.JobState.CANCELED
+    )
+    updates.update_job_state.side_effect = err
+
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.submitting_job(), _T,
+        last_update_time=None,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.JOB_SUBMITTING)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_job(), update_time=_T
+    )
+    updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert (
+        "Parent job no longer active (canceled), ignoring update to job_submitting "
+        "from subjob 0" in rec.message
+    )
+
+
+async def test_update_container_state_terminal_mismatch_logged_as_warning(caplog):
+    """
+    MismatchedJobStateError where actual_state is a natural terminal outcome (ERROR) that
+    doesn't match our target (COMPLETE) is still swallowed (re-erroring would also be
+    rejected), but is a genuine cross-branch inconsistency rather than a benign duplicate,
+    so it's logged at warning rather than info.
+    """
+    runner, mongo, condor, updates, s3 = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
+    outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
+    sj = _make_subjob(exit_code=0, outputs=outputs)
+    mongo.get_subjobs.return_value = [sj]
+    s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")
+    s3.get_object_meta.return_value = [s3obj]
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
+    err = MismatchedJobStateError("wrong state", actual_state=models.JobState.ERROR)
+    updates.update_job_state.side_effect = err
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.COMPLETE, _update(outputs=outputs)
+            )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.complete(outputs), _T,
+        last_update_time=None,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.COMPLETE)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
+    mongo.get_subjobs.assert_called_once_with("jid")
+    s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.complete(
+            [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")],
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
+        ),
+        update_time=_T,
+    )
+    updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.WARNING
+    assert (
+        "Parent job no longer active (error), ignoring update to complete from subjob 0"
+        in rec.message
+    )
 
 
 async def test_update_container_state_unsupported_state():
@@ -3068,3 +3308,214 @@ async def test_backfill_htcondor_stats_save_error_continues(caplog):
     assert "HTC stats backfill: failed to save stats for subjob 0 of job jid" in caplog.text
     assert "db down" in caplog.text
     assert "subjob 1" not in caplog.text
+
+
+######
+# stage_refdata tests
+######
+
+
+async def test_stage_refdata_bad_args():
+    # objmeta is not used by stage_refdata in kbase, just NERSC
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^refdata is required$"):
+        await runner.stage_refdata(None, None)
+
+
+async def test_stage_refdata_wrong_state():
+    runner, _, _, _, _ = _make_runner()
+    refdata = _refdata(state=models.StagingState.DOWNLOAD_SUBMITTED)
+    with pytest.raises(
+        InvalidReferenceDataStateError, match="^Reference data must be in the created state$"
+    ):
+        await runner.stage_refdata(refdata, None)
+
+
+async def test_stage_refdata():
+    runner, _, _, updates, _ = _make_runner()
+    refdata = _refdata()
+    await runner.stage_refdata(refdata, None)
+    runner._refcli.stage_refdata.assert_called_once_with(refdata.id, sites.Cluster.KBASE)
+    updates.handle_exception.assert_not_called()
+
+
+async def test_stage_refdata_refcli_error():
+    runner, _, _, updates, _ = _make_runner()
+    refdata = _refdata()
+    err = IOError("connection refused")
+    runner._refcli.stage_refdata.side_effect = err
+    await runner.stage_refdata(refdata, None)
+    runner._refcli.stage_refdata.assert_called_once_with(refdata.id, sites.Cluster.KBASE)
+    updates.handle_exception.assert_called_once_with(
+        err, refdata.id, "starting staging for", entity_type=models.EntityType.REFDATA
+    )
+
+
+######
+# refdata_complete tests
+######
+
+
+async def test_refdata_complete_unsupported():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(
+        UnsupportedOperationError, match="^This method is not supported for the kbase job flow$"
+    ):
+        await runner.refdata_complete("refdata-id")
+
+
+######
+# update_refdata_state tests
+######
+
+
+@pytest.mark.parametrize("bad_refdata_id", [None, "", "   "])
+async def test_update_refdata_state_bad_args(bad_refdata_id):
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^refdata_id is required$"):
+        await runner.update_refdata_state(bad_refdata_id, models.StagingState.COMPLETE)
+    with pytest.raises(ValueError, match="^new_state is required$"):
+        await runner.update_refdata_state("refdata-id", None)
+
+
+async def test_update_refdata_state_unsupported_state():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(
+        UnsupportedOperationError, match="^Cannot update refdata to state created$"
+    ):
+        await runner.update_refdata_state("refdata-id", models.StagingState.CREATED)
+
+
+async def test_update_refdata_state_download_submitted():
+    runner, mongo, _, _, _ = _make_runner()
+    await runner.update_refdata_state("refdata-id", models.StagingState.DOWNLOAD_SUBMITTED)
+    mongo.update_refdata_state.assert_called_once_with(
+        sites.Cluster.KBASE, "refdata-id", update_state.submitted_staging_download(), _T
+    )
+
+
+async def test_update_refdata_state_complete():
+    runner, mongo, _, _, _ = _make_runner()
+    await runner.update_refdata_state("refdata-id", models.StagingState.COMPLETE)
+    mongo.update_refdata_state.assert_called_once_with(
+        sites.Cluster.KBASE, "refdata-id", update_state.staging_complete(), _T
+    )
+
+
+async def test_update_refdata_state_error():
+    runner, mongo, _, _, _ = _make_runner()
+    update = models.StagingStateUpdate(admin_error="boom", traceback="tb")
+    await runner.update_refdata_state("refdata-id", models.StagingState.ERROR, update)
+    mongo.update_refdata_state.assert_called_once_with(
+        sites.Cluster.KBASE,
+        "refdata-id",
+        update_state.staging_error("An unexpected error occurred", "boom", traceback="tb"),
+        _T,
+    )
+
+
+######
+# stage_ai_model tests
+######
+
+
+async def test_stage_ai_model_bad_args():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(ValueError, match="^ai_model is required$"):
+        await runner.stage_ai_model(None)
+
+
+async def test_stage_ai_model_wrong_state():
+    runner, _, _, _, _ = _make_runner()
+    ai_model = _ai_model(state=models.StagingState.DOWNLOAD_SUBMITTED)
+    with pytest.raises(InvalidAIModelStateError, match="^AI model must be in the created state$"):
+        await runner.stage_ai_model(ai_model)
+
+
+async def test_stage_ai_model():
+    runner, _, _, updates, _ = _make_runner()
+    ai_model = _ai_model()
+    await runner.stage_ai_model(ai_model)
+    runner._refcli.stage_ai_model.assert_called_once_with(ai_model.key, sites.Cluster.KBASE)
+    updates.handle_exception.assert_not_called()
+
+
+async def test_stage_ai_model_refcli_error():
+    runner, _, _, updates, _ = _make_runner()
+    ai_model = _ai_model()
+    err = IOError("connection refused")
+    runner._refcli.stage_ai_model.side_effect = err
+    await runner.stage_ai_model(ai_model)
+    runner._refcli.stage_ai_model.assert_called_once_with(ai_model.key, sites.Cluster.KBASE)
+    updates.handle_exception.assert_called_once_with(
+        err, ai_model.key, "starting staging for", entity_type=models.EntityType.AI_MODEL
+    )
+
+
+######
+# ai_model_complete tests
+######
+
+
+async def test_ai_model_complete_unsupported():
+    runner, _, _, _, _ = _make_runner()
+    with pytest.raises(
+        UnsupportedOperationError, match="^This method is not supported for the kbase job flow$"
+    ):
+        await runner.ai_model_complete(
+            models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+        )
+
+
+######
+# update_ai_model_state tests
+######
+
+
+async def test_update_ai_model_state_bad_args():
+    runner, _, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    with pytest.raises(ValueError, match="^key is required$"):
+        await runner.update_ai_model_state(None, models.StagingState.COMPLETE)
+    with pytest.raises(ValueError, match="^new_state is required$"):
+        await runner.update_ai_model_state(key, None)
+
+
+async def test_update_ai_model_state_unsupported_state():
+    runner, _, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    with pytest.raises(
+        UnsupportedOperationError, match="^Cannot update AI model to state created$"
+    ):
+        await runner.update_ai_model_state(key, models.StagingState.CREATED)
+
+
+async def test_update_ai_model_state_download_submitted():
+    runner, mongo, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    await runner.update_ai_model_state(key, models.StagingState.DOWNLOAD_SUBMITTED)
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE, key, update_state.submitted_staging_download(), _T
+    )
+
+
+async def test_update_ai_model_state_complete():
+    runner, mongo, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    await runner.update_ai_model_state(key, models.StagingState.COMPLETE)
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE, key, update_state.staging_complete(), _T
+    )
+
+
+async def test_update_ai_model_state_error():
+    runner, mongo, _, _, _ = _make_runner()
+    key = models.AIModelKey(models.AIModelSource.HUGGINGFACE, "org/name", "abc123def456")
+    update = models.StagingStateUpdate(admin_error="boom", traceback="tb")
+    await runner.update_ai_model_state(key, models.StagingState.ERROR, update)
+    mongo.update_ai_model_state.assert_called_once_with(
+        sites.Cluster.KBASE,
+        key,
+        update_state.staging_error("An unexpected error occurred", "boom", traceback="tb"),
+        _T,
+    )

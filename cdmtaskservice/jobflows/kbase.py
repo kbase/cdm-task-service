@@ -28,13 +28,15 @@ from cdmtaskservice.config_s3 import S3Config
 from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
     UnauthorizedError,
+    InvalidAIModelStateError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     JobRecoveryError,
+    MismatchedJobStateError,
     UnsupportedOperationError,
 )
 from cdmtaskservice.jobflows.flowmanager import JobFlow, JobFlowOrError
-from cdmtaskservice.jobflows.state_updates import SubjobFlowStateUpdates
+from cdmtaskservice.jobflows.state_updates import ParentJobUpdate, SubjobFlowStateUpdates
 from cdmtaskservice import logfields
 from cdmtaskservice import models
 from cdmtaskservice.models import EntityType
@@ -397,6 +399,7 @@ class KBaseRunner(JobFlow):
             job.id, container_num, mongo_update, update.time,
             last_update_time=last_update_time,
         )
+        parent_update = None
         try:
             parent_update = await self._updates.get_parent_job_update(job, new_state)
             if not parent_update:
@@ -408,20 +411,25 @@ class KBaseRunner(JobFlow):
                 # the preceding state is non-terminal and therefore applied synchronously before
                 # the executor receives its response and can send the terminal state, and there
                 # is no subsequent state because terminal states are final.
-                await self._coman.run_coroutine(self._run_terminal_update(job, parent_update))
+                await self._coman.run_coroutine(
+                    self._run_terminal_update(job, parent_update, container_num)
+                )
                 return
             # Synchronous so the executor can't race ahead with the next state update before
             # this parent update is applied.
-            # If this fails all the containers have transitioned to an equivalent state and
-            # so the job is stuck, so we error out if possible.
+            # If this fails because another container already applied the same transition,
+            # that's a benign race and is ignored; otherwise the job is stuck and we error
+            # out if possible.
             await self._job_state_update_fns[parent_update.state](job, parent_update.time)
         except Exception as e:
             # Don't propagate errors back to the executor — the subjob update succeeded and
             # the executor should continue running. Parent job errors are handled separately.
-            await self._handle_parent_update_error(e, job.id)
+            await self._handle_parent_update_error(
+                e, job.id, container_num, parent_update.state if parent_update else None
+            )
 
     async def _run_terminal_update(
-        self, job: models.AdminJobDetails, parent_update
+        self, job: models.AdminJobDetails, parent_update: ParentJobUpdate, container_num: int,
     ):
         # Use last update time to ensure that if a recovery starts between pulling the job
         # and erroring out the job the error is ignored. Otherwise after _run_terminal_update
@@ -465,13 +473,55 @@ class KBaseRunner(JobFlow):
                     extra={logfields.JOB_ID: job.id},
                 )
         except Exception as e:
-            await self._handle_parent_update_error(e, job.id)
+            await self._handle_parent_update_error(
+                e, job.id, container_num, parent_update.state
+            )
 
-    async def _handle_parent_update_error(self, e: Exception, job_id: str):
-        if isinstance(e, InvalidJobStateError) and e.actual_state == models.JobState.RECOVERING:
-            # Job is being recovered — parent updates are expected to fail while the recovery
-            # lock is held. The executor should keep running.
-            return
+    async def _handle_parent_update_error(
+        self,
+        e: Exception,
+        job_id: str,
+        container_num: int,
+        target_state: models.JobState | None = None,
+    ):
+        if isinstance(e, MismatchedJobStateError):
+            # target_state is guaranteed set here: MismatchedJobStateError can only come from
+            # an actual state-update attempt, which both callers only make once they already
+            # have a target_state in hand.
+            if not e.actual_state.is_active():
+                # Another process (recovery, cancellation, or a prior terminal write) already
+                # owns the job, so our transition is moot — and attempting to error the job
+                # out here would itself be rejected, since that state is disallowed for the
+                # error transition too.
+                #
+                # RECOVERING/CANCELING/CANCELED are routine external interventions regardless
+                # of our target, so those are always benign. But if actual_state is a natural
+                # terminal outcome (COMPLETE/ERROR) that doesn't match our target, that's not a
+                # benign duplicate — it's a genuine cross-branch inconsistency (e.g. we think
+                # the job completed but it's already marked as errored via another path).
+                # Nothing can be done about it here (re-erroring the job would also be rejected,
+                # same as above), but it's worth surfacing more loudly than the expected cases.
+                anomalous = (
+                    e.actual_state.is_terminal()
+                    and not e.actual_state.is_canceling()
+                    and e.actual_state != target_state
+                )
+                log = self._logr.warning if anomalous else self._logr.info
+                log(
+                    "Parent job no longer active (%s), ignoring update to %s from subjob %s: %s",
+                    e.actual_state.value, target_state.value, container_num, e,
+                    extra={logfields.JOB_ID: job_id},
+                )
+                return
+            if e.actual_state == target_state:
+                # Another container's executor already applied this exact transition. Benign
+                # race between containers converging on the same parent state.
+                self._logr.info(
+                    "Parent job already at %s, ignoring duplicate update from subjob %s",
+                    e.actual_state.value, container_num,
+                    extra={logfields.JOB_ID: job_id},
+                )
+                return
         await self._updates.handle_exception(e, job_id, "updating state for")
 
     async def _submitting_stats_handler(self, job, update_time, update_fn):
@@ -1156,7 +1206,7 @@ class KBaseRunner(JobFlow):
             is required.
         """
         refstate = _not_falsy(refdata, "refdata").get_status_for_cluster(self.CLUSTER)
-        if refstate.state != models.ReferenceDataState.CREATED:
+        if refstate.state != models.StagingState.CREATED:
             raise InvalidReferenceDataStateError("Reference data must be in the created state")
         # Could check that the s3 and refdata path / etag match... YAGNI
         try: 
@@ -1172,35 +1222,43 @@ class KBaseRunner(JobFlow):
             f"This method is not supported for the {self.CLUSTER.value} job flow"
         )
 
-    _COMMON_STATE_TO_UPDATE_REFDATA_FUNC = {
-        models.ReferenceDataState.DOWNLOAD_SUBMITTED: lambda _:
-            update_state.submitted_refdata_download(),
-        models.ReferenceDataState.COMPLETE: lambda _: update_state.refdata_complete(),
-        models.ReferenceDataState.ERROR: lambda update: update_state.refdata_error(
+    _COMMON_STATE_TO_STAGING_UPDATE_FUNC = {
+        models.StagingState.DOWNLOAD_SUBMITTED: lambda _:
+            update_state.submitted_staging_download(),
+        models.StagingState.COMPLETE: lambda _: update_state.staging_complete(),
+        models.StagingState.ERROR: lambda update: update_state.staging_error(
             "An unexpected error occurred", update.admin_error, traceback=update.traceback),
     }
+
+    def _resolve_staging_update(
+        self,
+        entity_desc: str,
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None,
+    ) -> update_state.StagingUpdate:
+        _not_falsy(new_state, "new_state")
+        update = update or models.StagingStateUpdate()
+        if new_state not in self._COMMON_STATE_TO_STAGING_UPDATE_FUNC:
+            raise UnsupportedOperationError(
+                f"Cannot update {entity_desc} to state {new_state.value}"
+        )
+        return self._COMMON_STATE_TO_STAGING_UPDATE_FUNC[new_state](update)
 
     async def update_refdata_state(
         self,
         refdata_id: str,
-        new_state: models.ReferenceDataState,
-        update: models.RefdataUpdate | None = None
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None = None
     ):
         """
         Update refdata state for the KBase site.
-        
+
         refdata_id - the reference data's ID.
         new_state - the new state for the reference data.
         update - the update to apply.
         """
         _require_string(refdata_id, "refdata_id")
-        _not_falsy(new_state, "new_state")
-        update = update or models.RefdataUpdate()
-        if new_state not in self._COMMON_STATE_TO_UPDATE_REFDATA_FUNC:
-            raise UnsupportedOperationError(
-                f"Cannot update refdatqa to state {new_state.value}"
-        )
-        mongo_update = self._COMMON_STATE_TO_UPDATE_REFDATA_FUNC[new_state](update)
+        mongo_update = self._resolve_staging_update("refdata", new_state, update)
         # Just throw the error, don't error out the refdata staging.
         # If the caller thinks this is an error they can try and set the error state.
         # Theoretically this could be used to transition a complete job to an error state,
@@ -1208,7 +1266,7 @@ class KBaseRunner(JobFlow):
         # Could add a criteria to the mongo query such that
         # if new_state = error current_state != complete
         await self._mongo.update_refdata_state(
-            self.CLUSTER, refdata_id, mongo_update, utcdatetime()
+            self.CLUSTER, refdata_id, mongo_update, self._timestamp_fn()
         )
 
     async def clean_refdata(self, refdata: models.ReferenceData, force: bool = False):
@@ -1216,6 +1274,56 @@ class KBaseRunner(JobFlow):
         Do nothing. There's nothing to clean up.
         """
         pass # Intentionally do nothing
+
+    async def clean_ai_model(self, ai_model: models.AdminAIModel, force: bool = False):
+        """
+        Do nothing. There's nothing to clean up.
+        """
+        pass # Intentionally do nothing
+
+    async def stage_ai_model(self, ai_model: models.AdminAIModel):
+        """
+        Start staging an AI model snapshot. It is expected that the AI model has been persisted
+        to the data storage system and is in the created state.
+
+        ai_model - the AI model to stage.
+        """
+        aistate = _not_falsy(ai_model, "ai_model").get_status_for_cluster(self.CLUSTER)
+        if aistate.state != models.StagingState.CREATED:
+            raise InvalidAIModelStateError("AI model must be in the created state")
+        try:
+            await self._refcli.stage_ai_model(ai_model.key, self.CLUSTER)
+        except Exception as e:
+            await self._updates.handle_exception(
+                e, ai_model.key, "starting staging for", entity_type=EntityType.AI_MODEL
+            )
+
+    async def ai_model_complete(self, key: models.AIModelKey):
+        """ Throws an exception as this method is not supported. """
+        raise UnsupportedOperationError(
+            f"This method is not supported for the {self.CLUSTER.value} job flow"
+        )
+
+    async def update_ai_model_state(
+        self,
+        key: models.AIModelKey,
+        new_state: models.StagingState,
+        update: models.StagingStateUpdate | None = None,
+    ):
+        """
+        Update AI model staging state for the KBase site.
+
+        key - the AI model's key.
+        new_state - the new state for the AI model.
+        update - the update to apply.
+        """
+        _not_falsy(key, "key")
+        mongo_update = self._resolve_staging_update("AI model", new_state, update)
+        # Just throw the error, don't error out the AI model staging.
+        # If the caller thinks this is an error they can try and set the error state.
+        await self._mongo.update_ai_model_state(
+            self.CLUSTER, key, mongo_update, self._timestamp_fn()
+        )
 
 
 class KBaseSubjobMonitor:

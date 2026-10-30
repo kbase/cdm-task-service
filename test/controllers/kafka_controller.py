@@ -11,7 +11,7 @@ Production use is not recommended.
 # TODO KAFKA will need to handle auth at some point
 
 from kafka import KafkaProducer, KafkaConsumer, KafkaAdminClient
-from kafka.errors import NoBrokersAvailable
+from kafka.errors import KafkaTimeoutError
 import subprocess
 import uuid
 import time
@@ -50,7 +50,7 @@ class KafkaController:
             try:
                 KafkaProducer(bootstrap_servers=[f"localhost:{self.port}"])
                 break
-            except NoBrokersAvailable as e:
+            except KafkaTimeoutError as e:
                 err = KafkaStartException('No Kafka brokers available')
                 err.__cause__ = e
         if err:
