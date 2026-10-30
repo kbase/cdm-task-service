@@ -1535,7 +1535,16 @@ class AdminJobDetails(InternalAdminJobFields, Job):
 
 class ContainerUpdate(BaseModel):
     """ An update to the state of a subjob / container. """
-    
+
+    # TODO CODE this time is set by the executor, so any code comparing it to a CDM Task
+    #           Service-side timestamp needs to account for potential clock skew between the
+    #           executor host and the service. Probably not a big deal on modern, NTP-synced
+    #           infra, but if it ever needs correcting: the root route already returns
+    #           server_time (routes.Root), so the executor could calibrate an offset against it
+    #           (round-trip-corrected, e.g. server_time ~= local_send_time + RTT/2) now. Better
+    #           long term would be having the heartbeat response (currently a bare 204) also
+    #           return server_time, so the executor can recalibrate on every heartbeat it's
+    #           already sending to track drift, instead of needing a separate call to root.
     time: Annotated[datetime.datetime, Field(
         examples=[utcdatetime()],
         description="The time the state transition occurred."

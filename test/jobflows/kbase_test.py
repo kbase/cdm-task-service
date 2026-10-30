@@ -868,8 +868,8 @@ async def test_update_container_state_parent_update_fails():
     updates.handle_exception.assert_called_once_with(exc, "jid", "updating state for")
 
 
-async def test_update_container_state_recovering_ignored_nonterminal():
-    """Parent job is in RECOVERING — InvalidJobStateError from parent update is swallowed."""
+async def test_update_container_state_recovering_ignored_nonterminal(caplog):
+    """Parent job is in RECOVERING — MismatchedJobStateError from parent update is swallowed."""
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.JOB_SUBMITTING, _T
@@ -878,7 +878,8 @@ async def test_update_container_state_recovering_ignored_nonterminal():
         "job is recovering", actual_state=models.JobState.RECOVERING
     )
 
-    await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
 
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0, update_state.submitting_job(), _T,
@@ -889,9 +890,15 @@ async def test_update_container_state_recovering_ignored_nonterminal():
         "jid", update_state.submitting_job(), update_time=_T
     )
     updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert (
+        "Parent job no longer active (recovering), ignoring update to job_submitting "
+        "from subjob 0" in rec.message
+    )
 
 
-async def test_update_container_state_recovering_ignored_terminal():
+async def test_update_container_state_recovering_ignored_terminal(caplog):
     """Parent job is in RECOVERING during terminal update — swallowed in coroutine."""
     runner, mongo, condor, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
@@ -902,10 +909,11 @@ async def test_update_container_state_recovering_ignored_terminal():
     )
 
     with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
-        await runner.update_container_state(
-            _JOB, 0, models.JobState.ERROR,
-            _update(admin_error="container failed", traceback="Traceback: container failed"),
-        )
+        with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.ERROR,
+                _update(admin_error="container failed", traceback="Traceback: container failed"),
+            )
 
     mongo.update_subjob_state.assert_called_once_with(
         "jid", 0,
@@ -932,15 +940,82 @@ async def test_update_container_state_recovering_ignored_terminal():
         last_update_time=_T,
     )
     updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert (
+        "Parent job no longer active (recovering), ignoring update to error from subjob 0"
+        in rec.message
+    )
 
 
-async def test_update_container_state_invalid_state_error_nonterminal():
-    """MismatchedJobStateError with non-RECOVERING actual_state is forwarded to handle_exception."""
+async def test_update_container_state_terminal_non_active_state_ignored(caplog):
+    """
+    Terminal parent update (via _run_terminal_update) where actual_state is already a
+    terminal state (not RECOVERING) — e.g. another container's parent write already landed —
+    is swallowed, since that state is also non-active and erroring the job out again would
+    itself be rejected.
+    """
+    runner, mongo, condor, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.ERROR, _T)
+    mongo.get_exit_codes_for_subjobs.return_value = [1, 1]
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
+    updates.update_job_state.side_effect = MismatchedJobStateError(
+        "wrong state", actual_state=models.JobState.ERROR
+    )
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.ERROR,
+                _update(admin_error="container failed", traceback="Traceback: container failed"),
+            )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0,
+        update_state.error("container failed", traceback="Traceback: container failed"), _T,
+        last_update_time=None,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.ERROR)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
+    mongo.get_exit_codes_for_subjobs.assert_called_once_with("jid")
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.error(
+            "Check subjobs / containers for admin errors",
+            user_error=(
+                "At least one container exited with a non-zero "
+                "error code. Please examine the logs for details."
+            ),
+            log_files_path="logs/jid",
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
+        ),
+        last_update_time=_T,
+    )
+    updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert (
+        "Parent job no longer active (error), ignoring update to error from subjob 0"
+        in rec.message
+    )
+
+
+async def test_update_container_state_invalid_state_error_different_active_state():
+    """
+    MismatchedJobStateError where actual_state is a different, still-active state than the
+    target (not an exact match) is forwarded to handle_exception, even though it's later in
+    the state progression — an exact match is required for the benign-race swallow.
+    """
     runner, mongo, _, updates, _ = _make_runner()
     updates.get_parent_job_update.return_value = ParentJobUpdate(
         models.JobState.JOB_SUBMITTING, _T
     )
-    err = MismatchedJobStateError("wrong state", actual_state=models.JobState.ERROR)
+    err = MismatchedJobStateError(
+        "wrong state", actual_state=models.JobState.JOB_SUBMITTED
+    )
     updates.update_job_state.side_effect = err
 
     await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
@@ -954,6 +1029,128 @@ async def test_update_container_state_invalid_state_error_nonterminal():
         "jid", update_state.submitting_job(), update_time=_T
     )
     updates.handle_exception.assert_called_once_with(err, "jid", "updating state for")
+
+
+async def test_update_container_state_benign_race_exact_match_swallowed(caplog):
+    """
+    MismatchedJobStateError where actual_state exactly matches the target state is a benign race
+    between containers converging on the same parent state and is swallowed.
+    """
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.JOB_SUBMITTING, _T
+    )
+    err = MismatchedJobStateError(
+        "wrong state", actual_state=models.JobState.JOB_SUBMITTING
+    )
+    updates.update_job_state.side_effect = err
+
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.submitting_job(), _T,
+        last_update_time=None,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.JOB_SUBMITTING)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_job(), update_time=_T
+    )
+    updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert "Parent job already at job_submitting, ignoring duplicate update from subjob 0" in (
+        rec.message
+    )
+
+
+async def test_update_container_state_non_active_state_other_than_recovering_ignored(caplog):
+    """
+    MismatchedJobStateError with any non-active actual_state (not just RECOVERING) — e.g. the
+    job was already canceled by another process — is swallowed, since another process
+    already owns the job and erroring it out here would itself be rejected. CANCELING/CANCELED
+    are routine external interventions, so this logs at info even though the target state
+    (JOB_SUBMITTING) doesn't match actual_state (CANCELED).
+    """
+    runner, mongo, _, updates, _ = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(
+        models.JobState.JOB_SUBMITTING, _T
+    )
+    err = MismatchedJobStateError(
+        "job canceled", actual_state=models.JobState.CANCELED
+    )
+    updates.update_job_state.side_effect = err
+
+    with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+        await runner.update_container_state(_JOB, 0, models.JobState.JOB_SUBMITTING, _update())
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.submitting_job(), _T,
+        last_update_time=None,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.JOB_SUBMITTING)
+    updates.update_job_state.assert_called_once_with(
+        "jid", update_state.submitting_job(), update_time=_T
+    )
+    updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.INFO
+    assert (
+        "Parent job no longer active (canceled), ignoring update to job_submitting "
+        "from subjob 0" in rec.message
+    )
+
+
+async def test_update_container_state_terminal_mismatch_logged_as_warning(caplog):
+    """
+    MismatchedJobStateError where actual_state is a natural terminal outcome (ERROR) that
+    doesn't match our target (COMPLETE) is still swallowed (re-erroring would also be
+    rejected), but is a genuine cross-branch inconsistency rather than a benign duplicate,
+    so it's logged at warning rather than info.
+    """
+    runner, mongo, condor, updates, s3 = _make_runner()
+    updates.get_parent_job_update.return_value = ParentJobUpdate(models.JobState.COMPLETE, _T)
+    outputs = [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")]
+    sj = _make_subjob(exit_code=0, outputs=outputs)
+    mongo.get_subjobs.return_value = [sj]
+    s3obj = S3ObjectMeta("bucket/f.txt", "etag", 0, "aaaabbbbcccc")
+    s3.get_object_meta.return_value = [s3obj]
+    condor.get_cluster_proc_stats.return_value = _CONDOR_STATS
+    err = MismatchedJobStateError("wrong state", actual_state=models.JobState.ERROR)
+    updates.update_job_state.side_effect = err
+
+    with patch("cdmtaskservice.jobflows.kbase.asyncio.sleep"):
+        with caplog.at_level(logging.INFO, logger="cdmtaskservice.jobflows.kbase"):
+            await runner.update_container_state(
+                _JOB, 0, models.JobState.COMPLETE, _update(outputs=outputs)
+            )
+
+    mongo.update_subjob_state.assert_called_once_with(
+        "jid", 0, update_state.complete(outputs), _T,
+        last_update_time=None,
+    )
+    updates.get_parent_job_update.assert_called_once_with(_JOB, models.JobState.COMPLETE)
+    condor.get_cluster_proc_stats.assert_called_once_with(123, 2)
+    mongo.get_subjobs.assert_called_once_with("jid")
+    s3.get_object_meta.assert_called_once_with(S3Paths(["bucket/f.txt"]))
+    updates.update_job_state.assert_called_once_with(
+        "jid",
+        update_state.complete(
+            [models.S3File(file="bucket/f.txt", crc64nvme="aaaabbbbcccc")],
+            htcondor_cpu_hours=_HTC_CPU_HOURS,
+            htcondor_max_memory=_HTC_MAX_MEM,
+            htcondor_runtime_seconds=_HTC_RUNTIME,
+            htcondor_stats_incomplete=False,
+        ),
+        update_time=_T,
+    )
+    updates.handle_exception.assert_not_called()
+    rec = caplog.records[-1]
+    assert rec.levelno == logging.WARNING
+    assert (
+        "Parent job no longer active (error), ignoring update to complete from subjob 0"
+        in rec.message
+    )
 
 
 async def test_update_container_state_unsupported_state():
