@@ -1,6 +1,7 @@
 """
 General exceptions used by multiple modules.
 """
+from cdmtaskservice.arg_checkers import not_falsy as _not_falsy
 from cdmtaskservice.models import JobState
 
 
@@ -15,14 +16,21 @@ class IllegalParameterError(Exception):
 class InvalidJobStateError(Exception):
     """ An exception thrown when a job is in an invalid state to perform an operation. """
 
-    def __init__(self, message: str, actual_state: JobState | None = None):
+
+class MismatchedJobStateError(InvalidJobStateError):
+    """
+    An exception thrown when a job's current state doesn't match the state required to perform
+    an operation on it.
+    """
+
+    def __init__(self, message: str, actual_state: JobState):
         """
         message - the error message.
-        actual_state - the actual state of the job at the time of the error, if known.
-            Callers can inspect this to decide how to handle the error, e.g. whether to retry.
+        actual_state - the actual state of the job at the time of the error. Callers can
+            inspect this to decide how to handle the error, e.g. whether to retry.
         """
         super().__init__(message)
-        self.actual_state = actual_state
+        self.actual_state = _not_falsy(actual_state, "actual_state")
 
 
 class InvalidReferenceDataStateError(Exception):

@@ -20,7 +20,7 @@ from cdmtaskservice.arg_checkers import (
     check_num as _check_num,
     verify_aware_datetime
 )
-from cdmtaskservice.exceptions import InvalidJobStateError, JobRecoveryError, NoSuchJobError
+from cdmtaskservice.exceptions import JobRecoveryError, MismatchedJobStateError, NoSuchJobError
 from cdmtaskservice.pipelines import models as pipe_models
 from cdmtaskservice.update_state import JobUpdate, UpdateField, StagingUpdate
 
@@ -781,13 +781,13 @@ class MongoDAO:
             entity = f"Job '{job_id}' with subjob ID {subjob_id}"
         actual_state = models.JobState(pre_doc[models.FLD_COMMON_STATE])
         if update.current_state and actual_state != update.current_state:
-            raise InvalidJobStateError(
+            raise MismatchedJobStateError(
                 f"{entity} is in state {actual_state.value!r}, "
                 f"expected {update.current_state.value!r}",
                 actual_state=actual_state,
             )
         if update.disallowed_current_states and actual_state in update.disallowed_current_states:
-            raise InvalidJobStateError(
+            raise MismatchedJobStateError(
                 f"{entity} is in disallowed state {actual_state.value!r}",
                 actual_state=actual_state,
             )
