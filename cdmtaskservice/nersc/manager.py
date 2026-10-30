@@ -151,6 +151,7 @@ module load {_PYTHON_MODULE}
 export PYTHONPATH=$CTS_CODE_LOCATION
 export CTS_MODE=$CTS_MODE
 export CTS_MANIFEST_LOCATION=$CTS_MANIFEST_LOCATION
+export CTS_JOB_IMAGE=$CTS_JOB_IMAGE
 export CTS_ERRORS_JSON_LOCATION=$CTS_ERRORS_JSON_LOCATION
 export CTS_CONTAINER_LOGS_LOCATION=$CTS_CONTAINER_LOGS_LOCATION
 export CTS_JAWS_OUTPUT_DIR=$CTS_JAWS_OUTPUT_DIR
@@ -172,13 +173,13 @@ export CTS_CALLBACK_URL=$CTS_CALLBACK_URL
 export SCRATCH=$SCRATCH
 
 # Redirect all further output to a durable log file so a killed (e.g. OOM) process still
-# leaves a trace, since the SFAPI task's captured stdout is only available for a short time
-# after the task ends (successfully or not).
+# leaves a trace.
 exec >> "$CTS_LOG_FILE_LOCATION" 2>&1
 
 echo "PYTHONPATH=[$PYTHONPATH]"
 echo "CTS_MODE=[$CTS_MODE]"
 echo "CTS_MANIFEST_LOCATION=[$CTS_MANIFEST_LOCATION]"
+echo "CTS_JOB_IMAGE=[$CTS_JOB_IMAGE]"
 echo "CTS_ERRORS_JSON_LOCATION=[$CTS_ERRORS_JSON_LOCATION]"
 echo "CTS_CONTAINER_LOGS_LOCATION=[$CTS_CONTAINER_LOGS_LOCATION]"
 echo "CTS_JAWS_OUTPUT_DIR=[$CTS_JAWS_OUTPUT_DIR]"
@@ -563,49 +564,62 @@ class NERSCManager:
 
     async def download_s3_files(
         self,
-        download_id: str,
+        entity: models.Job | pipe_models.AdminPipelineJob | models.ReferenceData,
         objects: list[S3ObjectMeta],
         presigned_urls: list[str],
         callback_url: str,
         concurrency: int = 10,
         insecure_ssl: bool = False,
-        refdata: bool = False,
-        unpack: bool = False,
-        pipeline: pipe_models.PipelineSpec = None,
     ) -> str:
         """
         Download a set of files to NERSC from an S3 instance.
 
-        download_id - the ID of the job or reference data for which the files are being
-            transferred. This must be a unique ID, and no other transfers should be occurring
-            for the id.
+        entity - the job or reference data for which the files are being downloaded. The
+            entity's ID is used as the download ID; no other transfers should be occurring for
+            the entity. For reference data, causes files to be stored in the NERSC refdata
+            location and, per entity.unpack, *.gz/*.tar.gz/*.tgz files to be unpacked. For a
+            pipeline job, causes the pre-staged WDL bundle's MD5s to be verified as part of the
+            download task. For a non-pipeline job, causes the job's container image to be
+            pulled at NERSC as part of the download task, prior to the job being submitted to
+            JAWS.
         objects - the S3 files to download.
         presigned_urls - the presigned download URLs for each object, in the same order as
             the objects.
         callback_url - the URL to GET as a callback for when the download is complete.
         concurrency - the number of simultaneous downloads to process.
         insecure_ssl - whether to skip the cert check for the S3 URL.
-        refdata - whether this is a refdata download and files should be stored in the NERSC
-            refdata location.
-        unpack - whether to unpack *.gz, *.tar.gz, or *.tgz files.
-        pipeline - if this download is for a pipeline job, the pipeline's identity. Causes the
-            pre-staged WDL bundle's MD5s to be verified as part of the download task.
 
         Returns the NERSC Slurm job ID for the download.
         """
+        _not_falsy(entity, "entity")
+        # note objects and jobs / refdata are somewhat redundant
+        # maybe should check the objects match
+        entity_type = entity.get_entity_type()
+        is_refdata = False
+        unpack = False
+        pipeline_def = None
+        image = None
+        if entity_type == models.EntityType.REFDATA:
+            is_refdata = True
+            unpack = entity.unpack
+        elif entity_type == models.EntityType.PIPELINE_JOB:
+            pipeline_def = self._pipereg.get(entity.pipeline_input.get_pipeline_spec())
+        else:  # EntityType.JOB
+            image = entity.image.name_with_digest
         maniio = self._create_download_manifest(
-            download_id, objects, presigned_urls, concurrency, insecure_ssl, refdata, unpack)
+            entity.id, objects, presigned_urls, concurrency, insecure_ssl, is_refdata, unpack
+        )
         total_bytes = sum(o.size for o in objects)
-        pipeline_def = self._pipereg.get(pipeline) if pipeline else None
         return await self._process_manifest(
-            download_id,
+            entity.id,
             callback_url,
             "download",
             total_bytes,
-            mode=_CTSRemoteMode.REFDATA_MANIFEST if refdata else _CTSRemoteMode.MANIFEST,
+            mode=_CTSRemoteMode.REFDATA_MANIFEST if is_refdata else _CTSRemoteMode.MANIFEST,
             manifest=maniio,
             filename="download_manifest.json",
             pipeline_def=pipeline_def,
+            job_image=image,
         )
 
     async def stage_ai_model(
@@ -717,6 +731,7 @@ class NERSCManager:
         error_json_file_location: str = None,
         container_logs_location: str = None,
         checksum_manifest_path: Path = None,
+        job_image: str = None,
     ) -> list[str]:
         command = [
             f"export CTS_MODE={mode.value}",
@@ -728,6 +743,8 @@ class NERSCManager:
         ]
         if manifestpath is not None:
             command.append(f"export CTS_MANIFEST_LOCATION={manifestpath}")
+        if job_image:
+            command.append(f"export CTS_JOB_IMAGE={job_image}")
         if error_json_file_location:
             command.append(f"export CTS_ERRORS_JSON_LOCATION={error_json_file_location}")
             command.append(f"export CTS_CONTAINER_LOGS_LOCATION={container_logs_location}")
@@ -782,6 +799,7 @@ class NERSCManager:
         error_json_file_location: str = None,
         container_logs_location: str = None,  # this is expected to be present if the above is
         pipeline_def: PipelineDefinition = None,
+        job_image: str = None,
     ):
         rootpath_fn = {
             _CTSRemoteMode.AI_MODEL: self._get_ai_model_scratch,
@@ -810,6 +828,7 @@ class NERSCManager:
             error_json_file_location=error_json_file_location,
             container_logs_location=container_logs_location,
             checksum_manifest_path=checksum_manifest_path,
+            job_image=job_image,
         )
         script = _SBATCH_SCRIPT_TEMPLATE.format(
             time=_seconds_to_slurm_time(_compute_sbatch_time_sec(total_bytes)),

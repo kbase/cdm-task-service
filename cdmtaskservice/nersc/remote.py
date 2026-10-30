@@ -15,6 +15,7 @@ from pathlib import Path
 import requests
 import subprocess
 import sys
+import time
 import traceback
 from typing import Callable
 
@@ -140,7 +141,28 @@ def verify_file_checksums(manifest_file: str):
         )
 
 
-def process_data_transfer_manifest(manifest_file_path: str, checksum_manifest_file_path: str = None):
+def pull_container_image(image: str):
+    """
+    This is a hack to deal with a JAWS bug where the job fails if the image doesn't already
+    exist at NERSC.
+    
+    image - the fully qualified image reference, including a digest, e.g.
+        `ghcr.io/kbase/some_image@sha256:<digest>`.
+
+    Currently this always pulls via Shifter.
+    """
+    logr = logging.getLogger(__name__)
+    logr.info(f"Starting Shifter pull of image {image}")
+    start = time.monotonic()
+    try:
+        subprocess.run(["shifterimg", "pull", image], check=True)
+    finally:
+        logr.info(f"Shifter pull of image {image} took {time.monotonic() - start:.1f}s")
+
+
+def process_data_transfer_manifest(
+    manifest_file_path: str, checksum_manifest_file_path: str = None, job_image: str = None,
+):
     """
     Processes a data transfer manifest file.
 
@@ -148,6 +170,8 @@ def process_data_transfer_manifest(manifest_file_path: str, checksum_manifest_fi
     checksum_manifest_file_path - the path to a checksum manifest file (see
         verify_file_checksums) to check after the transfer completes. If omitted, no check is
         performed.
+    job_image - if provided, the job's container image is pulled (see pull_container_image)
+        prior to processing the transfer manifest.
     """
     # The manifest should be only used by the CDM task service and so we don't document
     # its structure.
@@ -155,6 +179,8 @@ def process_data_transfer_manifest(manifest_file_path: str, checksum_manifest_fi
     # stress error checking too much.
     # Potential performance improvement could include a shared cross job cache for files
     #    only useful if jobs are reusing the same files, which seems def possible
+    if job_image:
+        pull_container_image(job_image)
     with open(manifest_file_path) as f:
         manifest = json.load(f)
     asyncio.run(s3_pdtm(manifest["file-transfers"]))
@@ -358,6 +384,7 @@ def _run_manifest_mode(resfile: str, callback_url: str):
         [
             os.environ["CTS_MANIFEST_LOCATION"],
             os.environ.get("CTS_CHECKSUM_MANIFEST_LOCATION"),
+            os.environ.get("CTS_JOB_IMAGE"),
         ],
         resfile,
         callback_url
