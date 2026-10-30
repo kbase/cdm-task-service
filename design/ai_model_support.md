@@ -925,20 +925,38 @@ directly.
 - In `job_state.py`'s submission validation (alongside `_check_and_update_files`/
   `_check_and_update_script`, which already rewrite `input_files`/`script` with service-resolved
   values post-validation — e.g. `S3FileWithDataID.model_construct(...)` at job_state.py:277-279):
-  add `_check_and_update_ai_models`, called for every `Parameter` returned by
-  `job_input.params.get_ai_model_parameters()`. For each one, parse `ai_model` into `(model,
-  ref)` and call `get_ai_model(p.ai_model_source, model, ref,
-  resolve_tag=True)` (Chunk 1), confirm the resulting `AIModel`'s status for the job's target
-  cluster is `COMPLETE` — fail fast otherwise (new
-  exceptions mirroring `NoSuchReferenceDataError`) — then rewrite that `Parameter` in place via
-  `model_construct` with `ai_model` set to the resolved `model@<version>` form (not the original
-  tag, if a tag was given — the version is what determines the on-disk directory name, per Chunk
-  1/3/4's `(source, model, version)` layout; `ai_model_source` itself needs no rewriting, since
+  new `_check_and_update_ai_models`, called once per `submit()` after `_check_refdata`, for every
+  `Parameter` returned by `job_input.params.get_ai_model_parameters()`. For each one, parse
+  `ai_model` into `(model, ref)` via `models.split_ai_model_ref` and call
+  `mongo.get_ai_model(p.ai_model_source, model, ref, resolve_tag=True)` (Chunk 1), confirm the
+  resulting `AIModel`'s status for the job's target cluster is `COMPLETE` — fail fast otherwise with
+  the existing `InvalidAIModelStateError` (Chunk 2), the same way `_check_refdata` already uses the
+  existing `InvalidReferenceDataStateError` for the equivalent refdata check; a lookup miss (no such
+  model/tag at all) is likewise reported by the existing `NoSuchAIModelError` (Chunk 1) raised
+  inside `get_ai_model` itself, so no new exception type is needed for either case. The matched
+  `Parameter` is then rewritten with `ai_model` set to the resolved `model@<version>` form (not the
+  original tag, if a tag was given — the version is what determines the on-disk directory name, per
+  Chunk 1/3/4's `(source, model, version)` layout; `ai_model_source` itself needs no rewriting, since
   `AIModelSource` values are already the resolved, canonical form), the same "validate once at
   submission, persist the resolved form" pattern already used for `input_files`/`script`. No
   separate `JobInput` field is needed to hold resolved values — the `Parameter`s themselves, as
-  already persisted on the job record, are
-  the single source of truth.
+  already persisted on the job record, are the single source of truth.
+
+  Both the rewritten `Parameter` and the `Parameters` object containing it are rebuilt via
+  `model_construct` from the original object's own field values (`type(p).model_construct(**{
+  **vars(p), "ai_model": resolved})`, mirroring the existing `JobInput.model_construct(**{**vars(
+  job_input), ...})` pattern at `routes.py::submit_job`) rather than `model_copy`. This isn't just
+  style: `Parameters.get_ai_model_parameters()`/`get_file_parameter()` memoize their result as a
+  plain instance attribute (not a declared field) on the `Parameters` object the first time either
+  is called — which already happens earlier in `submit()`, via `_check_refdata`'s
+  `job_input.uses_ai_model_store()` call — so `job_input.params` already carries a cache keyed to
+  the *original*, unresolved `Parameter`s by the time `_check_and_update_ai_models` runs.
+  `model_copy` would carry that stale cache forward onto the rewritten `Parameters` object (it
+  shallow-copies the whole instance, private attributes included); `model_construct` only reads
+  declared fields out of the supplied mapping, silently dropping the extra cache key, so the
+  returned `Parameters` has no memoized state and a later `get_ai_model_parameters()` call against
+  it (e.g. Chunk 9's rendering) correctly recomputes against the resolved `Parameter`s instead of
+  returning the stale, pre-resolution list.
 
 Testable in isolation with mocked Mongo/registry lookups, following existing `job_state.py` test
 conventions.

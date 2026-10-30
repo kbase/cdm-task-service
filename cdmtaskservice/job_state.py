@@ -21,6 +21,7 @@ from cdmtaskservice.coroutine_manager import CoroutineWrangler
 from cdmtaskservice.exceptions import (
     ChecksumMismatchError,
     IllegalParameterError,
+    InvalidAIModelStateError,
     InvalidJobStateError,
     InvalidReferenceDataStateError,
     UnauthorizedError,
@@ -130,12 +131,15 @@ class JobState:
         await self._check_output_path(job_input)
         new_script = await self._check_and_update_script(job_input, image)
         new_input, meta = await self._check_and_update_files(job_input)
+        new_params = await self._check_and_update_ai_models(job_input)
         job_id = str(self._uuid_fn())
         if not self._test_mode:
             # check the flow is available before we make any changes
             flow = await self._flowman.get_flow(job_input.cluster)
             await flow.preflight(user, job_id, job_input)
-        ji = job_input.model_copy(update={"input_files": new_input, "script": new_script})
+        ji = job_input.model_copy(
+            update={"input_files": new_input, "script": new_script, "params": new_params}
+        )
         update_time = self._timestamp_fn()
         trans_id = str(self._uuid_fn())
         job = models.AdminJobDetails(
@@ -314,6 +318,42 @@ class JobState:
             raise InvalidReferenceDataStateError(
                 f"Reference data '{refdata.id} required for job is not yet staged at "
                 + f"remote compute environment {job_input.cluster.value}"
+        )
+
+    async def _check_and_update_ai_models(self, job_input: models.JobInput) -> models.Parameters:
+        ai_params = job_input.params.get_ai_model_parameters()
+        if not ai_params:
+            return job_input.params
+        resolved_by_id = {}
+        for p in ai_params:
+            # Probably not worth batching these calls, as the number
+            # of AI model parameters is typically small.
+            model, ref = models.split_ai_model_ref(p.ai_model)
+            ai_model = await self._mongo.get_ai_model(
+                p.ai_model_source, model, ref, resolve_tag=True
+            )
+            status = ai_model.get_status_for_cluster(job_input.cluster)
+            if status.state != models.StagingState.COMPLETE:
+                raise InvalidAIModelStateError(
+                    f"AI model '{ai_model.key}' required for job is not yet staged at "
+                    + f"remote compute environment {job_input.cluster.value}"
+                )
+            # model_construct avoids reusing job_input.params's memoized ai model parameter
+            # list, which would otherwise be stale once args/environment are replaced below.
+            # type(p) could be Parameter or ParameterWithFlag
+            resolved_by_id[id(p)] = type(p).model_construct(
+                **dict(vars(p), ai_model=f"{model}@{ai_model.version}")
+            )
+        new_args = (
+            [resolved_by_id.get(id(a), a) for a in job_input.params.args]
+            if job_input.params.args else job_input.params.args
+        )
+        new_env = (
+            {k: resolved_by_id.get(id(v), v) for k, v in job_input.params.environment.items()}
+            if job_input.params.environment else job_input.params.environment
+        )
+        return models.Parameters.model_construct(
+            **dict(vars(job_input.params), args=new_args, environment=new_env)
         )
 
     async def submit_pipeline_job(
