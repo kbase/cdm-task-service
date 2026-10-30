@@ -2917,3 +2917,84 @@ async def test_set_ai_model_clean_fail(mondb):
         f"No AI model with key '{other_key}' for cluster perlmutter-jaws exists"
     )):
         await mc.set_ai_model_clean(sites.Cluster.PERLMUTTER_JAWS, other_key)
+
+
+async def test_process_dirty_ai_models(mondb):
+    mc = await MongoDAO.create(mondb)
+    current = datetime.datetime(
+        year=2026, month=2, day=10, hour=14, minute=30, second=54, tzinfo=datetime.UTC
+    )
+    older_than = current - datetime.timedelta(days=30)  # much newer than _SAFE_TIME
+    orig = _ai_model(model="org/foo", statuses=[
+        models.AdminStagingStatus(
+            cluster=sites.Cluster.PERLMUTTER_JAWS,
+            state=models.StagingState.ERROR,
+            transition_times=[
+                models.StagingStateTransition(
+                    state=models.StagingState.CREATED,
+                    time=older_than
+                ),
+            ],
+        ),
+        models.AdminStagingStatus(
+            cluster=sites.Cluster.KBASE,
+            state=models.StagingState.COMPLETE,
+            transition_times=[
+                models.StagingStateTransition(
+                    state=models.StagingState.DOWNLOAD_SUBMITTED,
+                    time=older_than
+                ),
+            ],
+        ),
+    ])
+
+    am = orig.model_copy(deep=True, update={"model": "org/toonew"})
+    await mc.save_ai_model(am)  # shouldn't be found due to date = older_than
+
+    # Shouldn't be found due to non-terminal states
+    for state in set(models.StagingState) - models.StagingState.terminal_states():
+        am = am.model_copy(deep=True, update={"model": f"org/{state.value}"})
+        am.statuses[0].state = state
+        am.statuses[0].transition_times[0].time = _SAFE_TIME
+        await mc.save_ai_model(am)
+
+    am = am.model_copy(deep=True, update={"model": "org/cleaned"})
+    am.statuses[1].transition_times[0].time = _SAFE_TIME
+    am.statuses[1].cleaned = True
+    await mc.save_ai_model(am)  # shouldn't be found due to cleaned state
+
+    # save AI models expected to be found, 1 per terminal state
+    comp = orig.model_copy(deep=True, update={"model": "org/found_comp"})
+    comp.statuses[1].transition_times[0].time = older_than - datetime.timedelta(seconds=1)
+    await mc.save_ai_model(comp)
+
+    err = orig.model_copy(deep=True, update={"model": "org/found_err"})
+    err.statuses[0].transition_times[0].time = older_than - datetime.timedelta(seconds=1)
+    await mc.save_ai_model(err)
+
+    found = {}
+    async def collect(ai_model):
+        found[ai_model.model] = ai_model
+    await mc.process_dirty_ai_models(older_than, collect)
+
+    # debugging help
+    assert found.keys() == {"org/found_err", "org/found_comp"}
+    assert found == {"org/found_comp": comp, "org/found_err": err}
+
+    # test noop
+    found.clear()
+    await mc.process_dirty_ai_models(_SAFE_TIME, collect)
+    assert found.keys() == set()
+
+
+async def test_process_dirty_ai_models_fail(mondb):
+    mc = await MongoDAO.create(mondb)
+    await _process_dirty_ai_models_fail(
+        mc, None, lambda: print("foo"), ValueError("older_than is required")
+    )
+    await _process_dirty_ai_models_fail(mc, _SAFE_TIME, None, ValueError("operation is required"))
+
+
+async def _process_dirty_ai_models_fail(mc, older_than, op, expected):
+    with pytest.raises(type(expected), match=f"^{expected.args[0]}$"):
+        await mc.process_dirty_ai_models(older_than, op)

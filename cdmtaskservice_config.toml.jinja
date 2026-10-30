@@ -38,6 +38,8 @@ user = "{{ KBCTS_NERSC_JAWS_USER or "" }}"
 
 # The NERSC refdata directory root for the JAWS installation the service is using.
 # The JAWS installation is expected to be configured to use this directory to look up refdata.
+# This directory is also used to store AI models, in a dedicated subdirectory alongside the
+# refdata directories.
 refdata_root_dir = "{{ KBCTS_NERSC_JAWS_REFDATA_DIR or "" }}"
 
 # The JAWS site staging directory at NERSC on the Perlmutter system.
@@ -134,9 +136,10 @@ refserver_url = "{{ KBCTS_REFDATA_SERVER_URL or "" }}"
 # of the refdata server.
 refserver_token = "{{ KBCTS_REFDATA_SERVER_TOKEN or "" }}"
 
-# The root path local to the job container host where reference data is stored, e.g.
-# reference data will be stored in <reference_data_path>/<refdata_id>. This *must* be an
-# absolute path. This will be used to mount the reference data into the job container.
+# The root path local to the job container host where reference data and AI models are stored,
+# e.g. reference data will be stored in <reference_data_path>/<refdata_id> and AI models in a
+# dedicated subdirectory alongside the refdata directories. This *must* be an absolute path.
+# This will be used to mount the reference data or the AI model store into the job container.
 refdata_host_path = "{{ KBCTS_REFDATA_HOST_PATH or "" }}"
 
 # The time in minutes after which an external executor should give up and fail rather than
@@ -237,12 +240,12 @@ container_s3_log_dir = "{{ KBCTS_CONTAINER_S3_LOG_DIR or "" }}"
 # the number of CPUs * the number of containers * the time per container.
 max_cpu_hours = {{ KBCTS_JOB_MAX_CPU_HOURS or 100 }}
 
-# How often the cleaning code that removes transient files from completed jobs and refdata
-# should be run in hours.
+# How often the cleaning code that removes transient files from completed jobs, refdata, and
+# AI model staging should be run in hours.
 # Currently this cleans up various manifests and results at NERSC.
 clean_frequency_hours = {{ KBCTS_JOB_CLEAN_FREQUENCY_HOURS or 24 }}
 
-# How old jobs / refdata must be before they're cleaned in days.
+# How old jobs / refdata / AI model staging must be before they're cleaned in days.
 clean_age_days = {{ KBCTS_CLEAN_AGE_DAYS or 30 }}
 
 [Kafka]

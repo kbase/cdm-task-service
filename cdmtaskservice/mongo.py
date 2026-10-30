@@ -1771,13 +1771,27 @@ class MongoDAO:
         * the last update time was older than the older_than argument
         * the cleaned flag is false
         * the refdata state is one of the terminal states
-    
+
         and pass the refdata to the operation argument, which must be an async function.
-    
+
         Note that some sites in the refdata may not meet the criteria for cleaning; it is up
         to the calling code to determine which sites should be cleaned. At least one is
         guaranteed to be ready for cleaning.
         """
+        await self._process_dirty_staged_entities(
+            self._col_refdata,
+            lambda d: self._to_refdata(d, as_admin=True),
+            older_than,
+            operation,
+        )
+
+    async def _process_dirty_staged_entities(
+        self,
+        col: AsyncIOMotorCollection,
+        to_entity: Callable[[dict[str, Any]], Any],
+        older_than: datetime.datetime,
+        operation: Callable[[Any], Awaitable[None]],
+    ):
         _not_falsy(older_than, "older_than")
         _not_falsy(operation, "operation")
         query = {models.FLD_COMMON_STATUSES: {"$elemMatch": {
@@ -1787,8 +1801,8 @@ class MongoDAO:
             ]},
             _FLD_UPDATE_TIME: {"$lt": older_than},
         }}}
-        async for j in self._col_refdata.find(query):
-            await operation(self._to_refdata(j, as_admin=True))
+        async for d in col.find(query):
+            await operation(to_entity(d))
 
     async def _update_staging_state(
         self,
@@ -2091,6 +2105,29 @@ class MongoDAO:
             NoSuchAIModelError,
             f"No AI model with key '{key}'",
             cluster,
+        )
+
+    async def process_dirty_ai_models(
+            self,
+            older_than: datetime.datetime,
+            operation: Callable[[models.AdminAIModel], Awaitable[None]]):
+        """
+        Find AI models where, for at least one site
+        * the last update time was older than the older_than argument
+        * the cleaned flag is false
+        * the staging state is one of the terminal states
+
+        and pass the AI model to the operation argument, which must be an async function.
+
+        Note that some sites in the AI model may not meet the criteria for cleaning; it is up
+        to the calling code to determine which sites should be cleaned. At least one is
+        guaranteed to be ready for cleaning.
+        """
+        await self._process_dirty_staged_entities(
+            self._col_ai_models,
+            lambda d: self._to_ai_model(d, tags=None, as_admin=True),
+            older_than,
+            operation,
         )
 
 

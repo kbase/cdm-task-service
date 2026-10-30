@@ -42,7 +42,8 @@ cts_refdata_token = "{{ KBCTS_REFDATA_SERVICE_TOKEN or "" }}"
 [Refdata]
 
 # The local path where refdata will be stored. The refdata files for a particular refdata
-# instance will exist in <local_path>/<refdata_id>.
+# instance will exist in <local_path>/<refdata_id>. AI models are also stored under this path,
+# in a dedicated subdirectory alongside the refdata directories.
 # If not absolute, will be treated as relative to the server's working directory.
 local_path = "{{ KBCTS_REFDATA_LOCAL_PATH or "" }}"
 
