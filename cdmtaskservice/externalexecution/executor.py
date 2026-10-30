@@ -37,6 +37,9 @@ _EXP_BACKOFF_SEC = [5, 10, 30, 60, 120, 300, 600]
 
 _INPUT = "__input__"
 _OUTPUT = "__output__"
+# Matches refdata_manager.py's _AI_MODEL_DIR, the fixed subdirectory of refdata_host_path's
+# refserv-side counterpart (self._refpath) under which the whole AI model store is staged.
+_AI_MODEL_DIR = "_ai_models"
 
 _PHASE_INIT = "init"
 _PHASE_DOWNLOAD = "download"
@@ -426,7 +429,12 @@ Local relative path: {loc}
         }
         if job.image.refdata_id:
             host_mount = str(Path(self._cfg.refdata_host_path) / job.image.refdata_id)
-            # Don't allow refdata write
+        elif job.job_input.uses_ai_model_store():
+            host_mount = str(Path(self._cfg.refdata_host_path) / _AI_MODEL_DIR)
+        else:
+            host_mount = None
+        if host_mount:
+            # Don't allow staged data write
             mounts[host_mount] = (job.get_staged_data_mount_point(), False)
             self._logr.info(
                 f"Mounting host staged data at '{host_mount}' to "

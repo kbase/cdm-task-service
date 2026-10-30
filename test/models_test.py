@@ -270,32 +270,177 @@ def test_job_image_default_staged_data_mount_point_promotion_handles_non_dict_in
         models.JobImage.model_validate("not a dict")
 
 
-def _job_with_staged_data_mount_points(param_mount_point, image_default_mount_point):
-    return models.Job.model_construct(
-        image=models.JobImage.model_construct(
-            default_staged_data_mount_point=image_default_mount_point
-        ),
-        job_input=models.JobInput.model_construct(
-            params=models.Parameters.model_construct(
-                staged_data_mount_point=param_mount_point
-            )
-        ),
+def _ai_model_param(ref: str = "org/name@main") -> models.Parameter:
+    return models.Parameter(
+        type=models.ParameterType.AI_MODEL,
+        ai_model_source=models.AIModelSource.HUGGINGFACE,
+        ai_model=ref,
     )
 
 
-def test_job_get_staged_data_mount_point_from_params():
-    job = _job_with_staged_data_mount_points("/params", "/image")
-    assert job.get_staged_data_mount_point() == "/params"
+def test_parameter_ai_model_missing_fields():
+    with raises(
+        ValidationError,
+        match="The ai_model_source and ai_model fields are required for ai_model "
+            + "parameter types",
+    ):
+        models.Parameter(type=models.ParameterType.AI_MODEL)
+
+    with raises(
+        ValidationError,
+        match="The ai_model_source and ai_model fields are required for ai_model "
+            + "parameter types",
+    ):
+        models.Parameter(
+            type=models.ParameterType.AI_MODEL, ai_model_source=models.AIModelSource.HUGGINGFACE
+        )
+
+    with raises(
+        ValidationError,
+        match="The ai_model_source and ai_model fields are required for ai_model "
+            + "parameter types",
+    ):
+        models.Parameter(type=models.ParameterType.AI_MODEL, ai_model="org/name@main")
 
 
-def test_job_get_staged_data_mount_point_from_image_default():
-    job = _job_with_staged_data_mount_points(None, "/image")
-    assert job.get_staged_data_mount_point() == "/image"
+def test_parameter_ai_model_valid():
+    p = _ai_model_param()
+    assert p.ai_model_source == models.AIModelSource.HUGGINGFACE
+    assert p.ai_model == "org/name@main"
 
 
-def test_job_get_staged_data_mount_point_none():
-    job = _job_with_staged_data_mount_points(None, None)
-    assert job.get_staged_data_mount_point() is None
+@pytest.mark.parametrize("bad_ref", ["org/name", "org/name@", "@main"])
+def test_parameter_ai_model_malformed_ref_rejected(bad_ref):
+    with raises(
+        ValidationError,
+        match=f"Invalid AI model reference '{re.escape(bad_ref)}'; expected the form model@ref",
+    ):
+        _ai_model_param(bad_ref)
+
+
+def test_split_ai_model_ref_valid():
+    assert models.split_ai_model_ref("org/name@main") == ("org/name", "main")
+    # ref is split off at the last '@', since model may itself contain '@'
+    assert models.split_ai_model_ref("org/na@me@main") == ("org/na@me", "main")
+
+
+@pytest.mark.parametrize("bad_ref", ["org/name", "org/name@", "@main", ""])
+def test_split_ai_model_ref_malformed(bad_ref):
+    with raises(
+        ValueError,
+        match=f"Invalid AI model reference '{re.escape(bad_ref)}'; expected the form model@ref",
+    ):
+        models.split_ai_model_ref(bad_ref)
+
+
+def test_parameters_get_ai_model_parameters_none():
+    p = models.Parameters()
+    assert p.get_ai_model_parameters() == []
+
+
+def test_parameters_get_ai_model_parameters_multiple():
+    am_arg = models.ParameterWithFlag(
+        type=models.ParameterType.AI_MODEL,
+        ai_model_source=models.AIModelSource.HUGGINGFACE,
+        ai_model="org/arg-model@main",
+    )
+    am1 = _ai_model_param("org/cheap@main")
+    am2 = _ai_model_param("org/expensive@v1")
+    cn = models.ParameterWithFlag(type=models.ParameterType.CONTAINTER_NUMBER)
+    p = models.Parameters(
+        args=["run", cn, am_arg],
+        environment={"CHEAP_MODEL": am1, "EXPENSIVE_MODEL": am2},
+    )
+    # collected from both args and environment, args first
+    assert p.get_ai_model_parameters() == [am_arg, am1, am2]
+    # multiple AI_MODEL Parameters don't trip the "at most one file Parameter" check
+    assert p.get_file_parameter() is None
+
+
+def test_parameters_ai_model_and_file_parameter_coexist():
+    am = _ai_model_param()
+    fp = models.Parameter(
+        type=models.ParameterType.MANIFEST_FILE,
+        manifest_file_format=models.ManifestFileFormat.FILES,
+    )
+    p = models.Parameters(environment={"MODEL": am, "MANIFEST": fp})
+    assert p.get_ai_model_parameters() == [am]
+    assert p.get_file_parameter() == fp
+
+
+def test_job_input_uses_ai_model_store_false():
+    ji = models.JobInput(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
+        image="fakeimage",
+        params=models.Parameters(),
+        input_files=["foo/bar"],
+        output_dir="foo/bar",
+    )
+    assert ji.uses_ai_model_store() is False
+
+
+def test_job_input_uses_ai_model_store_true():
+    ji = models.JobInput(
+        cluster=sites.Cluster.PERLMUTTER_JAWS,
+        image="fakeimage",
+        params=models.Parameters(environment={"MODEL": _ai_model_param()}),
+        input_files=["foo/bar"],
+        output_dir="foo/bar",
+    )
+    assert ji.uses_ai_model_store() is True
+
+
+# Job.get_staged_data_mount_point() is a thin wrapper around resolve_staged_data_mount_point
+# (job_state.py calls the latter directly, since it doesn't have a Job instance to call the
+# former on yet - see models.py's docstring on resolve_staged_data_mount_point). Every scenario
+# below is run against both entry points via the two getters below, so the two never drift.
+
+
+def _via_resolve_staged_data_mount_point(params, image_default_mount_point):
+    return models.resolve_staged_data_mount_point(params, image_default_mount_point)
+
+
+def _via_job_get_staged_data_mount_point(params, image_default_mount_point):
+    job = models.Job.model_construct(
+        image=models.JobImage.model_construct(
+            default_staged_data_mount_point=image_default_mount_point
+        ),
+        job_input=models.JobInput.model_construct(params=params),
+    )
+    return job.get_staged_data_mount_point()
+
+
+_MOUNT_POINT_GETTERS = [_via_resolve_staged_data_mount_point, _via_job_get_staged_data_mount_point]
+_MOUNT_POINT_GETTER_IDS = ["resolve_staged_data_mount_point", "Job.get_staged_data_mount_point"]
+
+
+@pytest.mark.parametrize("get_mount_point", _MOUNT_POINT_GETTERS, ids=_MOUNT_POINT_GETTER_IDS)
+def test_staged_data_mount_point_explicit_takes_precedence(get_mount_point):
+    params = models.Parameters(
+        staged_data_mount_point="/explicit", environment={"MODEL": _ai_model_param()}
+    )
+    assert get_mount_point(params, "/default") == "/explicit"
+
+
+@pytest.mark.parametrize("get_mount_point", _MOUNT_POINT_GETTERS, ids=_MOUNT_POINT_GETTER_IDS)
+def test_staged_data_mount_point_image_default_used(get_mount_point):
+    # AI models are requested here specifically to prove the image default takes precedence
+    # over DEFAULT_AI_MODEL_MOUNT_POINT's own fallback (below), not just that it's used absent
+    # any AI model request.
+    params = models.Parameters(environment={"MODEL": _ai_model_param()})
+    assert get_mount_point(params, "/default") == "/default"
+
+
+@pytest.mark.parametrize("get_mount_point", _MOUNT_POINT_GETTERS, ids=_MOUNT_POINT_GETTER_IDS)
+def test_staged_data_mount_point_ai_model_default(get_mount_point):
+    params = models.Parameters(environment={"MODEL": _ai_model_param()})
+    assert get_mount_point(params, None) == models.DEFAULT_AI_MODEL_MOUNT_POINT
+
+
+@pytest.mark.parametrize("get_mount_point", _MOUNT_POINT_GETTERS, ids=_MOUNT_POINT_GETTER_IDS)
+def test_staged_data_mount_point_no_ai_models_no_default(get_mount_point):
+    params = models.Parameters()
+    assert get_mount_point(params, None) is None
 
 
 @_IGNORE_MOUNT_POINT_DEPRECATION

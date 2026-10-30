@@ -62,9 +62,14 @@ class Images:
             and a from_image reference to an existing registered image from which to copy
             user-supplied fields.
         refdata_id - the ID of reference data to associate with the image.
-        default_staged_data_mount_point - the default mount point for refdata
-            in an image container. Must be an absolute path with at least one path
-            element.
+        default_staged_data_mount_point - the default mount point in an image container for
+            whichever of reference data or the AI model store a job submitted against this
+            image ends up requesting. Must be an absolute path with at least one path
+            element. A job requesting AI models gets a mount point regardless of whether one
+            is provided here or in the job submission, defaulting to
+            models.DEFAULT_AI_MODEL_MOUNT_POINT - there is no equivalent default for
+            reference data, which requires an explicit mount point from one of those two
+            sources.
         allowed_sites - the compute sites at which the image is permitted to run. If not
             provided, the image may run at any site.
         script_image - whether the image is a script-driven image requiring a user-provided
@@ -76,10 +81,6 @@ class Images:
             image_reg, refdata_id, default_staged_data_mount_point, allowed_sites, script_image
         )
         if fields.default_staged_data_mount_point:
-            if not fields.refdata_id:
-                raise IllegalParameterError(
-                    "If a refdata mount point is provided a refdata ID must be provided."
-                )
             if not _ABSPATH_REGEX.fullmatch(fields.default_staged_data_mount_point):
                 raise IllegalParameterError(
                     "Mount points must be absolute paths with at least one path element."

@@ -1081,6 +1081,8 @@ class NERSCManager:
         refpath = None
         if job.image.refdata_id:
             refpath = self._get_relative_refdata_loc(job.image.refdata_id)
+        elif job.job_input.uses_ai_model_store():
+            refpath = self._ai_model_root_loc
         wdljson = wdl.generate_wdl(
             job, fmap, manifest_file_list=manifest_file_paths, relative_refdata_path=refpath
         )

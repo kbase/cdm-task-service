@@ -114,6 +114,9 @@ PATH_REGEX = r"^/?(?:[\w.-]+/)*[\w.-]+/?$"
 ABSOLUTE_PATH_REGEX = r"^/(?:[\w.-]+/)*[\w.-]+/?$"
 PATH_REGEX_COMPILED = re.compile(PATH_REGEX)
 
+DEFAULT_AI_MODEL_MOUNT_POINT = "/ai_models"
+""" The mount point used for the AI model store when no mount point is otherwise specified. """
+
 
 def _validate_bucket_name(bucket: str, index: int = None) -> str:
     try:
@@ -140,26 +143,51 @@ def _err_on_control_chars(s: str, allowed_chars: list[str] = None):
     return s
 
 
+class AIModelSource(str, Enum):
+    """
+    The source from which an AI model's bytes are fetched.
+    """
+    HUGGINGFACE = "huggingface"
+
+
+def split_ai_model_ref(model_ref: str) -> tuple[str, str]:
+    """
+    Split a combined model@ref AI model reference, e.g. `org/name@main`, into its model and
+    ref parts. ref is split off at the last '@' in the string, since model may itself contain
+    '@' (unlikely for HuggingFace repo IDs, but not disallowed) while ref, a git branch/tag/hash,
+    never does.
+    """
+    model, sep, ref = model_ref.rpartition("@")
+    if not sep or not model or not ref:
+        raise ValueError(f"Invalid AI model reference '{model_ref}'; expected the form model@ref")
+    return model, ref
+
+
 # Note: doc strings on the individual enums don't show up in OpenAPI docs.
 class ParameterType(str, Enum):
     """
     The type of a parameter if not a string literal.
-    
+
     input_files will cause the list of input files for the container to be inserted
     into the entrypoint command line or an environment variable.
-    
+
     manifest_file will cause the list of input files for the container to be placed in a
     manifest file and will insert the file location into the entrypoint command line
     or an environment variable.
-    
+
     container_number will insert the integer number of the container into the
     entrypoint command line or an environment variable. This can be used so prevent file path
     collisions if multiple containers write to the same file paths.
+
+    ai_model will insert the filesystem path of a staged AI model snapshot into the
+    entrypoint command line or an environment variable.
+    This is an experimental API and is subject to change without notice.
     """
 
     INPUT_FILES = "input_files"
     MANIFEST_FILE = "manifest_file"
     CONTAINTER_NUMBER = "container_number"
+    AI_MODEL = "ai_model"
 
 
 class InputFilesFormat(str, Enum):
@@ -225,11 +253,12 @@ class Parameter(BaseModel):
     Represents a special parameter passed to a container.
     
     Can represent a set of input file names formatted in various ways, a manifest file
-    containing file paths or data IDs, or a container number.
-    
-    input_files_format is required when the type is input_files, but ignored otherwise.  
-    manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
-    manifest_file_header is optional and only taken into account when the type is manifest_file.  
+    containing file paths or data IDs, a container number, or a reference to an AI model.
+
+    input_files_format is required when the type is input_files, but ignored otherwise.
+    manifest_file_format is required when the type is manifest_file, but ignored otherwise.
+    manifest_file_header is optional and only taken into account when the type is manifest_file.
+    ai_model_source and ai_model are required when the type is ai_model, but ignored otherwise.
     """
     # The Parameter and ParameterWithFlag pydoc is almost identical, be sure to edit in sync
     model_config = ConfigDict(extra='forbid')
@@ -255,7 +284,22 @@ class Parameter(BaseModel):
         examples=["_output"],
         description="A string that will be appended to the container number."
     )] = None
-    
+    ai_model_source: Annotated[AIModelSource | None, Field(
+        examples=[AIModelSource.HUGGINGFACE.value],
+        description="The source of the AI model. Required if the type is ai_model, "
+            + "ignored otherwise. "
+            + "This is an experimental API and is subject to change without notice."
+    )] = None
+    ai_model: Annotated[str | None, Field(
+        examples=["org/name@main"],
+        description="A reference to an AI model in the form model@ref, where ref is either "
+            + "a tag registered for the model or a literal resolved version. "
+            + "Required if the type is ai_model, ignored otherwise. "
+            + "This is an experimental API and is subject to change without notice.",
+        min_length=1,
+        max_length=1000,
+    )] = None
+
     def get_flag(self):
         """
         Get any command line flag associated with this parameter.
@@ -282,6 +326,12 @@ class Parameter(BaseModel):
                 return self
             case ParameterType.CONTAINTER_NUMBER:
                 return self
+            case ParameterType.AI_MODEL:
+                if not self.ai_model_source or not self.ai_model:
+                    raise ValueError("The ai_model_source and ai_model fields are required for "
+                                     + f"{ParameterType.AI_MODEL.value} parameter types")
+                split_ai_model_ref(self.ai_model)  # raises ValueError on a malformed reference
+                return self
             case _:
                 # Impossible to test but here for safety if new types are added
                 raise ValueError(f"Unknown parameter type: {self.type}")
@@ -294,11 +344,12 @@ class ParameterWithFlag(Parameter):
     preceding flag argument.
     
     Can represent a set of input file names formatted in various ways, a manifest file
-    containing file paths or data IDs, or a container number.
-    
-    input_files_format is required when the type is input_files, but ignored otherwise.  
-    manifest_file_format is required when the type is manifest_file, but ignored otherwise.  
-    manifest_file_header is optional and only taken into account when the type is manifest_file.  
+    containing file paths or data IDs, a container number, or a reference to an AI model.
+
+    input_files_format is required when the type is input_files, but ignored otherwise.
+    manifest_file_format is required when the type is manifest_file, but ignored otherwise.
+    manifest_file_header is optional and only taken into account when the type is manifest_file.
+    ai_model_source and ai_model are required when the type is ai_model, but ignored otherwise.
     """
     # The Parameter and ParameterWithFlag pydoc is almost identical, be sure to edit in sync
     model_config = ConfigDict(extra='forbid')
@@ -378,11 +429,14 @@ class Parameters(BaseModel):
     )] = False
     staged_data_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
-        description="Where reference data files should be placed in the container. "
-            + "Must start from the container root and include at least one directory "
-            + "when resolved. Required if the job image requires reference data "
-            + "and a default mount point isn't specified for the image. If a default is "
-            + "provided, this setting overrides it.",
+        description="Where reference data files or the AI model store should be placed in "
+            + "the container. Must start from the container root and include at least one "
+            + "directory when resolved. If a default is provided by the image, this setting "
+            + "overrides it. Required if the job image requires reference data and a default "
+            + "mount point isn't specified for the image. Not required if the job requests "
+            + "AI models, since the AI model store's mount point defaults to '/ai_models' if "
+            + "no mount point is otherwise specified - there is no equivalent default for "
+            + "reference data.",
         min_length=1,
         max_length=1024,
         pattern=ABSOLUTE_PATH_REGEX,
@@ -474,7 +528,7 @@ class Parameters(BaseModel):
             self, param: str | Parameter, p: str | Parameter, loc: str = None, no_space=False
     ):
         if isinstance(p, Parameter):
-            if p.type is ParameterType.CONTAINTER_NUMBER:
+            if p.type in (ParameterType.CONTAINTER_NUMBER, ParameterType.AI_MODEL):
                 return param
             if loc and p.type is ParameterType.INPUT_FILES:
                 if p.input_files_format is InputFilesFormat.REPEAT_PARAMETER:
@@ -496,6 +550,45 @@ class Parameters(BaseModel):
                     + "with file input is allowed per parameter set")
             return p
         return param
+
+    def get_ai_model_parameters(self) -> list[Parameter]:
+        """
+        Get every ai_model type Parameter present in the arguments or environment, if any.
+        Unlike get_file_parameter, any number of these may be present.
+        """
+        # tried methodtools.lru_cache here but Pydantic complained
+        if hasattr(self, "_ai_model_params"):  # memoize
+            return self._ai_model_params
+        params = []
+        for p in (self.args or []):
+            if isinstance(p, Parameter) and p.type is ParameterType.AI_MODEL:
+                params.append(p)
+        for p in (self.environment or {}).values():
+            if isinstance(p, Parameter) and p.type is ParameterType.AI_MODEL:
+                params.append(p)
+        self._ai_model_params = params
+        return params
+
+
+def resolve_staged_data_mount_point(
+    params: Parameters, default_mount_point: str | None
+) -> str | None:
+    """
+    Resolve the effective in-container mount point for reference data or the AI model store.
+
+    params - the job's parameters.
+    default_mount_point - the image's default mount point, if any.
+
+    If no mount point is specified in either params or default_mount_point, but params
+    requests at least one AI model, /ai_models is used - since every
+    requested model's path is delivered to the container via its own Parameter, the exact
+    location of the AI model store mount doesn't matter to the user the way a refdata mount
+    point does. There is no equivalent default for reference data.
+    """
+    mount = params.staged_data_mount_point or default_mount_point
+    if not mount and params.get_ai_model_parameters():
+        return DEFAULT_AI_MODEL_MOUNT_POINT
+    return mount
 
 
 class S3File(BaseModel):
@@ -765,6 +858,13 @@ class JobInput(JobInputPreview):
             infiles = infiles[fcount:]
         return files
 
+    def uses_ai_model_store(self) -> bool:
+        """
+        Return True if this job input requests at least one AI model, and therefore requires
+        the AI model store to be mounted.
+        """
+        return bool(self.params.get_ai_model_parameters())
+
 
 class RegistrationInfo(BaseModel):
     """
@@ -812,10 +912,14 @@ class JobImage(RegistrationInfo):
     )] = None
     default_staged_data_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
-        description="The default mount point for the image's reference data "
-            + "in the container. Overridden by the mount point in a job submission if provided "
-            + "there. If a default mount point is provided, then providing a mount point in "
-            + "the job submission is optional. Must be an absolute path.",
+        description="The default mount point for the image's reference data, or for the AI "
+            + "model store in a job that requests AI models, in the container. Overridden by "
+            + "the mount point in a job submission if provided there. If a default mount "
+            + "point is provided, then providing a mount point in the job submission is "
+            + "optional. Must be an absolute path. Note that a job requesting AI models "
+            + "that has no mount point specified here or in the job submission still gets a "
+            + "mount point, defaulting to '/ai_models' - there is no equivalent default for "
+            + "reference data.",
     )] = None
     default_refdata_mount_point: Annotated[str | None, Field(
         examples=["/reference_data"],
@@ -1213,12 +1317,12 @@ class JobPreview(JobStatus, InternalJobCommonPreviewFields):
     
     def get_staged_data_mount_point(self) -> str | None:
         """
-        Get the in-container mount point for reference data or None if
-        there is no mount point for this job.
+        Get the in-container mount point for reference data or the AI model store, or None
+        if there is no mount point for this job. See resolve_staged_data_mount_point for the
+        AI model store default mount point behavior.
         """
-        return (
-            self.job_input.params.staged_data_mount_point
-            or self.image.default_staged_data_mount_point
+        return resolve_staged_data_mount_point(
+            self.job_input.params, self.image.default_staged_data_mount_point
         )
 
     def get_entity_type(self) -> EntityType:
@@ -1632,13 +1736,6 @@ class StagingStateUpdate(BaseModel):
     traceback: Annotated[str | None, Field(
         description="The error's traceback. Ignored if the new state isn't the error state."
     )] = None
-
-
-class AIModelSource(str, Enum):
-    """
-    The source from which an AI model's bytes are fetched.
-    """
-    HUGGINGFACE = "huggingface"
 
 
 class AIModelKey(NamedTuple):

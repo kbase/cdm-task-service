@@ -844,18 +844,38 @@ image. Instead:
   `JobImage.default_staged_data_mount_point` above — `refdata_mount_point` accepted on input via the
   same `model_validator(mode="before")` pattern, and still serialized on output, kept in sync with
   `staged_data_mount_point` rather than hidden.
-- `models.py`: rename `Job.get_refdata_mount_point()` → `Job.get_staged_data_mount_point()` (same
-  `params.staged_data_mount_point or image.default_staged_data_mount_point` fallback logic as
-  today); update its two call sites (`jaws/wdl.py`, `externalexecution/executor.py`) accordingly. No
-  separate `get_ai_model_mount_point()` is needed — there's only ever one mount point active per job,
+- `models.py`: rename `Job.get_refdata_mount_point()` → `Job.get_staged_data_mount_point()`,
+  delegating to `resolve_staged_data_mount_point` (below) rather than inlining the
+  `params.staged_data_mount_point or image.default_staged_data_mount_point` fallback itself; update
+  its two call sites (`jaws/wdl.py`, `externalexecution/executor.py`) accordingly. No separate
+  `get_ai_model_mount_point()` is needed — there's only ever one mount point active per job,
   regardless of source.
-- `job_state.py::_check_refdata`: extend its "requires a mount point" validation to also cover
-  `job_input.uses_ai_model_store()`, and add a validator rejecting a job where both
-  `image.refdata_id` and `job_input.uses_ai_model_store()` are truthy. This check belongs at
-  job-submission time, not image-registration time: whether a given job uses the AI model store is
-  a per-job-submission fact (an image with `refdata_id` set can still run jobs that don't use AI
-  models), so the actual conflict — a job trying to use both a regular refdata mount and the AI
-  model store at once — can only be detected once the job input is known.
+- **The AI model store gets a default mount point; reference data does not.** Since a job
+  requesting AI models always delivers each model's filesystem path to the container via its own
+  `Parameter` (Chunk 9), the user genuinely doesn't care where the store itself is mounted — unlike
+  reference data, which has no equivalent per-reference `Parameter` to point at, so the container
+  entrypoint has to already know, by convention, where to find it. New module-level
+  `models.DEFAULT_AI_MODEL_MOUNT_POINT = "/ai_models"` and
+  `models.resolve_staged_data_mount_point(params: Parameters, default_mount_point: str | None) ->
+  str | None`: resolves to `params.staged_data_mount_point or default_mount_point` as before, but
+  if that's still unset and `params.get_ai_model_parameters()` is non-empty, falls back to
+  `DEFAULT_AI_MODEL_MOUNT_POINT` rather than leaving the mount point unset. There is no equivalent
+  fallback for reference data. `JobPreview.get_staged_data_mount_point()` (and every other caller
+  that previously inlined the `params.staged_data_mount_point or
+  image.default_staged_data_mount_point` fallback) now delegates to this shared function, so the
+  default applies everywhere a job's effective mount point is read, not just at submission-time
+  validation.
+- `job_state.py::_check_refdata`: adds a validator rejecting a job where both `image.refdata_id`
+  and `job_input.uses_ai_model_store()` are truthy. This check belongs at job-submission time, not
+  image-registration time: whether a given job uses the AI model store is a per-job-submission fact
+  (an image with `refdata_id` set can still run jobs that don't use AI models), so the actual
+  conflict — a job trying to use both a regular refdata mount and the AI model store at once — can
+  only be detected once the job input is known. The existing "requires a mount point" validation
+  still applies to the reference-data case (via `resolve_staged_data_mount_point` returning `None`),
+  but can no longer fire for the AI-model case, since that case always resolves to a mount point.
+  `_check_refdata` also rejects a resolved mount point that collides with the job's
+  `input_mount_point`/`output_mount_point` — a real risk once `DEFAULT_AI_MODEL_MOUNT_POINT` can be
+  silently assigned without the user having chosen it.
 - `jaws/wdl.py`: no new parameter needed. `generate_wdl`/`_generate_wdl` already take
   `relative_refdata_path` as an opaque, caller-computed `Path`; `nersc_jaws.py` (Chunk 3) just
   passes the AI model store's constant relative path instead of a refdata path when
@@ -941,6 +961,14 @@ conventions.
 
 Pure unit tests on rendered arguments/manifest content, extending existing
 `argument_generator` tests.
+
+`# TODO AI_MODEL` `externalexecution/executor_test.py` has no coverage of the AI model store mount
+(`_build_mounts`'s `elif job.job_input.uses_ai_model_store()` branch, Chunk 7) through the public
+`execute()` entry point, since until this chunk lands, `ArgumentGenerator` has no case for
+`ParameterType.AI_MODEL` — including an `ai_model` `Parameter` in `job_input.params.environment`
+makes `execute()` raise before mount-building is ever reached. Add that coverage once this chunk
+gives `ArgumentGenerator` a case for `ParameterType.AI_MODEL`, so the test can go through `execute()`
+like the existing refdata mount tests do, rather than calling the private `_build_mounts` directly.
 
 ### Chunk 10 — Admin + public routes
 Since AI models have no opaque id (Chunk 1), the single-item GET routes can't take the refdata
