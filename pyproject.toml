@@ -20,7 +20,7 @@ dependencies = [
     "cacheout==0.16.0",
     "docker==7.2.0",
     "docker-image-py==0.2.0",
-    "fastapi[standard]==0.142.2",
+    "fastapi[standard]==0.162.0",
     # stay on htcondor 25.0.X - LTS version
     "htcondor==25.0.14",
     "huggingface-hub==2.2.0",
