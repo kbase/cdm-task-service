@@ -17,7 +17,7 @@ dependencies = [
     "async-lru==2.3.0",
     "awscrt==0.37.0",
     "bidict==0.24.1",
-    "cacheout==0.16.0",
+    "cacheout==0.17.0",
     "docker==7.2.0",
     "docker-image-py==0.2.0",
     "fastapi[standard]==0.142.2",
