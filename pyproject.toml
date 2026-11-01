@@ -14,7 +14,7 @@ dependencies = [
     "aiohttp-socks==0.12.0",
     "aiokafka==0.14.0",
     "apscheduler==3.11.3",
-    "async-lru==2.3.0",
+    "async-lru==2.4.0",
     "awscrt==0.37.0",
     "bidict==0.24.1",
     "cacheout==0.16.0",
