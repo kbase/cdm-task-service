@@ -43,7 +43,7 @@ dev = [
     "boto3==1.43.106",
     "ipython==9.17.1",
     "kafka-python==3.0.11",
-    "pymongo==4.18.2",
+    "pymongo==4.19.0",
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
