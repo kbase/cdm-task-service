@@ -56,6 +56,14 @@ def test_init_fail_bad_path():
         "buckit/barbaz:foo'x":
             "Path 'buckit/barbaz:foo'x' at index x contains illegal character(s) ''' "
             + "at key index 10",
+        "buckit/../foo": "Path 'buckit/../foo' at index x contains a relative path segment "
+            + "'..' in the key",
+        "buckit/foo/..": "Path 'buckit/foo/..' at index x contains a relative path segment "
+            + "'..' in the key",
+        "buckit/foo/../bar": "Path 'buckit/foo/../bar' at index x contains a relative path "
+            + "segment '..' in the key",
+        "buckit/../../../etc/passwd": "Path 'buckit/../../../etc/passwd' at index x contains "
+            + "a relative path segment '..' in the key",
         "buckit/foo/\nbar":
             "Path buckit/foo/\nbar at index x contains a control character "
             + "in the key at position 4",
@@ -89,13 +97,17 @@ def test_init():
         "foo/bar",
         "  baz  /    bat   /",
         "   thingy-stuff9/    /𝛙hatever/ ",
-        "  bukkit  /      "])
+        "  bukkit  /      ",
+        "buckit/foo..bar/..baz/qux..",
+    ])
     assert s3p.paths == (
         "foo/bar",
         "baz/    bat   /",
         "thingy-stuff9/    /𝛙hatever/ ",
-        "bukkit/      ")
-    assert (len(s3p)) == 4
+        "bukkit/      ",
+        "buckit/foo..bar/..baz/qux..",
+    )
+    assert (len(s3p)) == 5
 
 
 def test_eq():
