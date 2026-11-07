@@ -104,6 +104,14 @@ def validate_path(path: str, index: int = None) -> str:
             f"Path '{path}'{i} contains illegal character(s) '{match_.group(1)}' "
             + f"at key index {match_.start()}"
         )
+    # S3 is documented to reject a key where, read left-to-right, the cumulative count of `..`
+    # segments ever exceeds the count of preceding real segments (see
+    # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html), which is enough
+    # to prevent escaping a fixed root directory. This check is stricter and enforced
+    # belt-and-suspenders here rather than relying on that behavior from the backend.
+    if ".." in key.split("/"):
+        raise S3PathSyntaxError(
+            f"Path '{path}'{i} contains a relative path segment '..' in the key")
     # See https://stackoverflow.com/questions/4324790/removing-control-characters-from-a-string-in-python
     # Don't want to put control chars in a returned error
     for ci, c in enumerate(key):
