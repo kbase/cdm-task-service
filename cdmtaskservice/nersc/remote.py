@@ -20,6 +20,7 @@ import traceback
 from typing import Callable
 
 from cdmtaskservice.ai_models import huggingface_client
+from cdmtaskservice.arg_checkers import require_string as _require_string
 from cdmtaskservice.jaws.remote import (
     parse_errors_json,
     parse_outputs_json,
@@ -33,15 +34,101 @@ from cdmtaskservice.s3.remote import (
 
 # TODO TEST add tests for this file and its dependency functions
 
+# TODO CLEANUP _check_within_output_dir, _check_not_symlink, and _resolve_group_boundary below
+#      each independently resolve a path and check containment against a boundary, with
+#      slightly different messages for the "resolved == fpath" vs "resolved != fpath" cases.
+#      Consider consolidating into a single shared helper to avoid having to keep three
+#      near-identical implementations in sync by hand.
 
-def _checksum_entries(dest_to_path: dict[str, str], jdir: Path) -> list[dict]:
+
+def _check_within_output_dir(fpath: Path, resolved_boundary: Path, label: str):
+    """
+    Raise if fpath does not resolve to a location inside resolved_boundary, whether because
+    it's a symlink pointing elsewhere or because the path itself (e.g. an absolute pipeline
+    output path) lies outside the boundary. No job output, pipeline or otherwise, should ever
+    legitimately resolve outside its own job output directory.
+    """
+    resolved = fpath.resolve(strict=True)
+    if resolved.is_relative_to(resolved_boundary):
+        return
+    if resolved != fpath:
+        raise ValueError(
+            f"Output file '{label}' resolves to '{resolved}', which is outside the job's "
+            + "output directory; this is not allowed"
+        )
+    raise ValueError(
+        f"Output file '{label}' is outside the job's output directory; this is not allowed"
+    )
+
+
+def _check_not_symlink(fpath: Path, jawsdir: Path, label: str):
+    """
+    Raise if fpath does not resolve to itself, i.e. if it's a symlink, or traverses through one,
+    anywhere in its path, or if it doesn't resolve inside jawsdir. Used for stdout/stderr, which
+    are written directly by JAWS rather than the job's container, so there's no legitimate
+    reason for either to ever be or resolve through a symlink - unlike job output files, which
+    the container controls and may legitimately symlink within its own output directory.
+
+    The containment check against jawsdir is defense in depth against fpath having been
+    constructed wrong (e.g. not actually rooted under jawsdir) rather than something expected to
+    ever fire in practice - jawsdir itself is expected to already be validated as canonical by
+    _resolve_jawsdir.
+    """
+    resolved = fpath.resolve(strict=True)
+    if resolved != fpath:
+        raise ValueError(f"{label} resolves to '{resolved}', which is not allowed")
+    if not resolved.is_relative_to(jawsdir):
+        raise ValueError(f"{label} is outside the job's output directory, which is not allowed")
+
+
+def _resolve_jawsdir(jaws_output_dir: str) -> Path:
+    """
+    Resolve the JAWS output directory and verify it's already a canonical path. This directory
+    is assigned by JAWS/the service, not the container, so a symlink or other non-canonical
+    component in it would mean something is very wrong - silently resolving through it rather
+    than failing loudly could mask that.
+    """
+    jawsdir = Path(_require_string(jaws_output_dir, "jaws_output_dir"))
+    resolved = jawsdir.resolve(strict=True)
+    if resolved != jawsdir:
+        raise ValueError(
+            f"JAWS output directory '{jawsdir}' is not a canonical path; it resolves to "
+            + f"'{resolved}'"
+        )
+    return jawsdir
+
+
+def _resolve_group_boundary(jawsdir: Path, output_dir: str) -> Path:
+    """
+    Resolve a container's own output directory, as already derived by the outputs.json parser,
+    against jawsdir (itself already known to be canonical) - the containment boundary for every
+    file in that container's group. The derived directory is itself required to resolve inside
+    jawsdir, since otherwise a corrupted or unexpected outputs.json could produce a boundary
+    that's meaningless to check containment against.
+    """
+    boundary = (jawsdir / output_dir).resolve(strict=True)
+    if not boundary.is_relative_to(jawsdir):
+        raise ValueError(
+            f"Output directory '{output_dir}' (resolves to '{boundary}') is outside the job's "
+            + "output directory, which is not allowed"
+        )
+    return boundary
+
+
+def _checksum_entries(dest_to_entry: dict[str, tuple[str, Path]], jawsdir: Path) -> list[dict]:
+    """
+    dest_to_entry - a dict of destination name to a (result path, containment boundary) pair.
+        The boundary may differ per entry, e.g. when entries come from different containers,
+        each with its own output directory.
+    """
     entries = []
     # TODO PERF may want to parallelize this with a max process limit
     # TODO PERF could also chunk large files and combine CRCs via awscrt.checksums.combine_crc64nvme
-    for dest, result_path in dest_to_path.items():
-        # Path./ discards jdir entirely if result_path is already absolute, which is the case
+    for dest, (result_path, boundary) in dest_to_entry.items():
+        # Path./ discards jawsdir entirely if result_path is already absolute, which is the case
         # for pipeline (Cromwell) output paths.
-        fpath = jdir / result_path
+        fpath = jawsdir / result_path
+        _check_within_output_dir(fpath, boundary, result_path)
         crc = crc64nvme_b64(fpath)
         entries.append({
             "crc64nvme": crc,
@@ -56,19 +143,34 @@ def calculate_checksums(jaws_output_dir: str, checksum_output_file: str):
     """
     Parse the JAWS output.json file and write CRC64/NVME checksums to a result file.
     """
-    jdir = Path(jaws_output_dir)
-    with open(jdir / OUTPUTS_JSON_FILE) as f:
+    jawsdir = _resolve_jawsdir(jaws_output_dir)
+    with open(jawsdir / OUTPUTS_JSON_FILE) as f:
         outs = parse_outputs_json(f)
+    # Dedupe by destination name across containers before reading any files, keeping the last
+    # container's entry for a given name - mirrors the prior behavior of flattening all
+    # containers' output files into a single dict. Each surviving entry is still checked
+    # against its own container's output directory, not some other container's.
+    dest_to_entry = {}
+    for group in outs.output_file_groups:
+        if not group.files:
+            continue
+        boundary = _resolve_group_boundary(jawsdir, group.output_dir)
+        for dest, result_path in group.files.items():
+            dest_to_entry[dest] = (result_path, boundary)
     res = {
-        "files": _checksum_entries(outs.output_files, jdir),
+        "files": _checksum_entries(dest_to_entry, jawsdir),
         "stdouts": [],
         "stderrs": [],
     }
-    for so in outs.stdout:
-        crc = crc64nvme_b64(jdir / so)
+    for i, so in enumerate(outs.stdout):
+        fpath = jawsdir / so
+        _check_not_symlink(fpath, jawsdir, f"Container {i} stdout '{so}'")
+        crc = crc64nvme_b64(fpath)
         res["stdouts"].append({"crc64nvme": crc, "respath": so})
-    for se in outs.stderr:
-        crc = crc64nvme_b64(jdir / se)
+    for i, se in enumerate(outs.stderr):
+        fpath = jawsdir / se
+        _check_not_symlink(fpath, jawsdir, f"Container {i} stderr '{se}'")
+        crc = crc64nvme_b64(fpath)
         res["stderrs"].append({"crc64nvme": crc, "respath": se})
     with open(checksum_output_file, "w") as f:
         json.dump(res, f, indent=4)
@@ -87,10 +189,10 @@ def calculate_pipeline_checksums(
     resolve to the same basename, one is dropped (logged as a warning) rather than uploaded,
     a known simplification of the current one-flat-directory-per-pipeline-run S3 layout.
     """
-    jdir = Path(jaws_output_dir)
+    jawsdir = _resolve_jawsdir(jaws_output_dir)
     with open(output_keys_file) as kf:
         allowed_keys = json.load(kf)
-    with open(jdir / OUTPUTS_JSON_FILE) as f:
+    with open(jawsdir / OUTPUTS_JSON_FILE) as f:
         outfiles = parse_pipeline_outputs_json(f, allowed_keys)
     dest_to_path = {}
     for key, path in outfiles.items():
@@ -103,7 +205,12 @@ def calculate_pipeline_checksums(
             )
             continue
         dest_to_path[dest] = path
-    res = {"files": _checksum_entries(dest_to_path, jdir), "stdouts": [], "stderrs": []}
+    dest_to_entry = {dest: (path, jawsdir) for dest, path in dest_to_path.items()}
+    res = {
+        "files": _checksum_entries(dest_to_entry, jawsdir),
+        "stdouts": [],
+        "stderrs": [],
+    }
     with open(checksum_output_file, "w") as f:
         json.dump(res, f, indent=4)
 
