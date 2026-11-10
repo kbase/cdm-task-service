@@ -537,7 +537,17 @@ Local relative path: {loc}
         # Nothing to do prior to updating state again
         await self._update_job_state_loop(job, models.JobState.UPLOAD_SUBMITTED)
         outdir = self._workdir / _OUTPUT
-        outfiles = [file.relative_to(outdir) for file in outdir.rglob('*') if file.is_file()]
+        resolved_outdir = outdir.resolve(strict=True)
+        outfiles = []
+        for file in outdir.rglob('*'):
+            if not file.is_file():
+                continue
+            if file.is_symlink() and not file.resolve(strict=True).is_relative_to(resolved_outdir):
+                raise ValueError(
+                    f"Output file '{file.relative_to(outdir)}' is a symlink that points "
+                    + "outside the job's output directory, which is not allowed"
+                )
+            outfiles.append(file.relative_to(outdir))
         crcs = [crc64nvme_b64(outdir / o) for o in outfiles]
         s3paths = [f"{job.job_input.output_dir.strip('/')}/{p}" for p in outfiles]
         filerecs = []

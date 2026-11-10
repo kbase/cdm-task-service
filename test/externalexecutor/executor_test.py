@@ -386,6 +386,33 @@ async def test_execute_success_returns_zero_with_correct_state_transitions(tmp_p
     )
 
 
+async def test_execute_uploads_symlink_pointing_inside_output_dir(tmp_path):
+    """A symlink in the output dir that resolves to another file in the output dir is just
+    a (harmless) duplicate upload, not an error."""
+    _create_input_file(tmp_path)
+    outdir = tmp_path / "__output__"
+    outdir.mkdir()
+    target_file = outdir / "target.txt"
+    target_file.write_bytes(b"hello world")
+    link_file = outdir / "link.txt"
+    link_file.symlink_to(target_file)
+    crc = "jSnVw/bqjr4="
+
+    runner, _ = _make_runner(exit_code=0)
+    r = _make_executor(working_dir=tmp_path)
+    r.creator.start_container.return_value = runner
+
+    ret = await r.exe.execute()
+
+    assert ret == 0
+    r.s3.upload_objects_from_file.assert_called_once()
+    s3paths_arg, local_paths_arg, crcs_arg = r.s3.upload_objects_from_file.call_args.args
+    assert set(zip(s3paths_arg.paths, local_paths_arg, crcs_arg)) == {
+        ("bucket/outputs/target.txt", target_file, crc),
+        ("bucket/outputs/link.txt", link_file, crc),
+    }
+
+
 async def test_execute_logs_cts_service_version(tmp_path, caplog):
     _create_input_file(tmp_path)
     (tmp_path / "__output__").mkdir()
@@ -539,6 +566,41 @@ async def test_execute_service_root_fatal_error_propagates(tmp_path):
 
     r.sess.get.assert_called_once_with(_CTS_URL)
     r.sess.put.assert_not_called()
+
+
+async def test_execute_symlink_pointing_outside_output_dir_updates_error_state(tmp_path):
+    """A symlink in the output dir that escapes the output dir is rejected, not followed."""
+    _create_input_file(tmp_path)
+    outdir = tmp_path / "__output__"
+    outdir.mkdir()
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_bytes(b"TOP SECRET")
+    escape_link = outdir / "escape.txt"
+    escape_link.symlink_to(secret_file)
+
+    runner, _ = _make_runner(exit_code=0)
+    r = _make_executor(working_dir=tmp_path)
+    r.creator.start_container.return_value = runner
+
+    ret = await r.exe.execute()
+
+    assert ret == -1
+    r.s3.upload_objects_from_file.assert_not_called()
+    expected_msg = (
+        "Output file 'escape.txt' is a symlink that points outside the job's output "
+        "directory, which is not allowed"
+    )
+    tb = r.sess.put.call_args.kwargs["json"]["traceback"]
+    assert expected_msg in tb
+    assert r.sess.put.call_args_list == [
+        call(_UPDATE_BASE + "job_submitting", json={"time": _ts(0)}),
+        call(_UPDATE_BASE + "job_submitted", json={"time": _ts(1)}),
+        call(_UPDATE_BASE + "upload_submitting",
+             json={"time": _ts(2), "exit_code": 0, **_RESULT_STATS}),
+        call(_UPDATE_BASE + "upload_submitted", json={"time": _ts(3)}),
+        call(_UPDATE_BASE + "error",
+             json={"time": _ts(4), "admin_error": expected_msg, "traceback": tb}),
+    ]
 
 
 # ─────────────────────────────────────────────────
