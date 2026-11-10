@@ -265,6 +265,34 @@ def test_calculate_checksums_two_containers_with_distinct_files_both_succeed(tmp
     }
 
 
+def test_calculate_checksums_container_with_no_output_files_is_skipped(tmp_path):
+    # A container that produced no output files at all gets an empty group (output_dir=None)
+    # from the parser - calculate_checksums must skip it rather than try to resolve a boundary
+    # for it, while still correctly processing any other container's files.
+    jawsdir = tmp_path / "jawsout"
+    shard1_dir = "cromwell-exec/shard-1/execution/__output__"
+    shard1_output = jawsdir / shard1_dir
+    shard1_output.mkdir(parents=True)
+    a_file = shard1_output / "a.txt"
+    a_file.write_bytes(b"hello world")
+    result_path_a = f"{shard1_dir}/a.txt"
+    _write_outputs_json(jawsdir, output_file_groups=[[], [result_path_a]])
+    checksum_file = tmp_path / "checksums.json"
+
+    calculate_checksums(str(jawsdir), str(checksum_file))
+
+    assert json.loads(checksum_file.read_text()) == {
+        "files": [{
+            "crc64nvme": "jSnVw/bqjr4=",
+            "s3path": "a.txt",
+            "respath": "cromwell-exec/shard-1/execution/__output__/a.txt",
+            "size": 11,
+        }],
+        "stdouts": [],
+        "stderrs": [],
+    }
+
+
 def test_calculate_checksums_stdout_stderr_plain_files_succeed(tmp_path):
     jawsdir = tmp_path / "jawsout"
     jawsdir.mkdir()
