@@ -29,20 +29,44 @@ The filename of the errors JSON file in the jaws output directory.
 """
 
 
+class OutputFileGroup(NamedTuple):
+    """
+    A single container's (JAWS scatter shard's) own group of declared output files.
+    """
+
+    output_dir: str | None
+    """
+    The relative path, within the JAWS results directory, of this container's own output
+    directory - the directory named constants.OUTPUT_DIR that every file in this group is
+    expected to be reported under. None if the container produced no output files.
+    """
+
+    files: dict[str, str]
+    """
+    A dict of the relative path in this container's own output directory for each of its
+    output files to the raw relative path in the JAWS results directory.
+    """
+
+
 class OutputsJSON(NamedTuple):
     """
     The parsed contents of the JAWS outputs.json file, which contains the paths to files
     output by the JAWS job.
     """
     
-    output_files: dict[str, str]
+    output_file_groups: list[OutputFileGroup]
     """
-    The result file paths of the job as a dict of the relative path in the output directory
-    for the job container to the relative path in the JAWS results directory.
+    The result files of the job, one group per container (JAWS scatter shard). Grouped by
+    container, rather than flattened into a single dict, so a container's own output directory
+    - not just the JAWS results directory for the whole job, which may contain multiple
+    containers' output directories - can be used to validate that a file (or a symlink to one)
+    actually resolves inside the output area it was reported from. If two containers produce
+    the same relative output path, both are retained here; a caller that needs a single flat
+    mapping decides which one to keep.
     """
     # Could maybe be a little more efficient by wrapping the paths in a class and parsing the
     # container path on demand... YAGNI
-    
+
     stdout: list[str]
     """
     The standard out file paths relative to the JAWS results directory, ordered by
@@ -56,20 +80,46 @@ class OutputsJSON(NamedTuple):
     """
 
 
+def _file_group(files: list[str]) -> OutputFileGroup:
+    marker = f"/{constants.OUTPUT_DIR}/"
+    file_map = {}
+    output_dirs = set()
+    for f in files:
+        f = _require_string(f, "file")
+        # Split on the *first* occurrence, not the last: the container has write access to its
+        # own output directory and could create a subdirectory that's also named
+        # constants.OUTPUT_DIR. The first occurrence is always the real `find` search root
+        # Cromwell reported the file under, regardless of what's nested inside it afterward.
+        before, sep, after = f.partition(marker)
+        if not sep:
+            raise ValueError(
+                f"Expected JAWS output file path to be under a '{constants.OUTPUT_DIR}' "
+                + f"directory: {f}"
+            )
+        file_map[after] = f
+        output_dirs.add(f"{before}/{constants.OUTPUT_DIR}")
+    if len(output_dirs) > 1:
+        raise ValueError(
+            "JAWS reported output files for a single container under more than one output "
+            + f"directory, which should never happen: {sorted(output_dirs)}"
+        )
+    return OutputFileGroup(output_dirs.pop() if output_dirs else None, file_map)
+
+
 def parse_outputs_json(outputs_json: io.BytesIO) -> OutputsJSON:
     """
-    Parse the JAWS outputs.json file from a completed run. If any output files have the same
-    path inside their specific container, only one path is returned and which path is returned
-    is not specified.
+    Parse the JAWS outputs.json file from a completed run. Within a single container's own
+    output files, if two files have the same relative path, only one path is returned and
+    which path is returned is not specified.
     """
     js = json.load(_not_falsy(outputs_json, "outputs_json"))
-    outfiles = {}
+    output_groups = []
     stdo = []
     stde = []
     for key, val in js.items():
         if key.endswith(constants.OUTPUT_FILES):
             for files in val:
-                outfiles.update({_get_relative_file_path(f): f for f in files})
+                output_groups.append(_file_group(files))
         # assume files are ordered correctly. If this is wrong sort by path first
         elif key.endswith(constants.STDOUTS):
             stdo = val
@@ -78,7 +128,7 @@ def parse_outputs_json(outputs_json: io.BytesIO) -> OutputsJSON:
         else:
             # shouldn't happen, but let's not fail silently if it does
             raise ValueError(f"unexpected JAWS outputs.json key: {key}")
-    return OutputsJSON(outfiles, stdo, stde)
+    return OutputsJSON(output_groups, stdo, stde)
 
 
 def parse_pipeline_outputs_json(
@@ -111,14 +161,6 @@ def parse_pipeline_outputs_json(
             )
         out[key] = val
     return out
-
-
-def _get_relative_file_path(file: str) -> str:
-    """
-    Given a JAWS output file path, get the file path relative to the container output directoy,
-    e.g. the file that was written from the container's perspective.
-    """
-    return _require_string(file, "file").split(f"/{constants.OUTPUT_DIR}/")[-1]
 
 
 def parse_errors_json(errors_json: io.BytesIO, logpath: Path) -> list[tuple[int, str | None]]:
